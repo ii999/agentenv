@@ -6,7 +6,7 @@ Task T007 (injection planner + `run`) of SDD change `001-agent-context-cli` was 
 
 Steps:
 
-1. In your worktree: `git apply /Users/zhaiqifeng/Dev/agent-context/.claude/handoffs/001-agent-context-cli--T007-r2/PATCH.diff` (your own previous T007 implementation; applies cleanly to HEAD).
+1. Your worktree HEAD already contains the T007 base implementation (`src/runner.rs`, `run` wiring in `src/cli/query_cmds.rs`, `tests/run_p3.rs`) — do not re-implement it.
 2. Read `.sdd/changes/001-agent-context-cli/briefs/task-T007-brief.md` and `.sdd/changes/001-agent-context-cli/briefs/task-T007-dispatch.md` (both in your worktree) for the full task contract.
 3. Apply every fix below, then run the full verification and write your report.
 
