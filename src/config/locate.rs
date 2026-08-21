@@ -17,7 +17,7 @@ const CONFIG_FILE: &str = "context.toml";
 /// Resolves the config file path. Pure environment logic with no filesystem
 /// access, so callers (such as the CLI, to name the file in diagnostics) can
 /// re-resolve deterministically.
-pub(crate) fn resolve_path(
+pub fn resolve_path(
     explicit_file: Option<&Path>,
     env: &impl Fn(&str) -> Option<String>,
 ) -> Result<PathBuf, AppError> {

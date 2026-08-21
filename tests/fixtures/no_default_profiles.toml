@@ -1,0 +1,15 @@
+version = 1
+
+[profiles.work]
+description = "Work profile."
+
+[profiles.work.llm]
+description = "Work LLM."
+endpoint = "https://work-llm.example.com"
+
+[profiles.personal]
+description = "Personal profile."
+
+[profiles.personal.llm]
+description = "Personal LLM."
+endpoint = "https://personal-llm.example.com"

@@ -321,43 +321,49 @@ fn scan_value_references(
     credentials: Option<&Table>,
     violations: &mut Vec<Violation>,
 ) {
+    if let Some(reference) = recognized_reference(value) {
+        match reference {
+            Err(message) => violations.push(Violation {
+                path: path.to_owned(),
+                message,
+            }),
+            Ok(reference) => {
+                let defined = credentials.is_some_and(|table| table.contains_key(&reference.name));
+                if !defined {
+                    violations.push(Violation {
+                        path: path.to_owned(),
+                        message: format!(
+                            "credential '{}' is not defined; add a [credentials.{}] table \
+                             or fix the reference",
+                            reference.name, reference.name
+                        ),
+                    });
+                }
+            }
+        }
+        return;
+    }
+    if let Value::Table(table) = value {
+        for (key, inner) in table {
+            if key == "description" {
+                continue;
+            }
+            scan_value_references(&format!("{path}.{key}"), inner, credentials, violations);
+        }
+    }
+}
+
+/// Classifies a value inside the Reference scanning scope.
+///
+/// Callers exclude description keys, the reserved entry-level `inject`
+/// table, and array elements. Query rendering uses this same helper, keeping
+/// display classification identical to validation.
+pub(crate) fn recognized_reference(value: &Value) -> Option<Result<CredentialRef, String>> {
     match value {
-        Value::String(text) => {
-            if !text.starts_with(REFERENCE_PREFIX) {
-                return;
-            }
-            match CredentialRef::parse(text) {
-                Err(message) => violations.push(Violation {
-                    path: path.to_owned(),
-                    message,
-                }),
-                Ok(reference) => {
-                    let defined =
-                        credentials.is_some_and(|table| table.contains_key(&reference.name));
-                    if !defined {
-                        violations.push(Violation {
-                            path: path.to_owned(),
-                            message: format!(
-                                "credential '{}' is not defined; add a [credentials.{}] table \
-                                 or fix the reference",
-                                reference.name, reference.name
-                            ),
-                        });
-                    }
-                }
-            }
+        Value::String(text) if text.starts_with(REFERENCE_PREFIX) => {
+            Some(CredentialRef::parse(text))
         }
-        Value::Table(table) => {
-            for (key, inner) in table {
-                if key == "description" {
-                    continue;
-                }
-                scan_value_references(&format!("{path}.{key}"), inner, credentials, violations);
-            }
-        }
-        // Arrays stop reference recognition entirely; non-string scalars
-        // cannot be references.
-        _ => {}
+        _ => None,
     }
 }
 

@@ -1,0 +1,51 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Profile with deliberately ordered query data."
+
+[profiles.work.zebra]
+description = "First entry in stored order."
+third = "third"
+first = "first"
+
+[profiles.work.alpha]
+description = "Second entry in stored order."
+later = 2
+earlier = 1
+
+[profiles.work.types]
+description = "Every scalar type and nested data."
+text = "hello"
+integer = 42
+finite = 1.5
+infinite = inf
+enabled = true
+offset = 1979-05-27T07:32:00-08:00
+local_date = 1979-05-27
+items = ["one", "two"]
+
+[profiles.work.types.nested]
+message = "nested value"
+
+[profiles.work.types.nested.deeper]
+credential = "credential://company_llm?as=CUSTOM_TOKEN"
+
+[profiles.work.server]
+description = "A quoted field name."
+"my.field" = "addressable through a quoted path"
+
+[profiles.work.nested_inject]
+description = "Nested inject is ordinary data."
+
+[profiles.work.nested_inject.settings.inject]
+source = "ordinary"
+
+[profiles.empty]
+description = "A profile with no entries."
+
+[credentials.company_llm]
+description = "Credential for nested reference rendering."
+provider = "env"
+name = "COMPANY_LLM_TOKEN"
+inject_as = "OPENAI_API_KEY"

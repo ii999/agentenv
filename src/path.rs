@@ -74,6 +74,21 @@ impl Segments {
     }
 }
 
+/// Parses an argument that names exactly one entry.
+///
+/// `list <entry>` and `show <entry>` share the general path grammar so that
+/// quoted entry names remain usable, but a dotted path is never an entry
+/// name in these positions (SPEC-005).
+pub fn single_entry_name(input: &str) -> Result<String, AppError> {
+    let segments = Segments::parse(input)?;
+    if segments.len() != 1 {
+        return Err(AppError::Usage(format!(
+            "'{input}' must name one entry; use 'agent-context get {input}' to read a field path"
+        )));
+    }
+    Ok(segments.as_slice()[0].clone())
+}
+
 /// Parses one segment from the front of `rest`, returning the segment text
 /// and the remainder (empty, or starting with the `.` separator).
 fn parse_segment<'a>(input: &str, rest: &'a str) -> Result<(&'a str, &'a str), AppError> {

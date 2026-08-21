@@ -9,7 +9,7 @@
 //! `toml::de::Error`'s `Display` renders the source line with a caret and is
 //! never forwarded).
 
-pub(crate) mod locate;
+pub mod locate;
 pub mod model;
 pub(crate) mod validate;
 

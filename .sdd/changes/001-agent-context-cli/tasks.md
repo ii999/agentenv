@@ -66,7 +66,7 @@ Checkpoint: `cargo build` succeeds from a clean clone; the binary runs, reports 
   - Verification: `cargo test --lib && cargo clippy --all-targets -- -D warnings` — expected: all unit tests green (grammar table, validation table incl. AC-002.6/.7/.8 cases, reference grammar AC-012.4 cases, sensitive-name matrix incl. array-nested and uppercase, inject rules AC-013.1–5), clippy clean
   - Report: `.sdd/changes/001-agent-context-cli/reports/task-T003-report.md`
 
-- [ ] T004 [Phase 1] Query engine, renderer, and CLI for the read-only surface
+- [x] T004 [Phase 1] Query engine, renderer, and CLI for the read-only surface
   - Files: `src/query.rs`, `src/render.rs`, `src/cli/mod.rs`, `src/cli/query_cmds.rs`, `src/main.rs` (wire subcommands `list`, `show`, `get`, `find`, `validate`, `credential list`), `tests/query_p1.rs` (AC-driven integration tests for the non-security Phase-1 ACs), `tests/snapshots/` (JSON shape snapshots)
   - Depends on: T003, T002
   - Spec refs: SPEC-003, SPEC-006, SPEC-007, SPEC-008, SPEC-009, SPEC-010, SPEC-011, SPEC-015 (`credential list` half), SPEC-018 (codes 1/2/3), SPEC-021

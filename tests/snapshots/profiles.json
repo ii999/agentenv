@@ -1,0 +1,1 @@
+{"version":1,"profiles":[{"name":"work","description":"Day-to-day development environment for company projects.","default":true},{"name":"personal","description":"Environment for personal projects.","default":false}]}

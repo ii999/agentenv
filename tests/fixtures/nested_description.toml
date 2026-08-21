@@ -1,0 +1,11 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Profile whose entry carries a nested description holding a reference-shaped string."
+
+[profiles.work.e]
+description = "Entry with nested description data."
+
+[profiles.work.e.sub]
+description = "credential://not_defined_anywhere"
