@@ -78,7 +78,7 @@ agent / user -> agent-context CLI (clap)
 
 ### Decision ARCH-002: `toml` crate with `preserve_order`, generic value tree
 
-- Decision: Parse with the `toml` crate (1.x; `preserve_order` feature verified available) into typed core structs (version, profiles, credentials) + `toml::Value` for open user fields. Credential store access via `keyring` 4.x (default `v1` feature enables apple-native, windows-native, and zbus-secret-service stores; in-process unit tests use the keyring-core `mock` module, out-of-process integration tests use the `test-keychain` file-backed adapter — see Testing Strategy).
+- Decision: Parse with the `toml` crate (1.x; `preserve_order` feature available per plan-time research — re-verify at implementation start). The typed core's maps (profiles, entries, credentials) MUST be order-preserving themselves (`toml::Table`/IndexMap, never HashMap/BTreeMap) — `preserve_order` only governs `toml::Value`, and SPEC-021's file-order guarantee spans the typed core too. Open user fields stay as `toml::Value`. Credential store access via `keyring` 4.x (default `v1` feature enables apple-native, windows-native, and zbus-secret-service stores; in-process unit tests use the keyring-core `mock` module, out-of-process integration tests use the `test-keychain` file-backed adapter — see Testing Strategy).
 - Rationale: `list`/`show` should present fields in file order (user's mental model); typed core gives strict validation; generic tail gives the open schema.
 - Alternatives considered:
   - `toml_edit`: preserves comments/format — needed only for writing, which is out of scope. Rejected as heavier.
@@ -103,7 +103,7 @@ agent / user -> agent-context CLI (clap)
 
 ### Decision ARCH-005: Secrets as a no-leak newtype confined to two modules
 
-- Decision: `Secret(String)` with manual `Debug`/no `Display`/no `Serialize`; constructed by `credential` (provider resolution) and at the `cli` terminal-read boundary for `credential set` (the raw read is wrapped into `Secret` immediately, before any other call); consumed only by `runner` (env injection), `credential check` (discarded), and `Provider::store`. `query`/`render` types cannot represent a secret.
+- Decision: two-stage secret types, both with manual `Debug`/no `Display`/no `Serialize`: `CapturedSecret(Vec<u8>)` wraps provider-captured bytes at the capture boundary (before newline stripping or UTF-8 validation — it can hold invalid UTF-8), and its only exit is a checked conversion to `Secret(String)` (the validated credential-value domain) or an error that carries no bytes. `Secret` is constructed by `credential` (via that conversion) and at the `cli` terminal-read boundary for `credential set`; consumed only by `runner` (env injection), `credential check` (discarded), and `Provider::store`. `query`/`render` types cannot represent either secret type.
 - Rationale: Makes PRD-NFR-001 a compile-time property rather than a code-review property.
 - Alternatives considered:
   - Discipline-only (pass `String`s carefully): rejected — the whole point of the tool is that this class of leak must not depend on vigilance.

@@ -226,6 +226,37 @@ Decision: Revise (round 3) → round 4 full two-lane re-review.
 - Minors fixed: `inject` members excluded from `find`'s match domain (A#2); `profile_description` added to the `list` envelope (A#3); `Field` gains `reference` making `?as=` visible, table-`fields` recorded as the design-"value" reading (A#4); AC-019.1 respecified as per-invocation helper assertion (A#5); dedup wording covers within-entry duplicates (A#6); Phase-1 shallow status defined as a free function, `Provider` trait arrives in Phase 2 (A#8); SPEC-020 matching made ASCII case-insensitive, AC-020.6 (A#9); `credential set <undefined>` = exit 3, run-path resolution failure added to AC-018.1 (A#10); AC-022.1 expanded to the full SPEC-022 checklist (B#4); keychain-seam description unified across architecture (B#5).
 - Suggestions accepted into Implementation Notes: never forward `toml::de::Error` Display (A#12); wrap captured bytes at the capture boundary (A#15); re-verify crate features at implementation start (A#11); diagnostics cite `argv[0]` only (A#13); README notes `inject_as` discoverability (A#14).
 
+## Round 4 Approval Decision
+
+Decision: Revise (round 4) → round 5 full two-lane re-review (final round under the cap).
+
+---
+
+# Round 5 (full two-lane re-review — final under the 5-round cap)
+
+## Review Metadata
+
+- Review round: 5
+- Reviewers (clean-context): Lane A claude/opus (native), DONE_WITH_CONCERNS, REVISE — 0 Critical, 2 Important. Lane B codex/gpt-5.6-sol @ xhigh (delegate, read-only), DONE_WITH_CONCERNS, REVISE — 1 Critical, 7 Important. Raw Lane B result: `.claude/handoffs/001-agent-context-cli--spec-review-r5/RESULT.md`.
+- Date: 2026-08-22
+
+## Summary
+
+Both lanes' top finding was the same regression introduced by the round-4 edit: SPEC-002 rule 8 still said "same traversal scope as reference scanning" while SPEC-020 declared the broader scope (Lane B rated it Critical, Lane A Important). The remaining Importants were precision items in the frozen JSON contract, Windows discovery semantics, secret-type feasibility, and test-store isolation. All were revised (REV-009/010) after the round closed; **per the 5-round cap no further full round confirms these fixes** — see Approval Decision.
+
+## Findings (consolidated) and resolutions — all Fixed in REV-009/010
+
+- R5-CRIT-01 (B#1, A#1): rule 8 vs SPEC-020 scope contradiction → rule 8 now delegates to SPEC-020 as sole scope authority; the array-nested `credential://`-prefixed sensitive field question resolved via the prefix reading (A#4 merged).
+- R5-IMP-01 (A#2): SPEC-020 over `inject` keys made `GITHUB_TOKEN = "path"` unfixable (SPEC-013 forbids the suggested remedy) → `inject` table excluded from sensitive traversal (keys are machinery), stated with rationale.
+- R5-IMP-02 (B#2): unaddressable keys had no implementable frozen contract → exact members defined (`path: null`, `key`, `addressable: false`, ancestor propagation, unaddressable entry names reachable only via profile-level `list`).
+- R5-IMP-03 (B#3): §5.9 per-field profile deviation unrecorded → SPEC-AS-027 (envelope-level profile is the approved interpretation).
+- R5-IMP-04 (B#4): README claimed `inject_as` discoverable via `credential list` but the contract didn't expose it → `inject_as` added to `credential list` text + JSON; SPEC-022 wording aligned (also covers A#11's `?as=` discovery note).
+- R5-IMP-05 (B#5): `Secret(String)` cannot hold pre-validation bytes → ARCH-005 rewritten as two-stage `CapturedSecret(Vec<u8>)` → checked conversion → `Secret(String)`.
+- R5-IMP-06 (B#6): `PATHEXT` discovery implied shell-interpreted extensions, conflicting with no-shell execution → Windows discovery/resolution limited to direct-launch extensions (`.exe`, `.com`); scripts must name their interpreter in `argv[0]`.
+- R5-IMP-07 (B#7): a cargo feature alone doesn't keep the file-backed store out of release builds → SPEC-AS-019 hardened: `all(feature, debug_assertions)` + `compile_error!` on release, negative release-artifact check at validation.
+- R5-IMP-08 (B#8): coverage gaps → AC-015.5 (PTY no-echo), AC-010.4 (alias byte-equality), AC-016.9 (full conflict/dedup/platform-case matrix).
+- Minors fixed: SPEC-002 argv diagnostics defer to `argv[0]`-only (A#3); `find` one-match-per-path + entry-descriptions-only (B#9); clap exit-code remap + `--help`/`--version`/EACCES/empty-env/multi-segment-arg behaviors (A#5/6/7/15); AC-011 Unix scoping (A#13); text `list` credential rows show name+status (A#12); secrets never exported into agent-context's own env (A#10); ARCH-002 order-preserving core maps + softened keyring claim (A#9, A#16); README Windows-verification statement (A#14).
+
 ## Approval Decision
 
-Decision: Revise (round 4) → round 5 full two-lane re-review (final round under the 5-round cap; if Critical/Important findings persist, stop and report per loop rules).
+Decision: **Pending user decision.** The 5-round full-fanout cap is reached. Trajectory: R1 4C+12I → R2 2C+12I → R3 0C+10I → R4 1C+3I → R5 1C+9I(A:2I) — every finding through round 5 is revised in the artifacts, but no further clean-context round has confirmed the round-5 revisions. Per loop rules, stopping and reporting to the user with options: (a) approve as-is, (b) one targeted cross-provider re-check of only the round-5 revisions, (c) a sixth full round (explicit cap override).
