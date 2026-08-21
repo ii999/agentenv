@@ -6,7 +6,7 @@
 - PRD: prd.md
 - Architecture: architecture.md
 - Design contract: design-source.md (user-approved design document, Chinese; §ref numbers below cite it)
-- Review state: revised per spec-review.md round 1 (CRIT-001..004, IMP-001..012, MIN-001..006, SUG-001..003)
+- Review state: revised per spec-review.md rounds 1–2
 - Current specs: none (greenfield)
 
 ## Scope
@@ -19,7 +19,7 @@
 - Credential references (`credential://name[?as=ENV]`), providers `env` / `keychain` / `command`, shallow status display (§4.3, §5.6, §6.1).
 - `credential list` / `check` / `set` (§5.8).
 - `run --with` injection of credentials and `inject`-table values with conflict detection and transparent process semantics (§4.4, §6.2).
-- Security invariant: no secret value in any output agent-context itself writes (§10; boundary defined in SPEC-019).
+- Security invariant: no secret value in any output agent-context itself writes (§10; boundary defined in SPEC-019). v1 writes no log files (SPEC-AS-020), which discharges §10's log clauses.
 - README documenting the agent usage protocol (§7).
 
 ### Out of Scope
@@ -28,20 +28,25 @@
 - Defense against a launched target process deliberately reading its own environment (§10 threat model).
 - Output written by external processes agent-context launches (the `run` target; a `command` provider's inherited stderr): those channels belong to the external tool. Accidental-leak protection covers agent-context's own output only (user decision 2026-08-21).
 - Localization: all CLI output is English (Clarifications, 2026-08-21).
+- JSON error envelopes and `validate --json` (deferred; SPEC-AS-014).
 
 ## Definitions
 
+- **Entry**: a first-level sub-table of a profile. Besides `description`, every direct key of a profile MUST be a table; a scalar or array directly under a profile is a core validation violation (SPEC-002 rule 9).
 - **Query commands** (the no-resolution set): `list`, `list --profiles`, `show`, `get`, `find`, `credential list`, `validate`. None of these may resolve a secret, execute a provider command, read a credential store, or perform network I/O.
-- **Resolving commands**: `credential check`, `credential set`, `run`. These may resolve or store secrets but never print them.
-- **Scalar**: TOML string, integer, float, boolean, or datetime. **Injectable scalar**: string, integer, float, or boolean (datetime excluded, §4.4).
-- **Scalar-to-string conversion** (used by `get` text output and env injection): strings verbatim; integers in decimal; floats via shortest round-trip decimal representation; booleans as `true`/`false`; datetimes in RFC 3339 (text output only — datetimes are not injectable).
+- **Resolving commands**: `credential check`, `credential set`, `run`.
+- **Scalar**: TOML string, integer, float, boolean, or datetime (any of TOML's four date-time forms). **Injectable scalar**: string, integer, float, or boolean.
+- **Scalar-to-string conversion** (used by `get` text output and env injection): strings verbatim; integers in decimal; finite floats via shortest round-trip decimal; non-finite floats as `inf` / `-inf` / `nan`; booleans as `true`/`false`; datetimes via their TOML lexical serialization (all four forms; text output only — datetimes are not injectable).
+- **JSON value encoding**: integers/finite floats/booleans/strings as native JSON; datetimes and non-finite floats as JSON strings of their scalar-to-string form (their `type` tokens remain `datetime` / `float`).
+- **Credential value domain**: a credential value is a non-empty, NUL-free, valid-UTF-8 string, for every provider. A value outside this domain is a resolution failure (exit 4) or, for `credential set` input, a usage error (exit 1).
+- **Reference scanning scope** (where `credential://` strings are recognized): string values of table fields at any depth under an entry, excluding `description` keys, the entire reserved `inject` table, and array elements. A string inside an array is always ordinary data, never a reference (SPEC-AS-015).
 
 ## Command–Profile Matrix
 
 | Command | Requires active profile | Notes |
 | --- | --- | --- |
 | `list`, `list <entry>`, `show`, `get`, `find` | Yes | resolution order per SPEC-004 |
-| `find --all-profiles` | No | searches every profile |
+| `find --all-profiles` | No | searches every profile; `--profile` accepted, unused |
 | `list --profiles` | No | this is the recovery command when profile resolution fails |
 | `validate` | No | validates the whole file |
 | `credential list` / `check` / `set` | No | credentials are global (top-level `credentials` table) |
@@ -53,15 +58,15 @@
 
 | Phase | Name | Priority | Objective | Depends on | Independent test |
 | --- | --- | --- | --- | --- | --- |
-| Phase 1 | Config core & queries | P1 (MVP) | Load/validate config, select profile, run all query commands with text+JSON and exit codes 0/1/2/3. Credential fields shown as references with shallow status computed from config metadata, `getenv`, and PATH lookup only — no provider resolution machinery exists yet | None | Against fixture TOML files: every query command returns the documented output and every Phase-1 error path (exit 1/2/3) returns its code; a canary proves no external process ran |
-| Phase 2 | Credential providers | P2 | `Provider` seam with env/keychain/command adapters; `credential check` / `set`; exit 4 paths; `Secret` no-leak type | Phase 1 | With a mock keychain store, a fake command script, and env vars: `check` reports success/failure per provider, `set` round-trips exact bytes, sentinel secrets never appear in agent-context's output |
-| Phase 3 | Injection runner | P3 | `run --with` builds a conflict-checked injection plan and launches the target transparently; exit 127 path | Phase 1, 2 | A probe target dumps its env to a file: injected names present with exact values, precedence and conflict rules observed, stdio/exit codes pass through |
+| Phase 1 | Config core & queries | P1 (MVP) | Load/validate config, select profile, run every query command (including `credential list`) with text+JSON and exit codes 0/1/2/3. Shallow credential status computed from config metadata, `getenv`, and PATH/file-existence lookup only — no provider resolution machinery exists yet | None | Against fixture TOML files: every query command returns the documented output and every Phase-1 error path (exit 1/2/3) returns its code; a canary proves no external process ran |
+| Phase 2 | Credential providers | P2 | `Provider` seam with env/keychain/command adapters; `credential check` / `set`; exit 4 paths; `Secret` no-leak type; test-gated keychain store seam | Phase 1 | With the test-gated store, a fake command script, and env vars: `check` reports success/failure per provider, `set` round-trips exact bytes, sentinel secrets never appear in agent-context's output |
+| Phase 3 | Injection runner | P3 | `run --with` builds a conflict-checked injection plan and launches the target transparently; exit 127 path; README (SPEC-022) | Phase 1, 2 | A probe target dumps its env to a file: injected names present with exact values, precedence and conflict rules observed, stdio/exit codes pass through |
 
 ## Requirements
 
 ### SPEC-001: Config file location
 
-The CLI MUST read its configuration from, in priority order: the `AGENT_CONTEXT_FILE` environment variable if set; else `$XDG_CONFIG_HOME/agent-context/context.toml` if `XDG_CONFIG_HOME` is set (Unix); else `~/.config/agent-context/context.toml` (Unix) / `%APPDATA%\agent-context\context.toml` (Windows). If the home/config base directory cannot be determined (e.g. `HOME` unset and no override), exit 2 naming the missing variable. (§3)
+The CLI MUST read its configuration from, in priority order: the `AGENT_CONTEXT_FILE` environment variable if set; else `$XDG_CONFIG_HOME/agent-context/context.toml` if `XDG_CONFIG_HOME` is set to an absolute path (an empty or relative value is treated as unset, per the XDG spec); else `~/.config/agent-context/context.toml` (Unix) / `%APPDATA%\agent-context\context.toml` (Windows). If the home/config base directory cannot be determined (e.g. `HOME` unset and no override), exit 2 naming the missing variable. (§3)
 
 Source trace: PRD-FR-001.
 
@@ -70,6 +75,7 @@ Acceptance criteria:
 - AC-001.1: GIVEN `AGENT_CONTEXT_FILE=/tmp/x.toml` pointing at a valid file, WHEN any query command runs, THEN that file is used even if a default-path file exists.
 - AC-001.2: GIVEN no config file at the resolved path, WHEN any command runs, THEN exit 2 with a message containing the resolved path.
 - AC-001.3: GIVEN `HOME` and `AGENT_CONTEXT_FILE` both unset (Unix test harness), WHEN `list` runs, THEN exit 2 naming `HOME` or `AGENT_CONTEXT_FILE` as remedies.
+- AC-001.4: GIVEN `XDG_CONFIG_HOME=relative/dir`, WHEN `list` runs, THEN the variable is ignored and `~/.config/...` is used.
 
 Verification: Automated: integration tests with temp dirs and scrubbed env.
 
@@ -80,11 +86,14 @@ Every command MUST refuse to operate on a config that fails core validation, rep
 1. `version` is a supported integer (only `1`).
 2. `default_profile`, when present, names an existing profile.
 3. Every profile and every entry has a non-empty string `description`.
-4. Every credential has `description`, a `provider` in the set {`env`, `keychain`, `command`} (any other value is a violation), `inject_as`, and its provider-specific required fields (`env`: `name`; `keychain`: `service`, `account`; `command`: non-empty `argv` array of strings).
-5. Every `credential://` reference satisfies the strict grammar of SPEC-012 and resolves to a defined credential.
+4. Every credential definition: its table key matches `[A-Za-z0-9_-]+`; it has non-empty string `description` and `inject_as`; `provider` ∈ {`env`, `keychain`, `command`} (any other value is a violation); provider-specific required fields are present, correctly typed, and non-empty (`env`: `name`, itself a valid environment variable name; `keychain`: `service`, `account`; `command`: `argv`, a non-empty array of strings whose first element is non-empty); no other fields exist in a credential definition (closed schema, SPEC-AS-021).
+5. Every recognized `credential://` reference (see Reference scanning scope) satisfies the strict grammar of SPEC-012 and resolves to a defined credential.
 6. `inject_as`, `?as=` values, and `inject`-table keys are valid environment variable names (`[A-Za-z_][A-Za-z0-9_]*`).
 7. Reserved keys: at entry level, `inject` (if present) MUST be a table satisfying SPEC-013; an entry-level `inject` of any other TOML type is a violation. An empty `inject` table is valid and injects nothing. Tables nested deeper than entry level may freely use the names `inject` and `description` as ordinary fields.
-8. Sensitive-field-name rule (SPEC-020) — enforced here, so a config with a suspected plaintext secret is unusable by every command, not only flagged by `validate`.
+8. Sensitive-field-name rule (SPEC-020), applied over the same traversal scope as reference scanning — so a config with a suspected plaintext secret is unusable by every command.
+9. Besides `description`, every direct key of a profile is a table (its entries); profile-level scalars and arrays are violations naming the key.
+
+An absent `profiles` table (zero profiles) and an absent `credentials` table are both valid. Parse and validation diagnostics MUST name config paths and (for parse errors) line/column positions, and MUST NOT echo config source lines or field values (SPEC-019).
 
 Source trace: PRD-FR-006, PRD-NFR-001.
 
@@ -95,6 +104,8 @@ Acceptance criteria:
 - AC-002.3: GIVEN an entry field `credential = "credential://missing"`, WHEN `list` runs, THEN exit 2 and the message contains `missing`.
 - AC-002.4: GIVEN a config with three independent violations (missing description, unknown provider `vault`, entry-level `inject = "x"`), WHEN `get llm.endpoint` runs, THEN exit 2 and all three config paths appear in the error output.
 - AC-002.5: GIVEN `api_key = "sk-live-123"` in an entry, WHEN `get <that entry>.api_key` runs, THEN exit 2 (the value is never printed) with the SPEC-020 message.
+- AC-002.6: GIVEN `[credentials."my cred"]` (key with a space), a credential with `extra = 1`, and an `env` credential with `name = "1BAD"`, WHEN `validate` runs, THEN each is reported and exit is 2.
+- AC-002.7: GIVEN `region = "eu"` directly under `[profiles.work]`, WHEN `list` runs, THEN exit 2 naming `profiles.work.region`.
 
 Verification: Automated: table-driven validation tests.
 
@@ -127,7 +138,7 @@ Verification: Automated: env-permutation tests.
 
 ### SPEC-005: Path grammar
 
-Path arguments are dot-separated segments; the first segment is an entry name. A segment MAY be wrapped in double quotes to contain dots or spaces: a quoted segment starts at `"`, ends at the next `"`, and may contain any character except `"` (keys containing a double quote are not addressable in v1 — SPEC-AS-010). No escape sequences exist inside or outside quotes. Documentation examples MUST show shell-safe invocation (single-quoted argument: `agent-context get 'server."my.field"'`). An unknown path MUST exit 3 with a message naming the failing path and suggesting `agent-context list <entry>`. (§5.1)
+Path arguments are dot-separated segments; the first segment is an entry name. An unquoted segment is one or more characters other than `.` and `"`. A segment MAY instead be fully quoted to contain dots or spaces: a quoted segment is `"` + any characters except `"` + `"`, occupying the whole segment (keys containing a double quote are not addressable in v1 — SPEC-AS-010; empty segments and partial quoting are grammar errors). No escape sequences exist. Documentation examples MUST show shell-safe invocation (single-quoted argument: `agent-context get 'server."my.field"'`). An unknown path MUST exit 3 with a message naming the failing path and suggesting `agent-context list <entry>`. (§5.1; design §5.1's mention of `show`/`find` paths is satisfied by `show <entry>` taking an entry name — the first path segment — and `find` taking a needle, per §5.5's examples.)
 
 Source trace: PRD-FR-003.
 
@@ -135,13 +146,13 @@ Acceptance criteria:
 
 - AC-005.1: GIVEN a field literally named `my.field` under entry `server`, WHEN the CLI receives the argument `server."my.field"` (argv-level, no shell), THEN its value is returned.
 - AC-005.2: GIVEN entry `llm` without field `region`, WHEN `get llm.region` runs, THEN exit 3 and the message contains `llm.region` and `list llm`.
-- AC-005.3: GIVEN an unterminated quote in the path argument, WHEN `get` runs, THEN exit 1 with a grammar error message.
+- AC-005.3: GIVEN an unterminated quote, an empty segment (`llm..x`), or a partially quoted segment (`a"b".c`), WHEN `get` runs, THEN exit 1 with a grammar error message.
 
 Verification: Automated: unit tests on the path parser + CLI integration via argv.
 
 ### SPEC-006: `list`
 
-`list` MUST show every entry of the active profile with its description, and each of the entry's **top-level** fields with its name and type label — nested sub-tables (including `inject`) appear as a single field of type `table` without recursion. `list <entry>` MUST show one entry and recurse into nested tables using dotted paths. `list --profiles` MUST show every profile with its description and mark the default. Credential-reference fields show shallow status per SPEC-012. All listings follow config-file order (SPEC-021). (§5.2)
+`list` MUST show every entry of the active profile with its description, and each of the entry's **top-level** fields with its name and type label — nested sub-tables (including `inject`) appear as a single field of type `table` without recursion. `list <entry>` MUST show one entry and recurse into nested tables using dotted paths. `list --profiles` MUST show every profile with its description and mark the default; with zero profiles defined it prints an explicit "no profiles" line, exit 0. Credential-reference fields show shallow status per SPEC-012. All listings follow config-file order (SPEC-021). (§5.2)
 
 Source trace: PRD-FR-003.
 
@@ -156,7 +167,7 @@ Verification: Automated: golden-output integration tests (required tokens per li
 
 ### SPEC-007: `show`
 
-`show <entry>` MUST print the entry description and every field recursively with dotted paths and values, with two exceptions: credential references show only the credential name and shallow status (never a secret, never the raw value's resolution); the `inject` table is rendered once, as `ENVNAME ← field.path` pairs (not additionally as dotted fields). Arrays render as their JSON encoding on one line; non-`inject` nested tables render as their fields with dotted paths. `show nosuch` exits 3 listing available entry names. (§5.3)
+`show <entry>` MUST print the entry description and every field recursively with dotted paths and values, with two exceptions: credential references show only the credential name and shallow status; the `inject` table is rendered once, as `ENVNAME ← field.path` pairs (not additionally as dotted fields). Arrays render as their JSON value encoding on one line; non-`inject` nested tables render as their fields with dotted paths. `show nosuch` exits 3 listing available entry names. (§5.3)
 
 Source trace: PRD-FR-003, PRD-NFR-001.
 
@@ -179,69 +190,73 @@ Acceptance criteria:
 - AC-008.1: WHEN `get llm.endpoint` runs, THEN stdout is exactly the URL plus newline; exit 0.
 - AC-008.2: WHEN `get ci.tags` runs without `--json`, THEN exit 1 and the message mentions `--json`.
 - AC-008.3: WHEN `get llm.credential` runs, THEN stdout is exactly the stored reference string (e.g. `credential://company_llm`) plus newline.
-- AC-008.4: GIVEN boolean, integer, float, and datetime fixture fields, WHEN `get` runs on each, THEN output follows the scalar-to-string conversion table (`true`, `42`, `1.5`, RFC 3339).
+- AC-008.4: GIVEN boolean, integer, finite-float, non-finite-float, offset-datetime, and local-date fixture fields, WHEN `get` runs on each, THEN output follows the scalar-to-string conversion rules (`true`, `42`, `1.5`, `inf`, TOML lexical datetime forms).
 
 Verification: Automated: byte-exact stdout assertions.
 
 ### SPEC-009: `find`
 
-`find <needle>` MUST case-insensitively substring-match entry names, field names (any depth), and descriptions within the active profile, printing each match's path plus its scalar value, description (entry matches), or credential name + shallow status (reference matches). On zero matches: stdout empty, stderr `No matches for '<needle>'`, exit 0. `--all-profiles` widens the search to every profile, labels each match with its profile, and requires no active profile. (§5.5)
+`find <needle>` MUST case-insensitively substring-match, within the active profile: entry names, field names (the bare segment name, at any depth), descriptions, and string-scalar field values (which includes credential reference strings; reference strings are config data, not secrets — SPEC-019 is unaffected). Array elements and non-string scalars are not matched. An empty needle is a usage error (exit 1).
+
+Match output: entry match → path + description; string/scalar field match → path + scalar-to-string value; credential-reference field → path + credential name + shallow status; a name-match on an array or table field → path + type label only. On zero matches: stdout empty, stderr `No matches for '<needle>'`, exit 0. `--all-profiles` widens the search to every profile, labels each match with its profile, and requires no active profile. (§5.5; value matching is what reproduces §5.5's example output, which includes `llm.endpoint` by its URL value and excludes `llm.model`.)
 
 Source trace: PRD-FR-003.
 
 Acceptance criteria:
 
-- AC-009.1: WHEN `find llm` runs on the example config, THEN matches include the `llm` entry and `llm.endpoint`, and no match line contains a resolved secret.
+- AC-009.1: WHEN `find llm` runs on the example config, THEN matches are exactly: the `llm` entry, `llm.endpoint` (value contains "llm"), and `llm.credential` (reference string contains "llm") — and `llm.model` is not a match.
 - AC-009.2: WHEN `find LLM --all-profiles` runs with no `default_profile` configured, THEN matches from both `work` and `personal` appear, each labeled with its profile, exit 0.
 - AC-009.3: WHEN `find zzz-no-match` runs, THEN stdout is empty, stderr contains `No matches`, exit 0; with `--json`, stdout is an envelope with an empty `matches` array.
+- AC-009.4: WHEN `find inject` runs on the example config, THEN the `llm.inject` table field matches by name and prints path + `table` with no member values.
+- AC-009.5: WHEN `find ""` runs, THEN exit 1 usage error.
 
 Verification: Automated: integration tests.
 
 ### SPEC-010: JSON output contract
 
-All query commands accept `--json`; JSON is the only stdout content. Two output classes exist:
+`list`, `list <entry>`, `list --profiles`, `show`, `get`, `find`, and `credential list` accept `--json`; JSON is the only stdout content. `validate` does not take `--json` in v1 (SPEC-AS-014). When a `--json` invocation fails, stdout is empty and the error is text on stderr with the normal exit code (SPEC-AS-014). Two output classes exist:
 
-**Raw value** — `get <path> --json` prints exactly the JSON encoding of the addressed value: scalar → JSON scalar (datetime → RFC 3339 string), array → JSON array, table → JSON object, credential reference → JSON string of the stored reference. No envelope, no `version` (recorded deviation from the envelope rule; design §5.4 defines `get` as raw-value retrieval).
+**Raw value** — `get <path> --json` prints exactly the JSON value encoding of the addressed value: scalar → JSON scalar per the Definitions encoding, array → JSON array, table → JSON object, credential reference → JSON string of the stored reference. No envelope, no `version` — a recorded deviation from the envelope rule, adopting design §5.4's raw-retrieval reading over §5.9's envelope wording (SPEC-AS-022).
 
 **Envelope** — every other JSON-producing command prints one object carrying `"version"` (config version) plus:
 
-- `list --json`: `{"version", "profile", "entries": [{"name", "description", "fields": [Field...]}]}` — fields recursive (dotted paths), file order.
+- `list --json`: `{"version", "profile", "entries": [{"name", "description", "fields": [Field...]}]}`.
+- `list <entry> --json` and `show <entry> --json` (same envelope): `{"version", "profile", "name", "description", "fields": [Field...]}`.
 - `list --profiles --json`: `{"version", "profiles": [{"name", "description", "default": bool}]}`.
-- `show <entry> --json`: `{"version", "profile", "name", "description", "fields": [Field...]}` (the `inject` table appears as ordinary `table`/member fields here; the `←` form is text-only sugar).
-- `find --json`: `{"version", "matches": [{"profile", "path", "kind": "entry"|"field", "type"?, "value"?, "description"?, "credential"?}]}`.
+- `find --json`: `{"version", "matches": [Match...]}` where `Match = {"profile", "path", "kind": "entry"|"field"}` plus, by match type: entry → `"description"`; scalar field → `"type"`, `"value"`; credential-reference field → `"type": "credential_ref"`, `"credential"`; array/table name-match → `"type"` only.
 - `credential list --json`: `{"version", "credentials": [{"name", "description", "provider", "status"}]}`.
 
-A `Field` is `{"path", "type", "value"}` with `type` ∈ `string|integer|float|boolean|datetime|array|table|credential_ref`; `table` fields enumerate members as further `Field`s rather than carrying a `value`; `credential_ref` fields carry `{"path", "type": "credential_ref", "credential": {"name", "provider", "status"}}` and never a `value` or the reference's `?as=` target resolution. `status` ∈ `available|not_set|configured|command_missing`. These shapes are a frozen compatibility contract; changes must be additive. (§5.9)
+`Field` is recursive: scalar → `{"path", "type", "value"}` (value per the JSON value encoding); array → `{"path", "type": "array", "value": <JSON array>}`; credential reference → `{"path", "type": "credential_ref", "credential": {"name", "provider", "status"}}` (no `value`, no resolution of `?as=`); table → `{"path", "type": "table", "fields": [Field...]}` with members **nested inside** the table's `fields` array, not as siblings. `type` ∈ `string|integer|float|boolean|datetime|array|table|credential_ref`; `status` ∈ `available|not_set|configured|command_missing`. In envelopes, `fields` arrays are fully recursive regardless of the text command's display depth (deliberate divergence from text `list`'s top-level-only view). These shapes are a frozen compatibility contract; changes must be additive. (§5.9)
 
 Source trace: PRD-NFR-003, PRD-NFR-001.
 
 Acceptance criteria:
 
-- AC-010.1: WHEN `list --json` runs on the example config, THEN output parses, carries `version: 1` and `profile: "work"`, and the `llm.credential` field object has `credential.{name,provider,status}` and no `value`.
+- AC-010.1: WHEN `list --json` runs on the example config, THEN output parses, carries `version: 1` and `profile: "work"`, the `llm.credential` field object has `credential.{name,provider,status}` and no `value`, and the `llm.inject` field is a `table` Field whose members nest inside its `fields` array.
 - AC-010.2: WHEN `get ci.tags --json` runs, THEN stdout is exactly the bare JSON array; WHEN `get llm.credential --json` runs, THEN stdout is the JSON string of the reference.
-- AC-010.3: Snapshot tests lock all six shapes above (five envelopes + raw value); any shape change fails the suite.
+- AC-010.3: Snapshot tests lock all six shapes (raw value + five envelopes); any shape change fails the suite.
 
 Verification: Automated: JSON snapshot tests.
 
 ### SPEC-011: `validate`
 
-`validate` MUST run all SPEC-002 core rules plus the Unix file-permission check (fail when the config file mode grants any group/other read or write bit; 0600 and 0400 pass) and MUST report every failure with its config path, exiting 2 on any failure, 0 when clean. `validate` requires no active profile and is a query command (no resolution). (§5.7)
+`validate` MUST run all SPEC-002 core rules plus the Unix file-permission check: the file mode's permission bits must be a subset of `0600` (owner read/write only — group/other bits and **all execute bits** fail; `0600` and `0400` pass; `0601`, `0610`, `0644`, `0700` fail). It MUST report every failure with its config path, exiting 2 on any failure, 0 when clean. `validate` requires no active profile and is a query command (no resolution). (§5.7, §3)
 
 Source trace: PRD-FR-006.
 
 Acceptance criteria:
 
 - AC-011.1: GIVEN a config with two independent violations, WHEN `validate` runs, THEN both are reported and exit is 2.
-- AC-011.2: GIVEN a clean config with mode 0644 on Unix, WHEN `validate` runs, THEN the failure names the file and `0600`.
-- AC-011.3: GIVEN a clean 0600 config, THEN exit 0.
+- AC-011.2: GIVEN a structurally valid config with mode 0644, WHEN `validate` runs, THEN exit 2 and the failure names the file and `0600`; same for mode 0700.
+- AC-011.3: GIVEN a structurally valid 0600 config, THEN exit 0.
 
 Verification: Automated: integration tests with `chmod` in temp dirs.
 
 ### SPEC-012: Credential references and shallow status
 
-Any string value beginning with `credential://` anywhere under an entry (including nested sub-tables) MUST parse against the exact grammar `credential://<name>` or `credential://<name>?as=<ENV>` where `<name>` matches `[A-Za-z0-9_-]+` and `<ENV>` is a valid env name. Anything else beginning with `credential://` — empty name, unknown or duplicated query parameters, wrong-case `?As=`, trailing garbage — is a load-time violation (exit 2, SPEC-002 rule 5): a malformed reference is never silently treated as an ordinary string and never silently falls back to the credential's `inject_as`.
+Within the Reference scanning scope (Definitions), any string value beginning with `credential://` MUST parse against the exact grammar `credential://<name>` or `credential://<name>?as=<ENV>` where `<name>` matches `[A-Za-z0-9_-]+` and `<ENV>` is a valid env name. Anything else beginning with `credential://` — empty name, unknown or duplicated query parameters, wrong-case `?As=`, trailing garbage — is a load-time violation (exit 2, SPEC-002 rule 5): a malformed reference is never silently treated as an ordinary string and never silently falls back to the credential's `inject_as`.
 
-Query commands MUST display references with a shallow status computed without resolving: `env` → `available`/`not_set` via variable presence; `keychain` → `configured` (no store read); `command` → `configured`/`command_missing` via PATH lookup (or existence check for an absolute path) of `argv[0]`. (§4.3, §5.6)
+Query commands MUST display references with a shallow status computed without resolving: `env` → `available`/`not_set` via variable presence; `keychain` → `configured` (no store read); `command` → `configured`/`command_missing`: when `argv[0]` contains a path separator it is checked for existence as a filesystem path (relative paths against the current working directory), otherwise it is looked up on `PATH`. (§4.3, §5.6)
 
 Source trace: PRD-FR-004, PRD-NFR-001.
 
@@ -251,12 +266,13 @@ Acceptance criteria:
 - AC-012.2: GIVEN a `command` credential whose `argv[0]` is a canary script that creates a file when executed, WHEN every query command runs, THEN status logic reports `configured` and the canary file does not exist afterward.
 - AC-012.3: GIVEN an `env` credential with the variable set, THEN status is `available`; unset, `not_set`.
 - AC-012.4: GIVEN `credential://company_llm?As=X`, `credential://`, and `credential://name?x=1` in three fixtures, WHEN any command runs, THEN each exits 2 citing the malformed reference.
+- AC-012.5: GIVEN `tags = ["credential://company_llm"]` (array element), WHEN `validate`, `show`, and `run --with` that entry execute, THEN the element is ordinary string data: no validation of it as a reference, rendered verbatim in the array, and nothing injected from it.
 
 Verification: Automated: canary no-execution test; grammar table test.
 
 ### SPEC-013: `inject` tables
 
-An entry MAY contain a reserved `inject` sub-table mapping environment variable names to field paths within the same entry. Beyond SPEC-002 rule 7 (must be a table), validation MUST reject: keys that are not valid env names; values that are not strings; paths that do not resolve within the entry; paths resolving to anything other than an injectable scalar (string/integer/float/boolean — datetime and all non-scalars rejected); paths resolving to credential references (credentials inject via `inject_as`/`?as=` only, message directs there). (§4.4)
+An entry MAY contain a reserved `inject` sub-table mapping environment variable names to field paths within the same entry. `inject` values are field paths, never scanned as credential references. Beyond SPEC-002 rule 7 (must be a table), validation MUST reject: keys that are not valid env names; values that are not strings; paths that do not resolve within the entry; paths resolving to anything other than an injectable scalar (string/integer/float/boolean); paths resolving to credential references (credentials inject via `inject_as`/`?as=` only, message directs there). (§4.4)
 
 Source trace: PRD-FR-005.
 
@@ -270,7 +286,7 @@ Verification: Automated: validation tests.
 
 ### SPEC-014: Credential providers
 
-`env` resolution reads the named variable, failing when unset. `keychain` resolution reads the platform credential store (macOS Keychain / Windows Credential Manager / Linux secret-service) by `service` + `account`, failing when the item is missing; on systems with no usable store the error names the provider and suggests `command`/`env`. `command` resolution executes `argv` directly via the OS process API — agent-context itself never constructs a shell invocation or passes the command through a shell; the content of a user-authored `argv` is the config author's choice and is not policed. The provider command's stdout is captured as the secret (exactly one trailing `\n` or `\r\n` stripped); stdin and stderr are inherited so interactive password-manager auth can complete; resolution fails on non-zero exit, empty/whitespace-only output, or output that is not valid UTF-8 or contains NUL. Resolution failure is always explicit (exit 4 at CLI level) and never substitutes another credential. (§6.1, §10)
+Every provider yields values in the credential value domain (Definitions); a value outside it (empty, NUL-bearing, or not valid UTF-8 — e.g. a non-UTF-8 environment variable or store item) is a resolution failure. `env` resolution reads the named variable, failing when unset. `keychain` resolution reads the platform credential store (macOS Keychain / Windows Credential Manager / Linux secret-service) by `service` + `account`, failing when the item is missing; on systems with no usable store the error names the provider and suggests `command`/`env`. `command` resolution executes `argv` directly via the OS process API — agent-context itself never constructs a shell invocation or passes the command through a shell; the content of a user-authored `argv` is the config author's choice and is not policed. The provider command's stdout is captured as the secret (exactly one trailing `\n` or `\r\n` stripped); stdin and stderr are inherited so interactive password-manager auth can complete; resolution fails on non-zero exit or a captured value outside the credential value domain (whitespace-only counts as empty). Resolution failure is always explicit (exit 4 at CLI level) and never substitutes another credential. (§6.1, §10)
 
 Source trace: PRD-FR-004.
 
@@ -279,29 +295,31 @@ Acceptance criteria:
 - AC-014.1: GIVEN `COMPANY_LLM_TOKEN` unset, WHEN `credential check company_llm` runs, THEN exit 4 and the message names the variable without printing any value.
 - AC-014.2: GIVEN a fake command-provider script printing a sentinel secret, WHEN `credential check` runs, THEN success is reported and the sentinel does not appear in agent-context's stdout or stderr.
 - AC-014.3: GIVEN a command provider whose `argv` includes the literal argument `$HOME`, and a script that records its argv, WHEN resolved, THEN the script receives the literal string `$HOME` (no shell expansion occurred).
-- AC-014.4: GIVEN a mock keychain store containing the item, WHEN `check` runs, THEN success; with the item absent, exit 4 naming service and account.
-- AC-014.5: GIVEN a command provider script exiting 1, and another printing only `\n`, WHEN each is checked, THEN exit 4 with distinct messages (non-zero exit vs empty output).
+- AC-014.4: GIVEN the test-gated keychain store containing the item, WHEN `check` runs, THEN success; with the item absent, exit 4 naming service and account.
+- AC-014.5: GIVEN command provider scripts that (a) exit 1, (b) print only `\n`, (c) print invalid UTF-8, WHEN each is checked, THEN exit 4 with distinct messages (non-zero exit / empty output / invalid value).
 
-Verification: Automated: keyring mock store; fixture scripts.
+Verification: Automated: test-gated store; fixture scripts.
 
 ### SPEC-015: `credential list` / `check` / `set`
 
-`credential list` MUST print every credential definition with provider type and shallow status (query command — no resolution), and supports `--json` (shape in SPEC-010). `credential check <name>` MUST perform a real resolution and report success or the concrete failure reason, never printing the secret; an undefined name exits 3 listing defined credential names. `credential set <name>` MUST work only for `keychain` credentials: with a TTY it prompts and reads without echo; without a TTY it reads stdin to EOF, stripping exactly one trailing `\n`/`\r\n`; an empty value (after stripping) exits 1. The exact remaining bytes are stored. Store write failures exit 4 naming the platform error. For `env`/`command` credentials it exits 1 explaining those are externally managed. (§5.8)
+`credential list` (Phase 1) MUST print every credential definition with provider type and shallow status (query command — no resolution), and supports `--json` (shape in SPEC-010). `credential check <name>` MUST perform a real resolution and report success or the concrete failure reason, never printing the secret; an undefined name exits 3 listing defined credential names. `credential set <name>` MUST work only for `keychain` credentials: with a TTY it prompts and reads without echo; without a TTY it reads stdin to EOF, requiring valid UTF-8 without NUL (else exit 1) and stripping exactly one trailing `\n`/`\r\n`; an empty value (after stripping) exits 1. The exact remaining bytes are stored. Store write failures exit 4 naming the platform error. For `env`/`command` credentials it exits 1 explaining those are externally managed. (§5.8)
 
 Source trace: PRD-FR-007.
 
 Acceptance criteria:
 
 - AC-015.1: WHEN `credential list` runs on the example config, THEN both credentials appear with provider labels and statuses, and a command-provider canary proves no resolution ran.
-- AC-015.2: GIVEN the piped value `hunter2\n`, WHEN `credential set openai_personal` runs against the mock store, THEN the stored bytes are exactly `hunter2`, a following `check` succeeds, and no output channel ever contained the value.
+- AC-015.2: GIVEN the piped value `hunter2\n`, WHEN `credential set openai_personal` runs against the test-gated store, THEN the stored bytes are exactly `hunter2`, a following `check` succeeds, and no output channel of agent-context ever contained the value.
 - AC-015.3: WHEN `credential set company_llm` (env provider) runs, THEN exit 1 and the message says env credentials are managed externally.
 - AC-015.4: WHEN `credential check nosuch` runs, THEN exit 3 listing the defined credential names.
 
-Verification: Automated: mock-store round-trip with byte assertion.
+Verification: Automated: test-gated store round-trip with byte assertion.
 
 ### SPEC-016: `run --with` injection plan
 
-`run --with <entry>... -- <cmd> [args...]` MUST: require at least one `--with` and a command after `--` (else exit 1 usage error showing the expected form); resolve each named entry in the active profile (exit 3 if absent); recursively collect its credential references and evaluate its `inject` table (scalar-to-string conversion); and build the full target-env mapping BEFORE resolving any secret. Conflict rule: after deduplicating identical injection sources — repeated `--with` entries, and identical (env name, credential name, `?as=`) triples — two remaining injections targeting the same env name fail with exit 4, naming both sources (credential names and/or `entry.inject` keys), without launching the target or resolving any provider. Precedence: injected variables override same-named variables inherited from agent-context's own environment; inherited variables are never conflicts. `?as=` overrides the credential's `inject_as` for that reference. An entry with no references and no `inject` table injects nothing and still runs the target. (§6.2)
+`run --with <entry>... -- <cmd> [args...]` MUST: require at least one `--with` and a command after `--` (else exit 1 usage error showing the expected form); resolve each named entry in the active profile (exit 3 if absent); collect the entry's credential references (per the Reference scanning scope) and evaluate its `inject` table (scalar-to-string conversion); and build the full target-env mapping BEFORE resolving any secret.
+
+Injection identity and conflicts: a credential injection's identity is its **effective pair** (credential name, target env name after applying `?as=` or `inject_as`); an `inject`-table injection's identity is (entry name, inject key). Identical effective pairs — from repeated `--with` entries or from multiple references across entries — deduplicate to one injection (recorded refinement of design §6.2's conflict rule: SPEC-AS-012/-018). Any two injections with **different** identities targeting the same env name fail with exit 4, naming both sources (credential names and/or `entry.inject` keys), without launching the target or resolving any provider. Precedence: injected variables override same-named variables inherited from agent-context's own environment; inherited variables are never conflicts. An entry with no references and no `inject` table injects nothing and still runs the target. (§6.2)
 
 Source trace: PRD-FR-005.
 
@@ -311,14 +329,14 @@ Acceptance criteria:
 - AC-016.2: GIVEN two `--with` entries whose distinct credentials both target `OPENAI_API_KEY`, WHEN `run` executes, THEN exit 4, the message names both credentials, and a canary proves no provider command ran.
 - AC-016.3: GIVEN `credential://company_llm?as=LLM_API_KEY`, WHEN `run --with llm -- <probe>` runs, THEN the probe sees `LLM_API_KEY` and no injected `OPENAI_API_KEY`.
 - AC-016.4: GIVEN `OPENAI_API_KEY=inherited` in agent-context's own env and entry `llm` injecting it, WHEN `run` executes, THEN the probe sees the injected value, not `inherited`.
-- AC-016.5: GIVEN two entries referencing the same credential with the same target name, WHEN `run --with a --with b -- <probe>` executes, THEN no conflict: the value is injected once.
+- AC-016.5: GIVEN one entry referencing `credential://c` (whose `inject_as` is `X`) and another referencing `credential://c?as=X`, WHEN `run --with a --with b -- <probe>` executes, THEN the effective pairs are identical: no conflict, the value injected once.
 - AC-016.6: WHEN `run -- true` (zero `--with`) runs, THEN exit 1 usage error.
 
 Verification: Automated: probe writing its env to a temp file.
 
 ### SPEC-017: `run` process transparency
 
-After a successful injection plan, the target's stdio MUST be the caller's stdio, uncaptured and unbuffered, and the exit status observed by the caller MUST be the target's own. Platform semantics: on Unix the CLI replaces itself with the target (`exec`), so signal delivery and exit/signal status (observed as 128+N by the shell) are structural; on Windows the CLI spawns the target in the same console (sharing the console control-event group, so Ctrl-C reaches the target), waits, and exits with the target's exit code — no additional forwarding machinery is claimed in v1. Pre-launch failures use SPEC-018 exit codes; a target that cannot be executed exits 127 naming the command. agent-context writes nothing to stdout/stderr on the happy path. (§6.2)
+After a successful injection plan, the target's stdio MUST be the caller's stdio, uncaptured and unbuffered, and the exit status observed by the caller MUST be the target's own. Platform semantics: on Unix the CLI replaces itself with the target (`exec`), so signal delivery and exit/signal status (observed as 128+N by the shell) are structural; on Windows the CLI spawns the target in the same console (sharing console control events, so Ctrl-C reaches the target), waits, and exits with the target's exit code — design §6.2's SIGINT/SIGTERM forwarding is POSIX-scoped, and the Windows console-group behavior is the recorded platform equivalent (SPEC-AS-013). Pre-launch failures use SPEC-018 exit codes; a target that cannot be executed exits 127 naming the command. agent-context writes nothing to stdout/stderr on the happy path. (§6.2)
 
 Source trace: PRD-FR-005.
 
@@ -332,7 +350,7 @@ Verification: Automated: integration tests with a compiled helper; signal case U
 
 ### SPEC-018: Exit codes and error messages
 
-The CLI MUST use: 0 success; 1 usage/argument errors (bad flags, path grammar errors, `get` non-scalar without `--json`, `credential set` on non-keychain or empty value, `run` without `--with`/command); 2 config-file errors (missing file/base dir, parse, any SPEC-002 violation, permission check); 3 name-resolution failures (unknown profile, entry, path, or credential name); 4 credential resolution failure, store write failure, or injection conflict; 127 target-not-executable (`run` only). Every error message MUST name the failing thing and a next action (a command to run or a config path to edit), in English. (§9)
+The CLI MUST use: 0 success; 1 usage/argument errors (bad flags, path grammar errors, empty `find` needle, `get` non-scalar without `--json`, `credential set` on non-keychain or invalid/empty value, `run` without `--with`/command); 2 config-file errors (missing file/base dir, parse, any SPEC-002 violation, permission check); 3 name-resolution failures (unknown profile, entry, path, or credential name); 4 credential resolution failure, store write failure, or injection conflict; 127 target-not-executable (`run` only). Every error message MUST name the failing thing and a next action (a command to run or a config path to edit), in English. (§9)
 
 Source trace: PRD-NFR-002.
 
@@ -345,20 +363,23 @@ Verification: Automated.
 
 ### SPEC-019: No-secret invariant (security)
 
-No output that agent-context itself writes — stdout, stderr, or any file, on any command, in success or failure — may contain a resolved secret value. `credential check` and `run` resolve secrets but never print them. Enforcement boundary: channels owned by external processes that agent-context launches (the `run` target's stdio; a `command` provider's inherited stderr and stdin) are outside this invariant — they belong to the external tool and are covered by the documented threat model (accidental-leak protection; Scope). The invariant is enforced structurally (secret type without `Display`/`Serialize`, constructed only inside the credential module, per ARCH-005) and by tests. (§10)
+No output that agent-context itself writes — stdout, stderr, or any file, on any command, in success or failure — may contain a resolved secret value; v1 writes no log files at all (SPEC-AS-020). Diagnostics for parse, validation, and provider errors MUST NOT echo config source lines or field values (a parse error on a line containing a plaintext token must not reproduce that token). `credential check` and `run` resolve secrets but never print them.
+
+Enforcement boundary: channels owned by external processes that agent-context launches (the `run` target's stdio, which on Unix is agent-context's own stdio after `exec`; a `command` provider's inherited stderr and stdin) are outside this invariant — they belong to the external tool and are covered by the documented threat model (Scope). Test fixtures (probe targets, provider scripts) MUST therefore never print sentinel values to inherited channels, so the suite-wide grep of AC-019.1 measures exactly agent-context's own output. The invariant is enforced structurally (secret type without `Display`/`Serialize`, per ARCH-005) and by tests. (§10)
 
 Source trace: PRD-NFR-001.
 
 Acceptance criteria:
 
-- AC-019.1: A suite-wide assertion greps every captured agent-context stdout/stderr from every integration test for planted sentinel secret values (distinct high-entropy strings per provider) and fails on any hit.
+- AC-019.1: A suite-wide assertion greps every captured agent-context stdout/stderr from every integration test for planted sentinel secret values (distinct high-entropy strings per provider) and fails on any hit; fixture scripts and probes are authored to keep sentinels off inherited channels.
 - AC-019.2: (Phase 2) The secret type implements neither `Display` nor `Serialize`, and its `Debug` prints a redaction marker (unit-asserted).
+- AC-019.3: GIVEN a config file with a TOML syntax error on a line containing a sentinel value, WHEN any command runs, THEN exit 2 and the sentinel does not appear in any output; the message carries the line/column position only.
 
-Verification: Automated: sentinel grep + unit test.
+Verification: Automated: sentinel grep + unit test + malformed-TOML sentinel test.
 
 ### SPEC-020: Sensitive field names
 
-A field whose name exactly equals `token`, `password`, `secret`, `api_key`, or `private_key`, or ends with `_token`, `_password`, `_secret`, `_api_key`, or `_private_key`, and holds a string that is not a `credential://` reference, is a core validation violation (SPEC-002 rule 8; every command exits 2). Non-string values and names like `token_endpoint` are unaffected. (§8)
+Over the same traversal scope as reference scanning (all table fields at any depth under every entry of every profile; the closed credential schema of SPEC-002 rule 4 covers the `credentials` tables): a field whose name exactly equals `token`, `password`, `secret`, `api_key`, or `private_key`, or ends with `_token`, `_password`, `_secret`, `_api_key`, or `_private_key`, and holds a string that is not a `credential://` reference, is a core validation violation (SPEC-002 rule 8; every command exits 2). Non-string values and names like `token_endpoint` are unaffected. (§8)
 
 Source trace: PRD-NFR-001.
 
@@ -367,6 +388,7 @@ Acceptance criteria:
 - AC-020.1: GIVEN `api_key = "sk-live-123"`, WHEN `validate` runs, THEN exit 2 naming the path and suggesting a `credential://` reference (and per AC-002.5, `get` refuses identically).
 - AC-020.2: GIVEN `github_token = "credential://gh"` (defined credential), THEN valid.
 - AC-020.3: GIVEN `token_endpoint = "https://x"` and `use_token = true`, THEN both valid.
+- AC-020.4: GIVEN `[profiles.work.llm.extra]` containing `api_key = "sk-live-123"` (nested one level down), WHEN any command runs, THEN exit 2 naming `profiles.work.llm.extra.api_key`.
 
 Verification: Automated: validation tests.
 
@@ -384,13 +406,13 @@ Verification: Automated: ordered fixture.
 
 ### SPEC-022: Agent usage documentation
 
-The repository MUST ship a `README.md` containing: what the tool is, the config schema by example, and the agent usage protocol of design §7 (the AGENTS.md snippet verbatim, plus the discover → inspect → get → `run --with` flow and the rule to report missing configuration explicitly rather than guessing), and a statement of the threat model boundary (SPEC-019). (§7)
+The repository MUST ship a `README.md` containing: what the tool is, the config schema by example, the agent usage protocol of design §7 (the AGENTS.md snippet verbatim, plus the discover → inspect → get → `run --with` flow and the rule to report missing configuration explicitly rather than guessing), the threat-model boundary (SPEC-019), and the provider guidance of design §6.1/§10 (prefer `keychain`/`command` locally; `env` credentials are readable by any process inheriting the environment). (§7)
 
 Source trace: PRD-FR-003 (adoption), spec-review SUG-003.
 
 Acceptance criteria:
 
-- AC-022.1: README exists and contains the §7 snippet's six bullet points and a threat-model section; verified by inspection at validation.
+- AC-022.1: README exists and contains the §7 snippet's six bullet points, a threat-model section, and the provider guidance; verified by inspection at validation.
 
 Verification: Manual: inspection recorded in validation.md.
 
@@ -406,47 +428,51 @@ Verification: Manual: inspection recorded in validation.md.
 | EDGE-006 | Command provider prints only whitespace | resolution fails: "produced no output", exit 4 | integration |
 | EDGE-007 | `?as=` with invalid env name (`?as=1BAD`) | load exits 2 naming the reference | unit |
 | EDGE-008 | `find` needle matching a description only | the owning entry is a match | integration |
-| EDGE-009 | Datetime field | type label `datetime`; `get` prints RFC 3339 | integration |
+| EDGE-009 | Offset datetime, local date, local time fields | type label `datetime`; `get` prints the TOML lexical form of each | integration |
 | EDGE-010 | `get <entry>` (no field part) | exit 1 directing to `--json` or `show <entry>` | integration |
-| EDGE-011 | Provider command output not valid UTF-8 / contains NUL | resolution fails naming the reason, exit 4 | integration |
-| EDGE-012 | Mock keychain store write fails | `credential set` exits 4 naming the platform error | integration |
+| EDGE-011 | Provider value not valid UTF-8 / contains NUL | resolution fails naming the reason, exit 4 | integration (command provider); unit (env) |
+| EDGE-012 | Test-gated keychain store write fails | `credential set` exits 4 naming the platform error | integration |
 | EDGE-013 | `credential set` with empty piped stdin | exit 1: empty value | integration |
 | EDGE-014 | `HOME` unset, no `AGENT_CONTEXT_FILE` (Unix) | exit 2 naming the remedy (SPEC-001) | integration |
-| EDGE-015 | `--profile` passed to `validate` / `credential list` | accepted, unused; command behaves identically | integration |
+| EDGE-015 | `--profile` passed to `validate` / `credential list` / `find --all-profiles` | accepted, unused; command behaves identically | integration |
+| EDGE-016 | `[profiles]` and/or `[credentials]` absent entirely | valid config; `list --profiles` prints "no profiles"; profile-requiring commands exit 3 | integration |
+| EDGE-017 | Float field `inf` / `nan` | `get` prints `inf`/`nan`; JSON encodes as strings `"inf"`/`"nan"` with type `float` | integration |
+| EDGE-018 | Array element string `credential://x` | ordinary data (AC-012.5); never validated, displayed verbatim, never injected | integration |
 
 ## Dependencies
 
 | Requirement | Dependency | Reason |
 | --- | --- | --- |
-| SPEC-006..011, 021 | SPEC-002..005 | queries need a validated config, profile, and path grammar |
-| SPEC-014, SPEC-015 | SPEC-002, SPEC-012 | providers operate on validated credential definitions |
+| SPEC-006..011, 015 (`credential list`), 021 | SPEC-002..005 | queries need a validated config, profile, and path grammar |
+| SPEC-014, SPEC-015 (`check`/`set`) | SPEC-002, SPEC-012 | providers operate on validated credential definitions |
 | SPEC-016, SPEC-017 | SPEC-012, SPEC-013, SPEC-014 | injection consumes references, inject tables, and providers |
 
 ## Acceptance Matrix
 
 | Acceptance ID | Requirement | Phase | Verification method | Status |
 | --- | --- | --- | --- | --- |
-| AC-001.1–3 | SPEC-001 | 1 | integration | Draft |
-| AC-002.1–5 | SPEC-002 | 1 | validation tests | Draft |
+| AC-001.1–4 | SPEC-001 | 1 | integration | Draft |
+| AC-002.1–7 | SPEC-002 | 1 | validation tests | Draft |
 | AC-003.1–2 | SPEC-003 | 1 | fixture tests | Draft |
 | AC-004.1–3 | SPEC-004 | 1 | env-permutation tests | Draft |
 | AC-005.1–3 | SPEC-005 | 1 | parser unit + CLI argv tests | Draft |
 | AC-006.1–4 | SPEC-006 | 1 | integration | Draft |
 | AC-007.1–3 | SPEC-007 | 1 | integration | Draft |
 | AC-008.1–4 | SPEC-008 | 1 | byte-exact stdout tests | Draft |
-| AC-009.1–3 | SPEC-009 | 1 | integration | Draft |
-| AC-010.1–3 | SPEC-010 | 1 (raw `get` + envelopes), extended in 2 (`credential list`) | JSON snapshot tests | Draft |
+| AC-009.1–5 | SPEC-009 | 1 | integration | Draft |
+| AC-010.1–3 | SPEC-010 | 1 | JSON snapshot tests | Draft |
 | AC-011.1–3 | SPEC-011 | 1 | integration + chmod | Draft |
-| AC-012.1–4 | SPEC-012 | 1 | canary + grammar tables | Draft |
+| AC-012.1–5 | SPEC-012 | 1 | canary + grammar tables | Draft |
 | AC-013.1–3 | SPEC-013 | 1 | validation tests | Draft |
-| AC-014.1–5 | SPEC-014 | 2 | mock store + fixture scripts | Draft |
-| AC-015.1–4 | SPEC-015 | 2 | mock-store round-trip, byte-exact | Draft |
+| AC-014.1–5 | SPEC-014 | 2 | test-gated store + fixture scripts | Draft |
+| AC-015.1 | SPEC-015 | 1 | integration + canary | Draft |
+| AC-015.2–4 | SPEC-015 | 2 | test-gated store round-trip, byte-exact | Draft |
 | AC-016.1–6 | SPEC-016 | 3 | probe env-dump tests | Draft |
 | AC-017.1–3 | SPEC-017 | 3 | integration, compiled helper (signal: Unix) | Draft |
 | AC-018.1–2 | SPEC-018 | 1 (codes 1/2/3), 2 (code 4), 3 (127, conflict 4) | table-driven exit-code tests | Draft |
-| AC-019.1 | SPEC-019 | 1–3 (suite-wide) | sentinel grep | Draft |
+| AC-019.1, .3 | SPEC-019 | 1–3 (suite-wide) | sentinel grep + malformed-TOML test | Draft |
 | AC-019.2 | SPEC-019 | 2 | unit | Draft |
-| AC-020.1–3 | SPEC-020 | 1 | validation tests | Draft |
+| AC-020.1–4 | SPEC-020 | 1 | validation tests | Draft |
 | AC-021.1 | SPEC-021 | 1 | ordered fixture | Draft |
 | AC-022.1 | SPEC-022 | 3 (docs with final feature set) | manual inspection | Draft |
 
@@ -455,22 +481,32 @@ Verification: Manual: inspection recorded in validation.md.
 - Binary and crate name: `agent-context`. Library + thin `main` per architecture.md.
 - The design document's Chinese output examples are illustrative; layout may differ, content requirements above govern. All output English.
 - Shallow-status strings in text output may be humanized (`available`, `not set`, `configured`, `command missing`) but JSON uses the exact enum tokens of SPEC-010.
-- Startup latency (PRD-NFR-003) is satisfied structurally by ARCH-001 (native binary, no runtime); one cold-start measurement of `list` on the example config is recorded in validation.md with a 100 ms budget on the development machine. No automated latency gate.
+- Startup latency (PRD-NFR-003) is satisfied structurally by ARCH-001 (single native binary, no runtime); one cold-start measurement of `list` on the example config is recorded in validation.md with a 100 ms budget on the development machine. No automated latency gate.
+- Keychain test seam (SPEC-AS-019): a cargo feature (e.g. `test-keychain`) compiled only into test builds selects a file-backed store via an environment variable; release builds contain no test store code path. Real-store behavior is covered by the one-time manual macOS round-trip recorded in validation.md.
 
 ## Assumptions
 
-- SPEC-AS-001: `get` refuses non-scalar values without `--json` (exit 1) instead of inventing an unspecified text encoding; design §5.4 only defines JSON for complex data.
-- SPEC-AS-002: `find` matching is case-insensitive substring; the design doc does not specify case rules and agent needles are unpredictable.
-- SPEC-AS-003: Array element addressing (`tags.0`) is not supported in v1; arrays are retrieved whole. The design doc's path grammar addresses keys only.
-- SPEC-AS-004: `command` provider has no timeout in v1 and inherits stderr/stdin so interactive password-manager auth (e.g. `op`) can complete; the provider's inherited channels are outside the SPEC-019 boundary.
+- SPEC-AS-001: `get` refuses non-scalar values without `--json` (exit 1); design §5.4 only defines JSON for complex data.
+- SPEC-AS-002: `find` matching is case-insensitive substring; value matching covers string scalars only (reproduces design §5.5's example; see SPEC-009).
+- SPEC-AS-003: Array element addressing (`tags.0`) is not supported in v1; arrays are retrieved whole.
+- SPEC-AS-004: `command` provider has no timeout in v1 and inherits stderr/stdin; those channels are outside the SPEC-019 boundary.
 - SPEC-AS-005: Valid env names are `[A-Za-z_][A-Za-z0-9_]*` (POSIX portable set).
-- SPEC-AS-006: The Unix permission gate accepts only files with no group/other permission bits for read or write (0600, 0400).
-- SPEC-AS-007: `run` target-not-executable exits 127 (shell convention); the design doc's table does not cover this case.
-- SPEC-AS-008: `credential set` reads from stdin when stdin is not a TTY, enabling scripted setup while remaining no-echo interactively; exactly one trailing newline is stripped on the stdin path.
-- SPEC-AS-009: `command` provider secret = captured stdout with exactly one trailing `\n`/`\r\n` stripped; empty, whitespace-only, non-UTF-8, or NUL-containing output is a resolution failure. The design doc does not define the output contract.
-- SPEC-AS-010: TOML keys containing a double-quote character are not addressable by the v1 path grammar (no escape syntax); such keys remain visible in `list`/`show`/JSON.
-- SPEC-AS-011: `run` requires at least one `--with`; a bare wrapper invocation adds nothing and likely indicates a mistake, so it is a usage error rather than a silent no-op wrapper.
-- SPEC-AS-012: Identical injection triples (env name, credential, `?as=`) are deduplicated rather than conflicting; distinct sources targeting one name always conflict.
+- SPEC-AS-006: The Unix permission gate accepts only modes whose permission bits are a subset of 0600.
+- SPEC-AS-007: `run` target-not-executable exits 127 (shell convention).
+- SPEC-AS-008: `credential set` reads from stdin when stdin is not a TTY; exactly one trailing newline is stripped on that path.
+- SPEC-AS-009: `command` provider secret = captured stdout with exactly one trailing `\n`/`\r\n` stripped; values outside the credential value domain are resolution failures.
+- SPEC-AS-010: TOML keys containing a double-quote character are not addressable by the v1 path grammar; such keys remain visible in `list`/`show`/JSON.
+- SPEC-AS-011: `run` requires at least one `--with`; a bare wrapper invocation is a usage error rather than a silent no-op.
+- SPEC-AS-012 / SPEC-AS-018: Injection dedup identity is the effective (credential, target env) pair; `inject`-table identity is (entry, key). This refines design §6.2's literal "two sources conflict" for the identical-duplicate case; distinct sources always conflict.
+- SPEC-AS-013: Design §6.2's SIGINT/SIGTERM forwarding is POSIX-scoped; on Unix it is structural via `exec`, on Windows the shared-console control-event group is the platform equivalent. No extra forwarding machinery in v1.
+- SPEC-AS-014: `validate` takes no `--json` in v1; on any failing `--json` invocation stdout stays empty and errors are text on stderr. JSON error envelopes are deferred.
+- SPEC-AS-015: Reference scanning excludes array elements, the reserved `inject` table, and `description` keys. This narrows design §4.3's "any string value" to the cases with coherent display/injection semantics; array-borne references have none in v1.
+- SPEC-AS-016: Credential values are non-empty, NUL-free, UTF-8 strings for every provider (Definitions).
+- SPEC-AS-017: Non-finite floats and all four TOML datetime forms render via their TOML lexical form; JSON encodes both as strings (type tokens unchanged).
+- SPEC-AS-019: Keychain integration tests use a compile-time test-gated file-backed store selected by env var; the release binary contains no test store.
+- SPEC-AS-020: v1 writes no log files; design §10's log-content rules are satisfied vacuously.
+- SPEC-AS-021: Credential definitions have a closed schema; unknown fields there are violations (unlike the open schema under profiles).
+- SPEC-AS-022: `get --json` emits the raw JSON value without a `version` envelope, adopting design §5.4 over the §5.9 envelope wording for this one command.
 
 ## Clarifications
 

@@ -86,14 +86,84 @@ Both lanes judged coverage of the design document broadly complete and the secur
 | --- | --- | --- | --- |
 | Provider process may write secrets to its own inherited stderr | Secret could reach a transcript if the provider tool itself misbehaves | User threat-model decision 2026-08-21 (accidental-leak protection only) | Documented in spec Scope and README |
 
+---
+
+# Round 2 (full two-lane re-review of the revised spec)
+
+## Review Metadata
+
+- Review round: 2
+- Reviewers (clean-context, round-1 findings withheld):
+  - Lane A: claude / opus (native subagent), DONE_WITH_CONCERNS, REVISE
+  - Lane B: codex / gpt-5.6-sol @ xhigh (delegate worker, read-only), DONE_WITH_CONCERNS, REVISE — raw result: `.claude/handoffs/001-agent-context-cli--spec-review-r2/RESULT.md`
+- Date: 2026-08-22
+
+## Summary
+
+Round-1 resolutions held (neither lane re-raised CRIT-001..004 as unresolved). Both lanes independently converged on a new set: the `find` matching rule contradicting the design example, residual JSON-contract gaps (`validate --json`, `list <entry> --json`, recursive `Field` members), credential-reference scope in arrays/`inject`/descriptions, phase ownership of `credential list`, the unspecified keychain test seam, permission-bit predicate width, and secret-bearing parser diagnostics.
+
+## Findings (consolidated)
+
+### Critical
+
+| ID | Finding | Evidence (lane) | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R2-CRIT-001 | `find`'s normative rule (names/descriptions only) cannot reproduce design §5.5's example output or AC-009.1; only string-value matching can | A#1 | SPEC-009 rewritten: match entry names, field names, descriptions, and string-scalar values (incl. reference strings); AC-009.1 asserts the exact design-example match set; table/array name-match output defined; empty needle = exit 1 | Fixed |
+| R2-CRIT-002 | JSON contract still incomplete: `validate --json` claimed by Definitions but shapeless; `list <entry> --json` unspecified; recursive `Field` member key undeclared; error-path JSON undefined | A#2, A#3, B#1 | `validate` excluded from `--json` (SPEC-AS-014); `list <entry>`/`show` share one entry envelope; table `Field` nests members in `fields`; failing `--json` = empty stdout + text stderr | Fixed |
+
+### Important
+
+| ID | Finding | Evidence | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R2-IMP-001 | Reference recognition scope collides with arrays, `inject` values, and `description` strings | A#4, B#4 | Reference scanning scope defined in Definitions: table string fields at any depth, excluding arrays, `inject`, `description` (SPEC-AS-015); AC-012.5 + EDGE-018 | Fixed |
+| R2-IMP-002 | SPEC-020 wording narrower than SPEC-012's traversal, leaving nested plaintext printable | A#5 | SPEC-020 bound to the same traversal scope; AC-020.4 nested case; credentials tables covered by closed schema (SPEC-AS-021) | Fixed |
+| R2-IMP-003 | "Entry" undefined; profile-level scalar keys have no behavior | A#6 | Entry defined; profile-level non-table keys = violation (SPEC-002 rule 9, AC-002.7) | Fixed |
+| R2-IMP-004 | `credential list` phase ownership contradictory | A#7, B#5 | Moved to Phase 1 with its JSON envelope (AC-015.1 → Phase 1; AC-015.2–4 stay Phase 2) | Fixed |
+| R2-IMP-005 | Keychain mock-store seam unspecified; conflicts with no-mock-in-production rule | A#8 | Test-gated `test-keychain` cargo feature + env-var-selected file store, absent from release builds (SPEC-AS-019; architecture Testing Strategy) | Fixed |
+| R2-IMP-006 | Credential value domain inconsistent across providers (bytes vs strings) | B#2 | Credential value domain defined (non-empty, NUL-free, UTF-8) for all providers; `set` validates input; AC-014.5 extended | Fixed |
+| R2-IMP-007 | TOML non-finite floats and four datetime forms lack representations | B#3, A#10 | Scalar-to-string + JSON value encoding defined (TOML lexical forms; JSON strings for datetime/non-finite floats); EDGE-009/017 | Fixed |
+| R2-IMP-008 | Injection dedup identity ambiguous (raw `?as=` vs effective target); deviation from design §6.2 unrecorded | B#6 | Identity = effective (credential, target env) pair; `inject` identity = (entry, key); AC-016.5 tests default-vs-explicit equivalence; recorded SPEC-AS-012/-018 | Fixed |
+| R2-IMP-009 | Windows semantics weaken design's signal-forwarding without a recorded decision | B#7 | Recorded platform deviation SPEC-AS-013 (POSIX-scoped design clause; Windows console-group equivalent) | Fixed (recorded) |
+| R2-IMP-010 | Permission predicate admits execute bits (0700, 0601 pass) | B#8 | Predicate = permission bits ⊆ 0600; AC-011.2 adds 0700 | Fixed |
+| R2-IMP-011 | Parse diagnostics may echo secret-bearing source lines | B#9 | SPEC-002/SPEC-019: diagnostics carry paths + line/column, never source content; AC-019.3 malformed-TOML sentinel test | Fixed |
+| R2-IMP-012 | Credential-definition validation incomplete (env `name` validity, non-empty fields, `argv[0]`, unreferenceable names, open extra fields) | B#10 | SPEC-002 rule 4 tightened (name grammar, non-empty typed fields, closed schema); AC-002.6 | Fixed |
+
+### Minor
+
+| ID | Finding | Evidence | Revision | Status |
+| --- | --- | --- | --- | --- |
+| R2-MIN-001 | AC-011.2 wording contradiction, missing exit code | A#9 | Rewritten | Fixed |
+| R2-MIN-002 | Text `list` vs `list --json` recursion divergence unmarked | A#11 | Marked deliberate in SPEC-010 | Fixed |
+| R2-MIN-003 | architecture rows contradict raw `get --json` deviation | A#12 | render + External Interfaces rows updated | Fixed |
+| R2-MIN-004 | `find` output undefined for table/array name-matches | A#13, B#11 | Defined (path + type label); AC-009.4 | Fixed |
+| R2-MIN-005 | Credential definition names unconstrained at definition site | A#14 | Folded into SPEC-002 rule 4 | Fixed |
+| R2-MIN-006 | `command` shallow status undefined for relative paths with separators | A#15 | Separator ⇒ file-existence check (relative to CWD) | Fixed |
+| R2-MIN-007 | AC-019.1 grep overlaps the exec/steder carve-out | A#16 | Fixture-authoring constraint added to SPEC-019/AC-019.1 | Fixed |
+| R2-MIN-008 | Degenerate configs/inputs unstated (absent tables, empty needle, bad XDG value) | A#17, B#11 | EDGE-016, AC-009.5, AC-001.4 | Fixed |
+| R2-MIN-009 | ARCH-005 containment claim overstated for `credential set` terminal read | A#18 | ARCH-005 amended (cli wraps into `Secret` immediately) | Fixed |
+| R2-MIN-010 | keyring-core test module is `mock`, not `sample` | A#19 | Architecture Testing Strategy corrected | Fixed |
+| R2-MIN-011 | Path grammar lacked unquoted-charset/empty-segment rules | B#11 | Grammar completed in SPEC-005; AC-005.3 extended | Fixed |
+
+### Suggestions
+
+| ID | Suggestion | Status |
+| --- | --- | --- |
+| R2-SUG-001 | README carries §6.1/§10 provider guidance | Accepted (SPEC-022) |
+| R2-SUG-002 | State "v1 writes no log files" | Accepted (Scope, SPEC-AS-020) |
+| R2-SUG-003 | `--profile` with `find --all-profiles` behavior | Accepted (EDGE-015) |
+| R2-SUG-004 | 3-OS CI matrix, native-store smoke tests | Deferred post-v1; recorded in architecture Testing Strategy and validation risks |
+
+## Revisions Applied
+
+| Revision | Artifact | Change made | Finding IDs |
+| --- | --- | --- | --- |
+| REV-003 | spec.md | Full round-2 revision per the tables above | R2-CRIT-001..002, R2-IMP-001..012, R2-MIN-*, R2-SUG-1..3 |
+| REV-004 | architecture.md | render/External-Interfaces raw-JSON deviation; ARCH-005 amendment; keychain test seam; keyring-core `mock`; "single native binary" | R2-MIN-003, R2-MIN-009, R2-MIN-010, R2-IMP-005 |
+
 ## Approval Decision
 
-Decision: Revise (round 1) → round 2 full two-lane re-review required (security-sensitive surface ⇒ full rounds, not targeted re-checks)
-
-Approval rationale:
-
-- Both lanes recommend REVISE; four Critical findings require spec changes before planning.
+Decision: Revise (round 2) → round 3 full two-lane re-review (security-sensitive surface ⇒ full rounds; cap 5)
 
 Conditions:
 
-- Round 2 must confirm CRIT-001..004 resolutions with no new Critical/Important findings.
+- Round 3 must confirm R2-CRIT/IMP resolutions with no new Critical/Important findings.
