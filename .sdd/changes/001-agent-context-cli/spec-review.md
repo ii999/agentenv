@@ -160,10 +160,53 @@ Round-1 resolutions held (neither lane re-raised CRIT-001..004 as unresolved). B
 | REV-003 | spec.md | Full round-2 revision per the tables above | R2-CRIT-001..002, R2-IMP-001..012, R2-MIN-*, R2-SUG-1..3 |
 | REV-004 | architecture.md | render/External-Interfaces raw-JSON deviation; ARCH-005 amendment; keychain test seam; keyring-core `mock`; "single native binary" | R2-MIN-003, R2-MIN-009, R2-MIN-010, R2-IMP-005 |
 
+## Round 2 Approval Decision
+
+Decision: Revise (round 2) → round 3 full two-lane re-review.
+
+---
+
+# Round 3 (full two-lane re-review)
+
+## Review Metadata
+
+- Review round: 3
+- Reviewers (clean-context): Lane A claude/opus (native; first attempt aborted on a 504 gateway timeout, re-dispatched successfully), DONE, REVISE — no Critical. Lane B codex/gpt-5.6-sol @ xhigh (delegate, read-only), DONE_WITH_CONCERNS, REVISE — no Critical. Raw Lane B result: `.claude/handoffs/001-agent-context-cli--spec-review-r3/RESULT.md`.
+- Date: 2026-08-22
+
+## Summary
+
+No Critical findings in either lane; both explicitly confirmed the round-2 security core holds (no-secret boundary coherent, conflict-before-resolution, shallow-status side-effect freedom, strict grammar, feasible Rust stack). Remaining Importants are frozen-contract precision issues; all revised.
+
+## Findings (consolidated) and resolutions
+
+Important — all Fixed in REV-005/006:
+
+- R3-IMP-01 (A#F-1): blanket "no field values in diagnostics" contradicted the spec's own ACs and design §9 examples → diagnostics rule rewritten: never source lines or open-schema field values; closed credential-schema metadata and reference strings are citable (SPEC-002, SPEC-019).
+- R3-IMP-02 (A#F-2, B#3): `Match.credential` shape undefined, status dropped; `Field.path` scope unstated → Credential summary object defined once and reused; `Match` gains `reference` + summary object; paths declared full-from-entry (SPEC-010, Definitions).
+- R3-IMP-03 (A#F-3, B#3): `description` in field sets undecided → Description-as-metadata rule in Definitions: excluded from listings/`fields`/find-field-matches, addressable via `get`, included in raw `get` table output.
+- R3-IMP-04 (A#F-4, B#5): AC-012.5's `run` clause was Phase-1 → split; injection halves moved to AC-016.7 (Phase 3).
+- R3-IMP-05 (B#1): Windows env-name case-insensitivity → platform name identity defined (ASCII case-insensitive on Windows), spelling preserved (SPEC-016).
+- R3-IMP-06 (B#2): NUL-bearing inject sources; self-referential inject paths → both load-time violations (SPEC-013, AC-013.4).
+- R3-IMP-07 (B#4, A#F-6): segment grammar inconsistencies (spaces unquoted, empty quoted segments, inject-value grammar unassigned) → one segment grammar for all path-shaped inputs; whitespace excluded unquoted; empty keys unaddressable (SPEC-005, SPEC-013, SPEC-AS-024).
+- R3-IMP-08 (B#6): cross-OS validation deferral unrecorded → recorded as accepted risk SPEC-AS-025 (local-first repo, no CI infra; surfaced at acceptance validation). CI matrix itself stays post-v1 — scope decision, not silently dropped.
+- R3-IMP-09 (B#7): "no secret in any file" vs `credential set` store write → authorized-persistence exception stated (platform store + test-gated backing file) (SPEC-019).
+
+Minor — all Fixed: version-required wording (A#F-8); XDG scoped to Unix (A#F-9); raw `get` table recursion/reference/description rendering (A#F-10); float text/JSON unification `1.0`, NaN sign note (A#F-11); `list` profile header (A#F-12); `--json` zero-match stderr suppression (A#F-13); PRD-NFR-003 trace notes (A#F-14, SPEC-AS-026); dangling-`default_profile` dead-path note (A#F-15); AC-017.3 signal-aware assertion (A#F-16); `show` narrowing recorded as SPEC-AS-023 (A#F-17); single-resolution-multi-target rule + AC-016.8 (A#F-18); profile names excluded from find domain (A#F-19); `credential list` description alignment (A#F-20); find reference-match shows full reference string (A#F-5); `list <entry>`/`show` divergence marked deliberate (A#F-7); unknown root keys rejected (B#P3-1, closed root schema rule 10); command shallow status = executable discovery (B#P3-2, EDGE-020).
+
+Suggestions accepted: README sensitive-check caveat (A#F-21 → SPEC-022); JSON-alias statement (A#F-24). Noted without change: `?as=` invisibility in envelopes (A#F-22, conforms to design §5.9); 0700 rejection kept (A#F-23, SPEC-AS-006 is deliberate).
+
+## Revisions Applied
+
+| Revision | Artifact | Change made | Finding IDs |
+| --- | --- | --- | --- |
+| REV-005 | spec.md | All round-3 resolutions above | R3-IMP-01..09, R3 minors |
+| REV-006 | architecture.md | none required beyond round-2 state (AS-025 note lives in spec + validation) | — |
+
 ## Approval Decision
 
-Decision: Revise (round 2) → round 3 full two-lane re-review (security-sensitive surface ⇒ full rounds; cap 5)
+Decision: Revise (round 3) → round 4 full two-lane re-review (cap 5)
 
 Conditions:
 
-- Round 3 must confirm R2-CRIT/IMP resolutions with no new Critical/Important findings.
+- Round 4 must confirm R3 resolutions with no new Critical/Important findings.
