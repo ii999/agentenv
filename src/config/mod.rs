@@ -15,6 +15,7 @@ pub(crate) mod validate;
 
 pub use model::{Config, CredentialDef, CredentialRef, Profile, Provider, REFERENCE_PREFIX};
 
+use std::ffi::OsStr;
 use std::path::Path;
 
 use toml::de::Error as TomlError;
@@ -24,9 +25,12 @@ use crate::error::{AppError, Violation};
 
 /// Reads an environment value, treating the empty string as unset
 /// (SPEC-AS-028).
-pub(crate) fn env_value(env: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
+pub(crate) fn env_value<T: AsRef<OsStr>>(
+    env: &impl Fn(&str) -> Option<T>,
+    name: &str,
+) -> Option<T> {
     match env(name) {
-        Some(value) if !value.is_empty() => Some(value),
+        Some(value) if !value.as_ref().is_empty() => Some(value),
         _ => None,
     }
 }

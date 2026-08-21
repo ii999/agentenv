@@ -9,9 +9,9 @@ use toml::{Table, Value};
 
 use crate::config::validate::recognized_reference;
 use crate::config::{Config, CredentialDef, Profile};
+use crate::credential::{shallow_status, Status};
 use crate::error::AppError;
 use crate::path::{resolve, Segments};
-use crate::shallow::{shallow_status, Status};
 
 #[derive(Debug, Clone)]
 pub struct CredentialSummary {

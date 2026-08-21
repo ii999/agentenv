@@ -83,7 +83,7 @@ Checkpoint: Phase 1 acceptance passes — on the design-example fixture every qu
 
 ### Group 3: Phase 2 (P2) — Credential providers
 
-- [ ] T005 [Phase 2] Credential module, providers, and `credential check`/`set`
+- [x] T005 [Phase 2] Credential module, providers, and `credential check`/`set`
   - Files: `src/credential/mod.rs`, `src/credential/secret.rs`, `src/credential/env.rs`, `src/credential/keychain.rs`, `src/credential/command.rs`, `src/credential/test_store.rs` (cfg-gated), `src/cli/credential.rs`, `src/main.rs` (wire `credential check|set`), `Cargo.toml` (`keyring`, `rpassword`, `[features] test-keychain = []`), `src/shallow.rs` (absorb into `credential::shallow_status`, updating T004 call sites), `tests/credential_p2.rs`, `tests/fixtures/bin/` (fixture provider scripts: sentinel-then-exit-1, newline-only, invalid-UTF-8-sentinel, argv-recorder, counting provider)
   - Depends on: T004
   - Spec refs: SPEC-014, SPEC-015 (check/set), SPEC-018 (code 4), SPEC-019 (AC-019.2, captured-bytes clause), SPEC-AS-016/-019

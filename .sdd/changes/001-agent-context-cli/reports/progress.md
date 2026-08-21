@@ -4,3 +4,5 @@
 - 2026-08-22 T003: DONE (report: task-T003-report.md)
 - 2026-08-22 T003: impact delta: Impact-seed re-verification with `git grep -n -F -- ':(exclude).sdd/'`
 - 2026-08-22 T004: DONE (report: task-T004-report.md)
+- 2026-08-22 T005: DONE (report: task-T005-report.md)
+- 2026-08-22 T005: impact delta: `shallow_status` moved from `src/shallow.rs` to `src/credential/shallow.rs`; its call site is now `src/query.rs`, with no observable Phase-1 behavior change. `run_ac` remained read-only; `run_with_input` now applies the same sentinel and environment rules locally. `AppError::Credential` is used by provider resolution and store failures. The credential CLI actions remain in `src/cli/query_cmds.rs`, which differs from the task-text path suggestion but matches the existing command-dispatch structure.

@@ -529,6 +529,7 @@ Verification: Manual: inspection recorded in validation.md.
 - SPEC-AS-028: Empty-string environment variable values are treated as unset (SPEC-001, SPEC-004).
 - SPEC-AS-029: `env` shallow status reports an empty-but-set variable as `not_set` — consistent with SPEC-014, where an empty value is a resolution failure (recorded from T003 review M4).
 - SPEC-AS-030: The Reference scanning scope's `description` exclusion applies to keys named `description` at any depth (they are never scanned as references), while SPEC-002 rule 7's reserved-key semantics still apply only at profile/entry level (recorded from T003 review M3).
+- SPEC-AS-031: `credential check` and `credential set` reject `--json` with a usage error (exit 1), mirroring `validate` (recorded from T005 review S1). Trailing-newline stripping applies only to command-provider stdout (SPEC-AS-009) and the `credential set` stdin path (SPEC-AS-008); `env` and `keychain` values pass through unmodified (T005 review I5).
 - SPEC-AS-020: v1 writes no log files; design §10's log-content rules are satisfied vacuously.
 - SPEC-AS-021: Credential definitions have a closed schema; unknown fields there are violations (unlike the open schema under profiles). The config root schema is likewise closed (SPEC-002 rule 10).
 - SPEC-AS-022: `get --json` emits the raw JSON value without a `version` envelope, adopting design §5.4 over the §5.9 envelope wording (and over PRD-NFR-003's version clause) for this one command.

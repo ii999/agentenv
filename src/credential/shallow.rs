@@ -11,8 +11,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::config::env_value;
-use crate::config::{CredentialDef, Provider};
+use crate::config::{env_value, CredentialDef, Provider};
 
 /// The shallow status of a credential (SPEC-012).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,14 +57,8 @@ impl fmt::Display for Status {
 /// never launches a process.
 pub fn shallow_status(credential: &CredentialDef, env: &impl Fn(&str) -> Option<String>) -> Status {
     match &credential.provider {
-        Provider::Env { name } => {
-            if env_value(env, name).is_some() {
-                Status::Available
-            } else {
-                Status::NotSet
-            }
-        }
-        Provider::Keychain { .. } => Status::Configured,
+        Provider::Env { name } => env_status(name, env),
+        Provider::Keychain { .. } => keychain_status(),
         Provider::Command { argv } => {
             let program = argv.first().map(String::as_str).unwrap_or_default();
             command_status(program, env)
@@ -73,7 +66,19 @@ pub fn shallow_status(credential: &CredentialDef, env: &impl Fn(&str) -> Option<
     }
 }
 
-fn command_status(program: &str, env: &impl Fn(&str) -> Option<String>) -> Status {
+pub(crate) fn env_status(name: &str, env: &impl Fn(&str) -> Option<String>) -> Status {
+    if env_value(env, name).is_some() {
+        Status::Available
+    } else {
+        Status::NotSet
+    }
+}
+
+pub(crate) fn keychain_status() -> Status {
+    Status::Configured
+}
+
+pub(crate) fn command_status(program: &str, env: &impl Fn(&str) -> Option<String>) -> Status {
     if program.is_empty() {
         return Status::CommandMissing;
     }

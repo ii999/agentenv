@@ -1,8 +1,10 @@
+use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 
 use clap::{Args, Subcommand};
 
-use agent_context::config::Config;
+use agent_context::config::{Config, CredentialDef, Provider};
+use agent_context::credential::{provider_for, CapturedSecret, Secret};
 use agent_context::error::AppError;
 use agent_context::path::{single_entry_name, Segments};
 use agent_context::{query, render};
@@ -50,6 +52,10 @@ pub struct CredentialArgs {
 pub enum CredentialCommand {
     /// List credential definitions without resolving them.
     List,
+    /// Resolve a credential without printing its value.
+    Check { name: String },
+    /// Store a keychain credential from a terminal prompt or standard input.
+    Set { name: String },
 }
 
 pub struct Invocation {
@@ -208,7 +214,107 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 stderr: String::new(),
             })
         }
+        QueryCommand::Credential(CredentialArgs {
+            command: CredentialCommand::Check { name },
+        }) => {
+            reject_json_for_credential_action(invocation.json, "check")?;
+            let credential = credential_for(&config, &name)?;
+            provider_for(credential).resolve()?;
+            Ok(Output {
+                stdout: format!("Credential '{name}' is available.\n"),
+                stderr: String::new(),
+            })
+        }
+        QueryCommand::Credential(CredentialArgs {
+            command: CredentialCommand::Set { name },
+        }) => {
+            reject_json_for_credential_action(invocation.json, "set")?;
+            let credential = credential_for(&config, &name)?;
+            if !matches!(&credential.provider, Provider::Keychain { .. }) {
+                return Err(AppError::Usage(format!(
+                    "credential '{}' uses the {} provider and is managed externally; use its provider's tooling, then run 'agent-context credential check {}'",
+                    name,
+                    credential.provider.kind(),
+                    name
+                )));
+            }
+            let secret = read_secret_for_set()?;
+            provider_for(credential).store(secret)?;
+            Ok(Output {
+                stdout: format!("Credential '{name}' stored.\n"),
+                stderr: String::new(),
+            })
+        }
     }
+}
+
+fn reject_json_for_credential_action(json: bool, action: &str) -> Result<(), AppError> {
+    if json {
+        return Err(AppError::Usage(format!(
+            "credential {action} does not support --json; run 'agent-context credential {action} <name>'"
+        )));
+    }
+    Ok(())
+}
+
+fn credential_for<'a>(config: &'a Config, name: &str) -> Result<&'a CredentialDef, AppError> {
+    config.credential(name).ok_or_else(|| {
+        let defined = config
+            .credentials
+            .iter()
+            .map(|credential| credential.name.as_str())
+            .collect::<Vec<_>>();
+        let names = if defined.is_empty() {
+            "(none defined)".to_owned()
+        } else {
+            defined.join(", ")
+        };
+        AppError::NotFound(format!(
+            "credential '{name}' is not defined; defined credentials: {names}; run 'agent-context credential list' to inspect them"
+        ))
+    })
+}
+
+fn read_secret_for_set() -> Result<Secret, AppError> {
+    let bytes = if io::stdin().is_terminal() {
+        read_terminal_secret()
+            .map_err(|error| {
+                AppError::Usage(format!(
+                    "could not read the credential value: {error}; retry 'agent-context credential set <name>'"
+                ))
+            })?
+            .into_bytes()
+    } else {
+        let mut bytes = Vec::new();
+        io::stdin().read_to_end(&mut bytes).map_err(|error| {
+            AppError::Usage(format!(
+                "could not read credential input: {error}; pipe a value and retry 'agent-context credential set <name>'"
+            ))
+        })?;
+        bytes
+    };
+    CapturedSecret::new(bytes)
+        .strip_one_trailing_newline()
+        .into_secret()
+        .map_err(|error| {
+        AppError::Usage(format!(
+            "credential value is invalid: {error}; provide a non-empty UTF-8 value and retry 'agent-context credential set <name>'"
+        ))
+    })
+}
+
+#[cfg(unix)]
+fn read_terminal_secret() -> io::Result<String> {
+    let config = rpassword::ConfigBuilder::new()
+        .input_file_path("/dev/stdin")
+        .output_writer(io::stderr())
+        .build();
+    rpassword::prompt_password_with_config("Credential value: ", config)
+}
+
+#[cfg(not(unix))]
+fn read_terminal_secret() -> io::Result<String> {
+    rpassword::prompt_password("Credential value: ")
 }
 
 fn select_profile<'a>(
