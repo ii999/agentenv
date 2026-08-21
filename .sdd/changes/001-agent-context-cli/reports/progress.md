@@ -1,3 +1,5 @@
 - 2026-08-22 T001: DONE (report: task-T001-report.md)
 - 2026-08-22 T002: DONE (report: task-T002-report.md)
 - 2026-08-22 T002: impact delta: None. The Impact Map declared no seeds, and no existing call site was found or
+- 2026-08-22 T003: DONE (report: task-T003-report.md)
+- 2026-08-22 T003: impact delta: Impact-seed re-verification with `git grep -n -F -- ':(exclude).sdd/'`

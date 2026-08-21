@@ -527,6 +527,8 @@ Verification: Manual: inspection recorded in validation.md.
 - SPEC-AS-019: Keychain integration tests use a compile-time test-gated file-backed store selected by env var. Hard isolation: the adapter compiles only under `all(feature = "test-keychain", debug_assertions)`, and enabling the feature in a release-profile build is a `compile_error!`; validation includes a negative check that the release artifact ignores `AGENT_CONTEXT_TEST_KEYCHAIN`.
 - SPEC-AS-027: Design §5.9's "fields include their owning profile" is satisfied at envelope level (`profile` on `list`/entry envelopes, per-match `profile` on `find`); `Field` objects carry no `profile` member. Raw `get --json` carries none (SPEC-AS-022).
 - SPEC-AS-028: Empty-string environment variable values are treated as unset (SPEC-001, SPEC-004).
+- SPEC-AS-029: `env` shallow status reports an empty-but-set variable as `not_set` — consistent with SPEC-014, where an empty value is a resolution failure (recorded from T003 review M4).
+- SPEC-AS-030: The Reference scanning scope's `description` exclusion applies to keys named `description` at any depth (they are never scanned as references), while SPEC-002 rule 7's reserved-key semantics still apply only at profile/entry level (recorded from T003 review M3).
 - SPEC-AS-020: v1 writes no log files; design §10's log-content rules are satisfied vacuously.
 - SPEC-AS-021: Credential definitions have a closed schema; unknown fields there are violations (unlike the open schema under profiles). The config root schema is likewise closed (SPEC-002 rule 10).
 - SPEC-AS-022: `get --json` emits the raw JSON value without a `version` envelope, adopting design §5.4 over the §5.9 envelope wording (and over PRD-NFR-003's version clause) for this one command.

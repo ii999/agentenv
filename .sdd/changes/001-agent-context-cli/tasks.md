@@ -53,7 +53,7 @@ Checkpoint: `cargo build` succeeds from a clean clone; the binary runs, reports 
   - Verification: `cargo test --test security_p1 2>&1 | tail -5` — expected: every test fails with assertion failures on exit codes/output (e.g. expected exit 2, binary exits 1 from the unimplemented-subcommand shell), zero compilation or collection errors
   - Report: `.sdd/changes/001-agent-context-cli/reports/task-T002-report.md`
 
-- [ ] T003 [Phase 1] Config core: locate, parse, validate, profile, path grammar, shallow status
+- [x] T003 [Phase 1] Config core: locate, parse, validate, profile, path grammar, shallow status
   - Files: `src/config/mod.rs`, `src/config/locate.rs`, `src/config/model.rs`, `src/config/validate.rs`, `src/path.rs`, `src/shallow.rs`, `src/lib.rs` (module wiring), unit tests inline per module
   - Depends on: T001
   - Spec refs: SPEC-001, SPEC-002 (all 11 rules + diagnostics rule), SPEC-004, SPEC-005, SPEC-012 (grammar + shallow status), SPEC-013 (validation), SPEC-020
