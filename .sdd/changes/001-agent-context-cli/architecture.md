@@ -78,7 +78,7 @@ agent / user -> agent-context CLI (clap)
 
 ### Decision ARCH-002: `toml` crate with `preserve_order`, generic value tree
 
-- Decision: Parse with the `toml` crate (1.x; `preserve_order` feature verified available) into typed core structs (version, profiles, credentials) + `toml::Value` for open user fields. Credential store access via `keyring` 4.x (default `v1` feature enables apple-native, windows-native, and zbus-secret-service stores; tests use the keyring-core `sample` mock store).
+- Decision: Parse with the `toml` crate (1.x; `preserve_order` feature verified available) into typed core structs (version, profiles, credentials) + `toml::Value` for open user fields. Credential store access via `keyring` 4.x (default `v1` feature enables apple-native, windows-native, and zbus-secret-service stores; in-process unit tests use the keyring-core `mock` module, out-of-process integration tests use the `test-keychain` file-backed adapter — see Testing Strategy).
 - Rationale: `list`/`show` should present fields in file order (user's mental model); typed core gives strict validation; generic tail gives the open schema.
 - Alternatives considered:
   - `toml_edit`: preserves comments/format — needed only for writing, which is out of scope. Rejected as heavier.
@@ -114,7 +114,7 @@ agent / user -> agent-context CLI (clap)
 | Risk | Impact | Mitigation | Owner |
 | --- | --- | --- | --- |
 | Linux headless has no secret-service | `keychain` provider unusable there | Explicit error naming the provider and suggesting `command`/`env` (design doc §6.1); never a silent fallback | impl |
-| keyring crate behavior differs per platform | Inconsistent `credential set/check` | Integration tests use keyring mock store; platform behavior documented in README | impl |
+| keyring crate behavior differs per platform | Inconsistent `credential set/check` | Integration tests use the `test-keychain` file-backed adapter; adapter-seam unit tests use keyring-core's `mock` module; platform behavior documented in README | impl |
 | JSON shape drift breaks agents | Agent workflows fail | JSON shapes defined in spec; snapshot tests lock them | impl |
 | `command` provider hangs (e.g. `op` waiting for auth) | `run`/`check` blocks | Inherit stdin/stderr for the provider command so interactive auth is visible; document; no timeout in v1 (recorded assumption SPEC-AS-004) | impl |
 

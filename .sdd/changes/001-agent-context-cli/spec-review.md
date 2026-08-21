@@ -203,10 +203,29 @@ Suggestions accepted: README sensitive-check caveat (A#F-21 → SPEC-022); JSON-
 | REV-005 | spec.md | All round-3 resolutions above | R3-IMP-01..09, R3 minors |
 | REV-006 | architecture.md | none required beyond round-2 state (AS-025 note lives in spec + validation) | — |
 
+## Round 3 Approval Decision
+
+Decision: Revise (round 3) → round 4 full two-lane re-review.
+
+---
+
+# Round 4 (full two-lane re-review)
+
+## Review Metadata
+
+- Review round: 4
+- Reviewers (clean-context): Lane A claude/opus (native), DONE_WITH_CONCERNS, REVISE — 1 Important, coverage confirmed gap-free. Lane B codex/gpt-5.6-sol @ xhigh (delegate, read-only), DONE_WITH_CONCERNS, REVISE — 1 Critical, 2 Important. Raw Lane B result: `.claude/handoffs/001-agent-context-cli--spec-review-r4/RESULT.md`.
+- Date: 2026-08-22
+
+## Findings (consolidated) and resolutions — all Fixed in REV-007/008
+
+- R4-CRIT-01 (B#1): sensitive-name traversal inherited reference scanning's array exclusion, so `records = [{ api_key = "sk-live" }]` could bypass the guardrail → SPEC-020 traversal decoupled and extended through tables nested inside arrays (indexed display paths); AC-020.5; reference scanning unchanged.
+- R4-IMP-01 (A#1): provider-captured candidate bytes from a *failed* resolution were outside the "resolved secret" wording and could legally reach exit-4 diagnostics → SPEC-019 clause added; AC-014.5 fixtures now print sentinels before failing.
+- R4-IMP-02 (B#2): visible-but-unaddressable keys broke the Field.path round-trip promise → `"addressable": false` display-form marker defined in SPEC-010.
+- R4-IMP-03 (B#3, A#7): mistyped core containers (`profiles = []`) had no validation contract → SPEC-002 rule 11 (generic parse first, aggregate all violations); AC-002.8.
+- Minors fixed: `inject` members excluded from `find`'s match domain (A#2); `profile_description` added to the `list` envelope (A#3); `Field` gains `reference` making `?as=` visible, table-`fields` recorded as the design-"value" reading (A#4); AC-019.1 respecified as per-invocation helper assertion (A#5); dedup wording covers within-entry duplicates (A#6); Phase-1 shallow status defined as a free function, `Provider` trait arrives in Phase 2 (A#8); SPEC-020 matching made ASCII case-insensitive, AC-020.6 (A#9); `credential set <undefined>` = exit 3, run-path resolution failure added to AC-018.1 (A#10); AC-022.1 expanded to the full SPEC-022 checklist (B#4); keychain-seam description unified across architecture (B#5).
+- Suggestions accepted into Implementation Notes: never forward `toml::de::Error` Display (A#12); wrap captured bytes at the capture boundary (A#15); re-verify crate features at implementation start (A#11); diagnostics cite `argv[0]` only (A#13); README notes `inject_as` discoverability (A#14).
+
 ## Approval Decision
 
-Decision: Revise (round 3) → round 4 full two-lane re-review (cap 5)
-
-Conditions:
-
-- Round 4 must confirm R3 resolutions with no new Critical/Important findings.
+Decision: Revise (round 4) → round 5 full two-lane re-review (final round under the 5-round cap; if Critical/Important findings persist, stop and report per loop rules).
