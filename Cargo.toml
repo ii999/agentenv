@@ -12,6 +12,13 @@ serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 toml = { version = "1", features = ["preserve_order"] }
 
+# The target process for the `run` integration tests. It reports the child
+# environment the injection runner builds, which no library API can expose:
+# `run` replaces agent-context with its target. See tests/fixtures/bin/probe.rs.
+[[bin]]
+name = "test-probe"
+path = "tests/fixtures/bin/probe.rs"
+
 [features]
 test-keychain = []
 

@@ -101,7 +101,7 @@ Checkpoint: Phase 2 acceptance passes — `credential check` reports per-provide
 
 ### Group 4: Phase 3 (P3) — Injection runner and docs
 
-- [ ] T006 [Phase 3] Author the conflict-before-resolution test suite (red)
+- [x] T006 [Phase 3] Author the conflict-before-resolution test suite (red)
   - Files: `tests/security_p3.rs`, `tests/fixtures/` (add: canary provider script that creates a file when executed; probe helper usage docs in comments), `tests/fixtures/bin/probe.rs` + `Cargo.toml` `[[bin]] name = "test-probe"` (a tiny binary that writes its env and argv to the file named by `TEST_PROBE_OUT`, prints `out`/`err` markers, exits per `TEST_PROBE_EXIT`)
   - Depends on: T005
   - Spec refs: SPEC-016 (AC-016.2 canary half, AC-016.9 matrix), SPEC-019
