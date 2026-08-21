@@ -23,7 +23,7 @@ Full tier: `Dispatch: agent` is the default. Reviews run per-task (every task he
 
 ### Group 1: Foundation
 
-- [ ] T001 [Foundation] Establish the crate: manifest, error spine, CLI shell
+- [x] T001 [Foundation] Establish the crate: manifest, error spine, CLI shell
   - Files: `Cargo.toml`, `src/main.rs`, `src/lib.rs`, `src/error.rs`, `rustfmt.toml` (defaults), `.gitignore` (append `/target` if absent)
   - Depends on: none
   - Spec refs: SPEC-018 (exit-code spine); plan Global Constraints (dependencies)
