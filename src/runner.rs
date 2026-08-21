@@ -10,12 +10,12 @@ use std::process::Command;
 
 use toml::{Table, Value};
 
-use crate::config::validate::recognized_reference;
+use crate::config::validate::{resolve_in_entry, walk_entry_references};
 use crate::config::{Config, CredentialDef, Profile};
 use crate::credential::{provider_for, Secret};
 use crate::error::AppError;
 use crate::path::{single_entry_name, Segments};
-use crate::query::scalar_text;
+use crate::query::{entry_table, scalar_text};
 
 /// A complete, conflict-free set of values to inject into a child process.
 pub struct InjectionPlan {
@@ -78,15 +78,7 @@ impl InjectionPlan {
 
         for argument in entries {
             let entry_name = single_entry_name(argument)?;
-            let entry = profile.entries.get(&entry_name).ok_or_else(|| {
-                AppError::NotFound(format!(
-                    "entry '{entry_name}' is not defined in profile '{}'; run 'agent-context list' to see the entries",
-                    profile.name
-                ))
-            })?;
-            let table = entry
-                .as_table()
-                .expect("validated profiles contain table entries");
+            let table = entry_table(profile, &entry_name)?;
 
             collect_references(cfg, table, &mut injections);
             collect_inject_values(&entry_name, table, &mut injections);
@@ -103,7 +95,7 @@ impl InjectionPlan {
             if let Some(conflict) = deduplicated.iter().find(|existing: &&Injection| {
                 same_environment_name(existing.target(), injection.target())
             }) {
-                return Err(AppError::Credential(format!(
+                return Err(AppError::Injection(format!(
                     "injection conflict for environment variable '{}': '{}' and '{}' both target it; change an inject key or credential '?as=' target",
                     injection.target(),
                     conflict.source_name(),
@@ -166,16 +158,10 @@ impl InjectionPlan {
 }
 
 fn collect_references(cfg: &Config, entry: &Table, injections: &mut Vec<Injection>) {
-    for (key, value) in entry {
-        if key == "description" || key == "inject" {
-            continue;
-        }
-        collect_value_references(cfg, value, injections);
-    }
-}
-
-fn collect_value_references(cfg: &Config, value: &Value, injections: &mut Vec<Injection>) {
-    if let Some(Ok(reference)) = recognized_reference(value) {
+    walk_entry_references(entry, &mut |_, reference| {
+        let Ok(reference) = reference else {
+            return;
+        };
         let definition = cfg
             .credential(&reference.name)
             .expect("validated credential references name defined credentials");
@@ -184,17 +170,10 @@ fn collect_value_references(cfg: &Config, value: &Value, injections: &mut Vec<In
             definition: definition.clone(),
             target: reference
                 .target_override
+                .clone()
                 .unwrap_or_else(|| definition.inject_as.clone()),
         });
-        return;
-    }
-    if let Value::Table(table) = value {
-        for (key, nested) in table {
-            if key != "description" {
-                collect_value_references(cfg, nested, injections);
-            }
-        }
-    }
+    });
 }
 
 fn collect_inject_values(entry_name: &str, entry: &Table, injections: &mut Vec<Injection>) {
@@ -215,14 +194,6 @@ fn collect_inject_values(entry_name: &str, entry: &Table, injections: &mut Vec<I
             value: scalar_text(value),
         });
     }
-}
-
-fn resolve_in_entry<'a>(entry: &'a Table, segments: &Segments) -> Option<&'a Value> {
-    let mut value = entry.get(segments.as_slice().first()?)?;
-    for segment in &segments.as_slice()[1..] {
-        value = value.as_table()?.get(segment)?;
-    }
-    Some(value)
 }
 
 fn run_usage_error() -> AppError {
@@ -270,6 +241,10 @@ fn launch(
                 "'{program}' could not be executed: {error}; verify the target command and try 'agent-context run --with <entry> -- <command> [args...]'"
             ))
         })?;
-        std::process::exit(status.code().unwrap_or(1));
+        std::process::exit(
+            status
+                .code()
+                .expect("a Windows process always reports an exit code"),
+        );
     }
 }

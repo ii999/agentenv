@@ -154,7 +154,7 @@ fn validate_profiles(root: &Table, violations: &mut Vec<Violation>) {
                 violations,
             );
             validate_inject_table(name, entry_name, entry, violations);
-            scan_entry_references(&entry_path, entry, credentials, violations);
+            validate_entry_references(&entry_path, entry, credentials, violations);
         }
     }
 }
@@ -285,7 +285,10 @@ fn validate_inject_table(
     }
 }
 
-fn resolve_in_entry<'a>(entry_table: &'a Table, segments: &Segments) -> Option<&'a Value> {
+pub(crate) fn resolve_in_entry<'a>(
+    entry_table: &'a Table,
+    segments: &Segments,
+) -> Option<&'a Value> {
     let parts = segments.as_slice();
     let mut current = entry_table.get(parts.first()?)?;
     for segment in &parts[1..] {
@@ -294,44 +297,24 @@ fn resolve_in_entry<'a>(entry_table: &'a Table, segments: &Segments) -> Option<&
     Some(current)
 }
 
-fn scan_entry_references(
+fn validate_entry_references(
     entry_path: &str,
     entry_table: &Table,
     credentials: Option<&Table>,
     violations: &mut Vec<Violation>,
 ) {
-    // SPEC-002 rule 5 over the Reference scanning scope (SPEC-AS-015): the
-    // entry-level inject table and description keys are never scanned.
-    for (key, value) in entry_table {
-        if key == "description" || key == "inject" {
-            continue;
-        }
-        scan_value_references(
-            &format!("{entry_path}.{key}"),
-            value,
-            credentials,
-            violations,
-        );
-    }
-}
-
-fn scan_value_references(
-    path: &str,
-    value: &Value,
-    credentials: Option<&Table>,
-    violations: &mut Vec<Violation>,
-) {
-    if let Some(reference) = recognized_reference(value) {
+    walk_entry_references(entry_table, &mut |relative_path, reference| {
+        let path = format!("{entry_path}.{relative_path}");
         match reference {
             Err(message) => violations.push(Violation {
-                path: path.to_owned(),
-                message,
+                path,
+                message: message.to_owned(),
             }),
             Ok(reference) => {
                 let defined = credentials.is_some_and(|table| table.contains_key(&reference.name));
                 if !defined {
                     violations.push(Violation {
-                        path: path.to_owned(),
+                        path,
                         message: format!(
                             "credential '{}' is not defined; add a [credentials.{}] table \
                              or fix the reference",
@@ -341,6 +324,36 @@ fn scan_value_references(
                 }
             }
         }
+    });
+}
+
+/// Walks credential references in the validation reference-scanning scope.
+///
+/// Entry-level description and inject fields are excluded, nested table
+/// descriptions are excluded, and array elements are deliberately not
+/// traversed.
+pub(crate) fn walk_entry_references(
+    entry_table: &Table,
+    visit: &mut impl FnMut(&str, Result<&CredentialRef, &str>),
+) {
+    for (key, value) in entry_table {
+        if key == "description" || key == "inject" {
+            continue;
+        }
+        walk_value_references(key, value, visit);
+    }
+}
+
+fn walk_value_references(
+    path: &str,
+    value: &Value,
+    visit: &mut impl FnMut(&str, Result<&CredentialRef, &str>),
+) {
+    if let Some(reference) = recognized_reference(value) {
+        match reference {
+            Ok(reference) => visit(path, Ok(&reference)),
+            Err(message) => visit(path, Err(&message)),
+        }
         return;
     }
     if let Value::Table(table) = value {
@@ -348,7 +361,7 @@ fn scan_value_references(
             if key == "description" {
                 continue;
             }
-            scan_value_references(&format!("{path}.{key}"), inner, credentials, violations);
+            walk_value_references(&format!("{path}.{key}"), inner, visit);
         }
     }
 }

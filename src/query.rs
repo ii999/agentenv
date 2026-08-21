@@ -99,6 +99,11 @@ pub fn entry(
     name: &str,
     env: &impl Fn(&str) -> Option<String>,
 ) -> Result<EntryView, AppError> {
+    let table = entry_table(profile, name)?;
+    Ok(entry_view(config, profile, name, table, env))
+}
+
+pub(crate) fn entry_table<'a>(profile: &'a Profile, name: &str) -> Result<&'a Table, AppError> {
     let Some(value) = profile.entries.get(name) else {
         let names = profile
             .entries
@@ -119,7 +124,7 @@ pub fn entry(
     let table = value
         .as_table()
         .expect("validated profile entries are always tables");
-    Ok(entry_view(config, profile, name, table, env))
+    Ok(table)
 }
 
 pub fn get<'a>(profile: &'a Profile, path: &Segments) -> Result<&'a Value, AppError> {

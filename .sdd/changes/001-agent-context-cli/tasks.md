@@ -114,7 +114,7 @@ Checkpoint: Phase 2 acceptance passes — `credential check` reports per-provide
   - Verification: `cargo test --features test-keychain --test security_p3 2>&1 | tail -5` — expected: every test fails by assertion (the `run` subcommand does not exist yet → usage exit 1 where 4/0 expected); zero compile/collection errors
   - Report: `.sdd/changes/001-agent-context-cli/reports/task-T006-report.md`
 
-- [ ] T007 [Phase 3] Injection planner and `run`
+- [x] T007 [Phase 3] Injection planner and `run`
   - Files: `src/runner.rs`, `src/cli/run.rs`, `src/main.rs` (wire `run`), `tests/run_p3.rs` (non-conflict ACs)
   - Depends on: T006
   - Spec refs: SPEC-016, SPEC-017, SPEC-018 (127), SPEC-AS-011/-012/-013/-018

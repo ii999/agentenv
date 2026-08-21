@@ -28,6 +28,9 @@ pub enum AppError {
     #[error("credential error: {0}")]
     Credential(String),
 
+    #[error("injection conflict: {0}")]
+    Injection(String),
+
     #[error("target is not executable: {0}")]
     TargetNotExecutable(String),
 }
@@ -39,6 +42,7 @@ impl AppError {
             Self::Config(_) => 2,
             Self::NotFound(_) => 3,
             Self::Credential(_) => 4,
+            Self::Injection(_) => 4,
             Self::TargetNotExecutable(_) => 127,
         }
     }
