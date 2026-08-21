@@ -7,10 +7,13 @@ use agent_context::config::{Config, CredentialDef, Provider};
 use agent_context::credential::{provider_for, CapturedSecret, Secret};
 use agent_context::error::AppError;
 use agent_context::path::{single_entry_name, Segments};
+use agent_context::runner::InjectionPlan;
 use agent_context::{query, render};
 
 #[derive(Debug, Subcommand)]
 pub enum QueryCommand {
+    /// Run a command with the selected entries' injected environment.
+    Run(RunArgs),
     /// List entries in the active profile.
     List(ListArgs),
     /// Show one entry and its values.
@@ -23,6 +26,16 @@ pub enum QueryCommand {
     Validate,
     /// Inspect configured credential definitions.
     Credential(CredentialArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    /// Entry to inject; repeat this option to combine entries.
+    #[arg(long = "with", value_name = "ENTRY", required = true, num_args = 1)]
+    pub entries: Vec<String>,
+    /// The command to launch, after `--`.
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    pub command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -85,6 +98,20 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     let config = Config::load(None, &env)?;
     match invocation.command {
         QueryCommand::Validate => unreachable!("validate returns before loading the configuration"),
+        QueryCommand::Run(args) => {
+            if invocation.json {
+                return Err(AppError::Usage(
+                    "run does not support --json; use 'agent-context run --with <entry> -- <command> [args...]'"
+                        .to_owned(),
+                ));
+            }
+            let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
+            let plan = InjectionPlan::build(&config, profile, &args.entries)?;
+            match plan.resolve_and_launch(args.command) {
+                Ok(never) => match never {},
+                Err(error) => Err(error),
+            }
+        }
         QueryCommand::List(args) if args.profiles => {
             if args.entry.is_some() {
                 return Err(AppError::Usage(
