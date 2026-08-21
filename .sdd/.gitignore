@@ -1,0 +1,10 @@
+# >>> my-sdd-loop managed (do not edit inside markers) >>>
+# Regenerable or local-only artifacts. Everything else under .sdd/ is
+# intended to be version-controlled (specs, plans, decisions, history).
+tools/
+scratch/
+changes/**/review-packages/
+changes/**/reports/*log*.md
+changes/**/reports/*log*.json
+changes/**/reports/dispatches.jsonl
+# <<< my-sdd-loop managed <<<
