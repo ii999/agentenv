@@ -259,4 +259,9 @@ Both lanes' top finding was the same regression introduced by the round-4 edit: 
 
 ## Approval Decision
 
-Decision: **Pending user decision.** The 5-round full-fanout cap is reached. Trajectory: R1 4C+12I → R2 2C+12I → R3 0C+10I → R4 1C+3I → R5 1C+9I(A:2I) — every finding through round 5 is revised in the artifacts, but no further clean-context round has confirmed the round-5 revisions. Per loop rules, stopping and reporting to the user with options: (a) approve as-is, (b) one targeted cross-provider re-check of only the round-5 revisions, (c) a sixth full round (explicit cap override).
+Decision: **Approved** (user decision, 2026-08-22: direct approval at the 5-round cap).
+
+Rationale and conditions:
+
+- Trajectory across rounds: R1 4C+12I → R2 2C+12I → R3 0C+10I → R4 1C+3I → R5 1C+9I (Lane A: 2I) — monotonic convergence to frozen-contract precision items; both round-5 lanes confirmed coverage gap-free and the security core sound.
+- Every round-5 finding is revised in the artifacts (REV-009/010). The user approved without a confirming sixth round; residual risk is absorbed by the implementation-phase task review gates (Critical/Important findings there still block completion).
