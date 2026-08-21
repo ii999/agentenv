@@ -1,0 +1,17 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Day-to-day development environment for company projects."
+
+[profiles.work.github]
+description = "GitHub access used by work automation."
+github_token = "credential://gh"
+token_endpoint = "https://x"
+use_token = true
+
+[credentials.gh]
+description = "GitHub token for work automation."
+provider = "env"
+name = "WORK_GITHUB_TOKEN"
+inject_as = "GITHUB_TOKEN"

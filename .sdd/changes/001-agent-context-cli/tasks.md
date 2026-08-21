@@ -40,7 +40,7 @@ Checkpoint: `cargo build` succeeds from a clean clone; the binary runs, reports 
 
 ### Group 2: Phase 1 (P1, MVP) — Config core & queries
 
-- [ ] T002 [Phase 1] Author the Phase-1 security test suite (red)
+- [x] T002 [Phase 1] Author the Phase-1 security test suite (red)
   - Files: `tests/helpers.rs`, `tests/security_p1.rs`, `tests/fixtures/` (fixture TOML files incl. the design-example config translated to `profiles.*`, a sentinel-bearing malformed-TOML file, sensitive-name fixtures incl. `records = [{ api_key = "sk-sentinel-a1" }]` and uppercase `TOKEN`), `Cargo.toml` (dev-dependencies only: `assert_cmd`, `predicates`, `tempfile`)
   - Depends on: T001
   - Spec refs: SPEC-019 (AC-019.1, AC-019.3), SPEC-020 (AC-020.1–6), SPEC-002 (AC-002.5)

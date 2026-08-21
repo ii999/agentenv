@@ -1,0 +1,10 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Day-to-day development environment for company projects."
+
+[profiles.work.db]
+description = "Development database cluster."
+host = "db.example.com"
+records = [{ api_key = "sk-sentinel-c3-7q2v5z" }]
