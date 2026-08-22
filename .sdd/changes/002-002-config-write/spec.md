@@ -139,7 +139,7 @@ Verification:
 
 Acceptance criteria:
 
-- AC-005.1: GIVEN valid flags for each provider kind, WHEN `credential add` runs, THEN `credential list --json` shows the new definition with its provider fields and `inject_as`.
+- AC-005.1: GIVEN valid flags for each provider kind, WHEN `credential add` runs, THEN `credential list --json` shows the new definition with its `inject_as`, and the config file contains the provider fields (the v1 `credential list` shape deliberately omits provider fields, so the file is their verification surface).
 - AC-005.2: GIVEN a name that already exists under `[credentials]`, WHEN `credential add` runs, THEN it exits with status 1 stating the name is taken and the file is unchanged.
 - AC-005.3: GIVEN a successful `credential add` with `--provider keychain`, WHEN the command completes, THEN stdout includes a hint to run `agentenv credential set <name>` to store the value.
 - AC-005.4: GIVEN provider-specific flags that do not match `--provider` (for example `--argv` with `--provider env`), WHEN `credential add` runs, THEN it exits with status 1 naming the mismatched flag.
@@ -278,3 +278,7 @@ Lane: Claude provider (host lane; single-provider, reduced coverage — `codex` 
 Verdict: approve-with-minor. All four cycle-1 fixes resolved and code-verified. Four Minor findings, all applied in place: Goals bullet aligned with the SPEC-019 boundary; `toml_edit` version rationale corrected (shared `toml_parser 1.x` core, no transitive-pull claim); path-wins precedence extended to the `<entry>.description` + `--description` collision (AC-002.12); carve-out enumeration lists credential names explicitly.
 
 Decision: Approved (single-provider round; Codex lane skipped per providers switchboard — reduced coverage recorded)
+
+### Post-approval amendment — 2026-08-22
+
+- AC-005.1's verification surface corrected during implementation review: the v1 `credential list --json` shape deliberately omits provider fields, so the config file is their verification surface. No behavioral requirement changed.

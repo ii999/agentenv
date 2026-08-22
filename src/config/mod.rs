@@ -12,6 +12,7 @@
 pub mod locate;
 pub mod model;
 pub(crate) mod validate;
+pub mod write;
 
 pub use model::{Config, CredentialDef, CredentialRef, Profile, Provider, REFERENCE_PREFIX};
 

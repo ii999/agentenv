@@ -21,6 +21,9 @@ const PROVIDERS: [&str; 3] = ["env", "keychain", "command"];
 const SENSITIVE_EXACT: [&str; 5] = ["token", "password", "secret", "api_key", "private_key"];
 /// Sensitive field-name suffixes (SPEC-020), matched ASCII case-insensitively.
 const SENSITIVE_SUFFIX: [&str; 5] = ["_token", "_password", "_secret", "_api_key", "_private_key"];
+/// The fixed phrase of a sensitive-name violation. The write path matches on
+/// it to append the credential-workflow remedy without re-deriving the rule.
+pub(crate) const PLAINTEXT_SECRET_PHRASE: &str = "appears to hold a plaintext secret";
 
 /// Runs all core rules over the parsed root table, returning every violation
 /// in a deterministic traversal order.
@@ -316,8 +319,8 @@ fn validate_entry_references(
                     violations.push(Violation {
                         path,
                         message: format!(
-                            "credential '{}' is not defined; add a [credentials.{}] table \
-                             or fix the reference",
+                            "credential '{}' is not defined; run 'agentenv credential add {} \
+                             ...' to define it or fix the reference",
                             reference.name, reference.name
                         ),
                     });
@@ -437,7 +440,7 @@ fn walk_sensitive_table(
                     violations.push(Violation {
                         path: field_path,
                         message: format!(
-                            "field '{key}' appears to hold a plaintext secret; store the value \
+                            "field '{key}' {PLAINTEXT_SECRET_PHRASE}; store the value \
                              in a credential and reference it with '{REFERENCE_PREFIX}<name>' \
                              instead"
                         ),

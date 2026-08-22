@@ -8,9 +8,14 @@ clap = { version = "4", features = ["derive"] }
 keyring = "4"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# arbitrary_precision keeps JSON number literals as strings so config::write
+# can refuse out-of-range integer literals instead of lossy floats. It makes
+# serde_json::Number opaque: do not use #[serde(untagged)]/#[serde(flatten)]
+# over numbers or compare Number values structurally while it is on.
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
 thiserror = "2"
 toml = { version = "1", features = ["preserve_order"] }
+toml_edit = "0.25"
 
 # The target process for the `run` integration tests. It reports the child
 # environment the injection runner builds, which no library API can expose:

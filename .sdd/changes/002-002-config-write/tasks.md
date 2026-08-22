@@ -36,7 +36,7 @@ All tasks: `Dispatch: inline` (light-tier default; one subsystem, shared invaria
 
 ### Group 1: Phase 1 (P1, MVP) — write pipeline + set/unset
 
-- [ ] T001 [Phase 1] Write pipeline module and `toml_edit` dependency
+- [x] T001 [Phase 1] Write pipeline module and `toml_edit` dependency
   - Files: `Cargo.toml`, `src/config/write.rs` (new), `src/config/mod.rs` (module wiring)
   - Depends on: none
   - Spec refs: SPEC-001
@@ -49,7 +49,7 @@ All tasks: `Dispatch: inline` (light-tier default; one subsystem, shared invaria
   - Verification: `cargo test config::write` — expected: unit tests for atomic replace, permission preservation, decor/implicit preservation, refusal-leaves-file-intact all pass
   - Report: `.sdd/changes/002-002-config-write/reports/task-T001-report.md`
 
-- [ ] T002 [Phase 1] `set` command
+- [x] T002 [Phase 1] `set` command
   - Files: `src/cli/commands.rs`, `src/config/write.rs` (set mutation), `src/config/validate.rs` (export sensitive-name predicate), `tests/write_set.rs` (new)
   - Depends on: T001
   - Spec refs: SPEC-002, SPEC-006, SPEC-001 (AC-001.2, AC-001.7)
@@ -62,7 +62,7 @@ All tasks: `Dispatch: inline` (light-tier default; one subsystem, shared invaria
   - Verification: `cargo test --test write_set` — expected: all SPEC-002 ACs incl. sentinel leak checks pass
   - Report: `.sdd/changes/002-002-config-write/reports/task-T002-report.md`
 
-- [ ] T003 [Phase 1] `unset` command
+- [x] T003 [Phase 1] `unset` command
   - Files: `src/cli/commands.rs`, `src/config/write.rs` (remove mutation), `tests/write_unset.rs` (new)
   - Depends on: T002
   - Spec refs: SPEC-003
@@ -79,7 +79,7 @@ Checkpoint: `set`/`unset` round-trip against a commented fixture preserving form
 
 ### Group 2: Phase 2 + Phase 3 — init, credential add, docs
 
-- [ ] T004 [Phase 2] `init` command
+- [x] T004 [Phase 2] `init` command
   - Files: `src/cli/commands.rs`, `src/config/write.rs` (bootstrap content), `tests/write_init.rs` (new)
   - Depends on: T001
   - Spec refs: SPEC-004
@@ -92,7 +92,7 @@ Checkpoint: `set`/`unset` round-trip against a commented fixture preserving form
   - Verification: `cargo test --test write_init` — expected: all SPEC-004 ACs pass
   - Report: `.sdd/changes/002-002-config-write/reports/task-T004-report.md`
 
-- [ ] T005 [Phase 3] `credential add` command
+- [x] T005 [Phase 3] `credential add` command
   - Files: `src/cli/commands.rs`, `src/config/write.rs` (credential mutation), `tests/write_credential_add.rs` (new)
   - Depends on: T001
   - Spec refs: SPEC-005
@@ -105,7 +105,7 @@ Checkpoint: `set`/`unset` round-trip against a commented fixture preserving form
   - Verification: `cargo test --test write_credential_add` — expected: all SPEC-005 ACs pass
   - Report: `.sdd/changes/002-002-config-write/reports/task-T005-report.md`
 
-- [ ] T006 [Phase 2] README and agent-protocol updates
+- [x] T006 [Phase 2] README and agent-protocol updates
   - Files: `README.md`
   - Depends on: T002, T003, T004, T005
   - Spec refs: Scope (README updates), SPEC-002 (ordering note), Design Notes (threat-model delta)

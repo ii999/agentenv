@@ -1,15 +1,16 @@
 # agentenv
 
-`agentenv` is a local-first command-line interface for browsing a user's
-environment configuration and using credentials without printing them. It
-reads a TOML file, exposes ordinary values as text or JSON, and can launch a
-target process with selected configuration and credential values in a
-temporary environment.
+`agentenv` is a local-first command-line interface for browsing and editing a
+user's environment configuration and using credentials without printing them.
+It reads a TOML file, exposes ordinary values as text or JSON, edits the file
+through validated, format-preserving writes, and can launch a target process
+with selected configuration and credential values in a temporary environment.
 
 The configuration file contains ordinary values and references to credentials.
 Credential values live in an environment variable, a platform credential
 store, or an external password-manager command. `agentenv` does not write
-credentials back to the TOML file.
+credential values to the TOML file; write commands add definitions and
+ordinary values only.
 
 ## Configuration
 
@@ -111,6 +112,9 @@ User environment information is available through `agentenv`.
 - Run `agentenv show <name> --json` before using an unfamiliar entry.
 - Use `agentenv get <path>` to retrieve ordinary values.
 - Use `agentenv run --with <entry> -- <command>` when credentials are required.
+- Use `agentenv set <path> <value>` to record configuration the user asks you
+  to save; define credentials with `agentenv credential add <name> ...` before
+  referencing them, and never write a secret value into the file.
 - Never print, log, persist, or summarize resolved credentials.
 - Report missing configuration or credentials explicitly.
 ```
@@ -161,12 +165,47 @@ agentenv validate
 names, field names, descriptions, and string values; `--all-profiles` searches
 every profile. `get --json` emits the raw JSON value for its path.
 
+Write commands are:
+
+```bash
+agentenv init
+agentenv set <path> <value>
+agentenv set <path> <value> --type int|float|bool|json
+agentenv set <path> <value> --description "<entry description>"
+agentenv set <path> <value> --profile <name> --create-profile "<profile description>"
+agentenv unset <path>
+```
+
+`init` creates the config file at the resolved path (0600 on Unix-like
+systems) and refuses to touch an existing file. `set` writes exactly one
+value at a profile-scoped path, creating missing intermediate tables;
+`--type` selects the TOML type (`json` accepts arrays and objects, written
+as inline tables). `--description` also writes the description of the entry
+named by the first path segment, which is how a new entry is created in one
+command. An unknown profile is an error from every selection source;
+`--create-profile <text>` together with an explicit `--profile <name>`
+creates the profile with that description. `unset` removes one field or
+table. Write commands have no `--json` output mode.
+
+Every write is validated as a whole file before anything touches disk: a
+mutation whose result would not pass `agentenv validate`'s schema rules is
+refused and the file stays byte-identical. Writes preserve comments, blank
+lines, and key order, replace the file atomically, and keep its permission
+bits. There is no file locking; concurrent writers are not coordinated, and
+the last writer wins.
+
 Credential commands are:
 
 ```bash
 agentenv credential list --json
 agentenv credential check <name>
 agentenv credential set <name>
+agentenv credential add <name> --description "<text>" --provider env \
+    --env-var <NAME> --inject-as <ENV>
+agentenv credential add <name> --description "<text>" --provider keychain \
+    --service <service> --account <account> --inject-as <ENV>
+agentenv credential add <name> --description "<text>" --provider command \
+    --argv <arg> [--argv <arg> ...] --inject-as <ENV>
 ```
 
 `credential list` performs only a shallow status check and does not read a
@@ -174,7 +213,10 @@ secret store or execute a provider command. `credential check` resolves one
 credential and reports availability without printing its value. `credential
 set` accepts a keychain credential from a hidden terminal prompt or standard
 input. Environment and command credentials are managed by their external
-systems and cannot be set by this command.
+systems and cannot be set by this command. `credential add` writes a
+credential definition to the config file — never a value; define the
+credential first, then reference it from entries (`credential://<name>`) and,
+for the keychain provider, store its value with `credential set`.
 
 ## Providers
 
@@ -249,6 +291,19 @@ external command and outside the invariant.
 `credential set` is the deliberate exception: it writes the entered value to
 the selected platform credential store. No other command prints or persists
 that value.
+
+The write commands (`init`, `set`, `unset`, `credential add`) widen the CLI's
+surface deliberately: the config file, which was always hand-editable, is now
+also CLI-writable. A caller able to invoke `agentenv` can rewrite injection
+topology — point an entry's `credential` reference at a different defined
+credential, add a `?as=` override, or edit `inject` tables — without ever
+touching a secret value. The mitigations are that every write is
+whole-file-validated, secret values never enter the TOML (the sensitive-field
+guardrail refuses plaintext secrets and `credential set` remains the only
+value-storage path), all changes are visible in the file for review, and
+`run` still refuses conflicting injection targets. Write-command diagnostics
+follow the same no-echo rule as the rest of the CLI: they name paths, never
+the user-supplied or stored values.
 
 ### Sensitive-field guardrail
 
