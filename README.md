@@ -27,9 +27,9 @@ prebuilt binaries and a `SHA256SUMS` checksum file for:
 ### Install script
 
 The scripts download the archive for the current platform, verify its
-SHA-256 checksum, and install the binary. Downloads use the GitHub CLI when
-it is installed and signed in — required while the repository is private —
-and plain HTTPS otherwise.
+SHA-256 checksum, and install the binary and the agent skill. Downloads use
+the GitHub CLI when it is installed and signed in — required while the
+repository is private — and plain HTTPS otherwise.
 
 On macOS and Linux:
 
@@ -37,9 +37,12 @@ On macOS and Linux:
 ./install.sh
 ```
 
-The binary lands in `~/.local/bin`. Pass `--version <tag>` to pin a release
-and `--dir <path>` to change the install directory (`AGENTENV_VERSION` and
-`AGENTENV_INSTALL_DIR` work the same way).
+The binary lands in `~/.local/bin` and the agent skill in
+`~/.agents/skills/agentenv`. Pass `--claude-skills` to also install the
+skill to `~/.claude/skills` for Claude Code, `--no-skill` to install the
+binary only, `--version <tag>` to pin a release, and `--dir <path>` to
+change the binary directory (`AGENTENV_VERSION` and `AGENTENV_INSTALL_DIR`
+work the same way).
 
 On Windows (PowerShell 7+):
 
@@ -47,17 +50,18 @@ On Windows (PowerShell 7+):
 pwsh -File install.ps1
 ```
 
-The binary lands in `%LOCALAPPDATA%\Programs\agentenv`. Pass
-`-Version <tag>` and `-InstallDir <path>` to override.
+The binary lands in `%LOCALAPPDATA%\Programs\agentenv` and the agent skill
+in `~\.agents\skills\agentenv`. The matching switches are `-ClaudeSkills`,
+`-NoSkill`, `-Version <tag>`, and `-InstallDir <path>`.
 
 ### Manual download
 
 ```bash
-gh release download v0.1.0 --repo ii999/agentenv \
-    --pattern 'agentenv-v0.1.0-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
+gh release download v0.1.1 --repo ii999/agentenv \
+    --pattern 'agentenv-v0.1.1-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-tar -xzf agentenv-v0.1.0-aarch64-apple-darwin.tar.gz
-install -m 755 agentenv-v0.1.0-aarch64-apple-darwin/agentenv ~/.local/bin/
+tar -xzf agentenv-v0.1.1-aarch64-apple-darwin.tar.gz
+install -m 755 agentenv-v0.1.1-aarch64-apple-darwin/agentenv ~/.local/bin/
 ```
 
 Substitute the archive name for your platform from the table above. On Linux,
@@ -163,11 +167,14 @@ and is not part of the path. Arrays are read as whole values with `get --json`.
 
 ## Agent usage protocol
 
-A full agent skill ships in `skills/agentenv/`. For agent runtimes that load
-skills (such as Claude Code), copy the directory to `~/.claude/skills/agentenv/`
-for all projects or `.claude/skills/agentenv/` inside one project; the skill
-covers discovery, reading, credential-injected runs, writes, and the
-no-secret rules in one document.
+A full agent skill ships in `skills/agentenv/` and in every release archive;
+it covers discovery, reading, credential-injected runs, writes, and the
+no-secret rules in one document. The install scripts place it in
+`~/.agents/skills/agentenv` by default, and `--claude-skills`
+(`-ClaudeSkills` on Windows) also installs it to `~/.claude/skills/agentenv`
+for Claude Code. To wire it up manually, copy the directory to your
+runtime's skills location — `~/.claude/skills/agentenv/` for all projects or
+`.claude/skills/agentenv/` inside one project.
 
 For runtimes without skill support, projects can place this block in
 `AGENTS.md`:

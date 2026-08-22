@@ -1,26 +1,37 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Installs an agentenv release binary from GitHub Releases on Windows.
+Installs an agentenv release binary from GitHub Releases on Windows,
+together with the agentenv agent skill.
 
 .DESCRIPTION
 Downloads the x86_64 Windows archive for the requested release, verifies its
-SHA-256 checksum, and installs agentenv.exe into the install directory.
-Downloads use the GitHub CLI when it is installed and signed in, which is
-required while the repository is private; otherwise they use plain HTTPS.
+SHA-256 checksum, installs agentenv.exe into the install directory, and
+installs the agent skill to ~\.agents\skills. Downloads use the GitHub CLI
+when it is installed and signed in, which is required while the repository
+is private; otherwise they use plain HTTPS.
 
 .PARAMETER Version
-Release tag to install, e.g. v0.1.0. Defaults to AGENTENV_VERSION or the
+Release tag to install, e.g. v0.1.1. Defaults to AGENTENV_VERSION or the
 latest release.
 
 .PARAMETER InstallDir
-Install directory. Defaults to AGENTENV_INSTALL_DIR or
+Binary install directory. Defaults to AGENTENV_INSTALL_DIR or
 $env:LOCALAPPDATA\Programs\agentenv.
+
+.PARAMETER ClaudeSkills
+Also install the agent skill to ~\.claude\skills for Claude Code, in
+addition to the ~\.agents\skills default.
+
+.PARAMETER NoSkill
+Install the binary only.
 #>
 param(
     [string]$Version = $env:AGENTENV_VERSION,
     [string]$InstallDir = $(if ($env:AGENTENV_INSTALL_DIR) { $env:AGENTENV_INSTALL_DIR }
-        else { Join-Path $env:LOCALAPPDATA 'Programs\agentenv' })
+        else { Join-Path $env:LOCALAPPDATA 'Programs\agentenv' }),
+    [switch]$ClaudeSkills,
+    [switch]$NoSkill
 )
 
 Set-StrictMode -Version Latest
@@ -78,6 +89,17 @@ function Get-ReleaseFile([string]$Name) {
     }
 }
 
+function Install-SkillTo([string]$Root) {
+    $destination = Join-Path $Root 'agentenv'
+    if ((Test-Path $destination) -and -not (Test-Path (Join-Path $destination 'SKILL.md'))) {
+        throw "$destination exists but is not an agentenv skill directory; move it aside and rerun."
+    }
+    New-Item -ItemType Directory -Path $Root -Force | Out-Null
+    if (Test-Path $destination) { Remove-Item $destination -Recurse -Force }
+    Copy-Item $script:packagedSkill $destination -Recurse
+    Write-Host "Installed the agentenv agent skill to $destination"
+}
+
 try {
     Write-Host "Downloading agentenv $Version for $target..."
     Get-ReleaseFile $asset
@@ -90,12 +112,26 @@ try {
     if ($actual -ne $expected) { throw "Checksum verification failed for $asset." }
 
     Expand-Archive (Join-Path $workDir $asset) -DestinationPath $workDir
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item (Join-Path $workDir "agentenv-$Version-$target\agentenv.exe") `
-        (Join-Path $InstallDir 'agentenv.exe') -Force
+    $extracted = Join-Path $workDir "agentenv-$Version-$target"
 
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    Copy-Item (Join-Path $extracted 'agentenv.exe') (Join-Path $InstallDir 'agentenv.exe') -Force
     $installed = & (Join-Path $InstallDir 'agentenv.exe') --version
     Write-Host "Installed $installed to $(Join-Path $InstallDir 'agentenv.exe')"
+
+    if (-not $NoSkill) {
+        $packagedSkill = Join-Path $extracted 'skills\agentenv'
+        if (Test-Path (Join-Path $packagedSkill 'SKILL.md')) {
+            Install-SkillTo (Join-Path $HOME '.agents\skills')
+            if ($ClaudeSkills) {
+                Install-SkillTo (Join-Path $HOME '.claude\skills')
+            }
+        }
+        else {
+            Write-Warning "Release $Version ships no agent skill; skipping the skill install."
+        }
+    }
+
     $onPath = ($env:Path -split ';') -contains $InstallDir
     if (-not $onPath) {
         Write-Host "Add $InstallDir to PATH to run 'agentenv' from any directory."

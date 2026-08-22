@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Installs an agentenv release binary from GitHub Releases on macOS or Linux.
+# Installs an agentenv release binary from GitHub Releases on macOS or Linux,
+# together with the agentenv agent skill.
 #
 # Usage:
-#   ./install.sh [--version <tag>] [--dir <install-dir>]
+#   ./install.sh [--version <tag>] [--dir <install-dir>] [--claude-skills] [--no-skill]
 #
-# Environment:
-#   AGENTENV_VERSION      Release tag to install, e.g. v0.1.0 (same as --version).
-#                         Defaults to the latest release.
-#   AGENTENV_INSTALL_DIR  Install directory (same as --dir). Defaults to
-#                         ~/.local/bin.
+# Options:
+#   --version <tag>   Release tag to install, e.g. v0.1.1. Defaults to the
+#                     latest release. AGENTENV_VERSION works the same way.
+#   --dir <path>      Binary install directory. Defaults to ~/.local/bin.
+#                     AGENTENV_INSTALL_DIR works the same way.
+#   --claude-skills   Also install the agent skill to ~/.claude/skills for
+#                     Claude Code, in addition to the ~/.agents/skills default.
+#   --no-skill        Install the binary only.
 #
 # Downloads use the GitHub CLI when it is installed and signed in, which is
 # required while the repository is private; otherwise they use plain HTTPS.
@@ -23,16 +27,20 @@ fail() {
 }
 
 usage() {
-    sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 version="${AGENTENV_VERSION:-}"
 install_dir="${AGENTENV_INSTALL_DIR:-$HOME/.local/bin}"
+install_skill=true
+claude_skills=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version) [[ $# -ge 2 ]] || fail "--version needs a value"; version="$2"; shift 2 ;;
         --dir) [[ $# -ge 2 ]] || fail "--dir needs a value"; install_dir="$2"; shift 2 ;;
+        --claude-skills) claude_skills=true; shift ;;
+        --no-skill) install_skill=false; shift ;;
         -h|--help) usage; exit 0 ;;
         *) fail "unknown option '$1'; run with --help for usage" ;;
     esac
@@ -96,10 +104,36 @@ fi
     || fail "checksum verification failed for $asset"
 
 tar -xzf "$workdir/$asset" -C "$workdir"
-mkdir -p "$install_dir"
-install -m 755 "$workdir/agentenv-${version}-${target}/agentenv" "$install_dir/agentenv"
+readonly extracted="$workdir/agentenv-${version}-${target}"
 
+mkdir -p "$install_dir"
+install -m 755 "$extracted/agentenv" "$install_dir/agentenv"
 echo "Installed $("$install_dir/agentenv" --version) to $install_dir/agentenv"
+
+# Replaces one skill directory under a skills root with the packaged copy.
+install_skill_to() {
+    local root="$1"
+    local destination="$root/agentenv"
+    if [[ -e "$destination" && ! -f "$destination/SKILL.md" ]]; then
+        fail "$destination exists but is not an agentenv skill directory; move it aside and rerun"
+    fi
+    mkdir -p "$root"
+    rm -rf "$destination"
+    cp -R "$extracted/skills/agentenv" "$destination"
+    echo "Installed the agentenv agent skill to $destination"
+}
+
+if [[ "$install_skill" == true ]]; then
+    if [[ -f "$extracted/skills/agentenv/SKILL.md" ]]; then
+        install_skill_to "$HOME/.agents/skills"
+        if [[ "$claude_skills" == true ]]; then
+            install_skill_to "$HOME/.claude/skills"
+        fi
+    else
+        echo "install.sh: release $version ships no agent skill; skipping the skill install" >&2
+    fi
+fi
+
 case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) echo "Add $install_dir to PATH to run 'agentenv' from any directory." ;;
