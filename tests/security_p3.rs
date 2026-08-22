@@ -41,6 +41,7 @@ use helpers::{assert_exit, run_ac, Run, SENTINEL_NESTED, SENTINEL_PLAIN};
 use tempfile::TempDir;
 
 const CANARY_PROVIDER: &str = "canary_provider.sh";
+#[cfg(unix)]
 const COUNTING_PROVIDER: &str = "counting_provider.sh";
 
 /// Passed to the probe so the dedup rows also witness argv pass-through.
@@ -144,7 +145,9 @@ fn ac_016_9_every_conflict_row_fails_before_any_provider_or_target_runs() {
 // ---------------------------------------------------------------------------
 
 /// One dedup row: identities that collapse, so the plan succeeds and the shared
-/// credential is resolved exactly once.
+/// credential is resolved exactly once. The rows execute the sh counting
+/// provider, so the dedup machinery is unix-only.
+#[cfg(unix)]
 struct DedupRow {
     name: &'static str,
     /// Builds the config from the staged counting script and the counter file
@@ -157,6 +160,7 @@ struct DedupRow {
     plain_targets: &'static [(&'static str, &'static str)],
 }
 
+#[cfg(unix)]
 fn dedup_rows() -> Vec<DedupRow> {
     vec![
         DedupRow {
@@ -190,6 +194,7 @@ fn dedup_rows() -> Vec<DedupRow> {
     ]
 }
 
+#[cfg(unix)]
 #[test]
 fn ac_016_5_and_ac_016_8_dedup_rows_resolve_each_credential_exactly_once() {
     let probe = probe_binary();
@@ -479,6 +484,7 @@ fn inject_vs_inject_across_entries(script: &Path, canary: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn identical_pairs_across_entries(script: &Path, counter: &Path) -> String {
     format!(
         "{PROFILE_HEADER}\n\
@@ -494,6 +500,7 @@ fn identical_pairs_across_entries(script: &Path, counter: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn two_targets_one_credential(script: &Path, counter: &Path) -> String {
     format!(
         "{PROFILE_HEADER}\n\
@@ -509,6 +516,7 @@ fn two_targets_one_credential(script: &Path, counter: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn identical_pairs_within_one_entry(script: &Path, counter: &Path) -> String {
     format!(
         "{PROFILE_HEADER}\n\
@@ -521,6 +529,7 @@ fn identical_pairs_within_one_entry(script: &Path, counter: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn credential_and_inject_in_one_entry(script: &Path, counter: &Path) -> String {
     format!(
         "{PROFILE_HEADER}\n\
@@ -585,6 +594,7 @@ fn canary_credential(script: &Path, canary: &Path, inject_as: &str) -> String {
     )
 }
 
+#[cfg(unix)]
 fn counting_credential(script: &Path, counter: &Path) -> String {
     format!(
         "\n[credentials.counting_cred]\n\
@@ -649,11 +659,13 @@ fn run_plan(config: &Path, args: &[String], report: &Path) -> Run {
 /// What the target reported about its own launch. Kept as ordered pairs rather
 /// than a map: the suite asserts on named variables only, and config order is
 /// meaningful everywhere else in this crate.
+#[cfg(unix)]
 struct ProbeReport {
     argv: Vec<String>,
     environment: Vec<(String, String)>,
 }
 
+#[cfg(unix)]
 impl ProbeReport {
     fn read(path: &Path) -> Self {
         let text = fs::read_to_string(path)
@@ -689,6 +701,7 @@ impl ProbeReport {
 
 /// How many times a counting provider ran. An absent counter means it never
 /// ran, which is a legitimate observation rather than a read failure.
+#[cfg(unix)]
 fn invocation_count(counter: &Path) -> usize {
     match fs::read_to_string(counter) {
         Ok(text) => text.lines().filter(|line| !line.is_empty()).count(),
