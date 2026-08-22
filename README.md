@@ -12,6 +12,66 @@ store, or an external password-manager command. `agentenv` does not write
 credential values to the TOML file; write commands add definitions and
 ordinary values only.
 
+## Installation
+
+Each [GitHub release](https://github.com/ii999/agentenv/releases) ships
+prebuilt binaries and a `SHA256SUMS` checksum file for:
+
+| Platform | Archive |
+| --- | --- |
+| macOS (Apple silicon) | `agentenv-<tag>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `agentenv-<tag>-x86_64-apple-darwin.tar.gz` |
+| Linux (x86_64, glibc) | `agentenv-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
+| Windows (x86_64) | `agentenv-<tag>-x86_64-pc-windows-msvc.zip` |
+
+### Install script
+
+The scripts download the archive for the current platform, verify its
+SHA-256 checksum, and install the binary. Downloads use the GitHub CLI when
+it is installed and signed in — required while the repository is private —
+and plain HTTPS otherwise.
+
+On macOS and Linux:
+
+```bash
+./install.sh
+```
+
+The binary lands in `~/.local/bin`. Pass `--version <tag>` to pin a release
+and `--dir <path>` to change the install directory (`AGENTENV_VERSION` and
+`AGENTENV_INSTALL_DIR` work the same way).
+
+On Windows (PowerShell 7+):
+
+```powershell
+pwsh -File install.ps1
+```
+
+The binary lands in `%LOCALAPPDATA%\Programs\agentenv`. Pass
+`-Version <tag>` and `-InstallDir <path>` to override.
+
+### Manual download
+
+```bash
+gh release download v0.1.0 --repo ii999/agentenv \
+    --pattern 'agentenv-v0.1.0-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
+shasum -a 256 --check --ignore-missing SHA256SUMS
+tar -xzf agentenv-v0.1.0-aarch64-apple-darwin.tar.gz
+install -m 755 agentenv-v0.1.0-aarch64-apple-darwin/agentenv ~/.local/bin/
+```
+
+Substitute the archive name for your platform from the table above. On Linux,
+`sha256sum --check --ignore-missing SHA256SUMS` performs the same
+verification.
+
+### Build from source
+
+With a Rust toolchain installed:
+
+```bash
+cargo install --path .
+```
+
 ## Configuration
 
 By default, the configuration file is:
