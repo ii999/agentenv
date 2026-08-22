@@ -414,3 +414,7 @@ Windows behavior is specified and code-reviewed, but not machine-verified in
 v1. The documented behavior uses `%APPDATA%` for the default configuration
 path, Windows Credential Manager for `keychain`, case-insensitive environment
 variable conflict checks, and a shared console when `run` waits for the target.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
