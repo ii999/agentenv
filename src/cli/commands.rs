@@ -3,6 +3,7 @@ use std::path::Path;
 
 use clap::{Args, Subcommand};
 
+use agentenv::config::write::{self, CredentialAddRequest, ProviderSpec, SetRequest, ValueSpec};
 use agentenv::config::{Config, CredentialDef, Provider};
 use agentenv::credential::{provider_for, CapturedSecret, Secret};
 use agentenv::error::AppError;
@@ -26,6 +27,49 @@ pub enum Command {
     Validate,
     /// Inspect configured credential definitions.
     Credential(CredentialArgs),
+    /// Write one value at a profile-scoped path.
+    Set(SetArgs),
+    /// Remove a field or table at a profile-scoped path.
+    Unset { path: String },
+    /// Create the config file at the resolved path.
+    Init,
+}
+
+#[derive(Debug, Args)]
+pub struct SetArgs {
+    /// Target path in the segment grammar (same as `get`).
+    pub path: String,
+    /// The value to write.
+    pub value: String,
+    /// The TOML type the value is written as.
+    #[arg(
+        long = "type",
+        value_enum,
+        value_name = "TYPE",
+        default_value = "string"
+    )]
+    pub value_type: ValueType,
+    /// Entry description, written to the entry named by the first path
+    /// segment (overwrites an existing description).
+    #[arg(long, value_name = "TEXT")]
+    pub description: Option<String>,
+    /// Create the profile named by --profile, with this description.
+    #[arg(long, value_name = "TEXT")]
+    pub create_profile: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ValueType {
+    /// A TOML string (the default).
+    String,
+    /// A TOML integer.
+    Int,
+    /// A TOML float.
+    Float,
+    /// A TOML boolean (`true` or `false`).
+    Bool,
+    /// A JSON value converted to TOML (arrays and objects allowed).
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -69,6 +113,45 @@ pub enum CredentialCommand {
     Check { name: String },
     /// Store a keychain credential from a terminal prompt or standard input.
     Set { name: String },
+    /// Add a credential definition to the config file.
+    Add(CredentialAddArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CredentialAddArgs {
+    /// The credential name ([A-Za-z0-9_-]+).
+    pub name: String,
+    /// The credential's description.
+    #[arg(long, value_name = "TEXT")]
+    pub description: String,
+    /// The provider holding the credential value.
+    #[arg(long, value_enum, value_name = "PROVIDER")]
+    pub provider: ProviderKind,
+    /// The environment variable this credential injects by default.
+    #[arg(long = "inject-as", value_name = "ENV")]
+    pub inject_as: String,
+    /// env provider: the environment variable holding the value.
+    #[arg(long = "env-var", value_name = "NAME")]
+    pub env_var: Option<String>,
+    /// keychain provider: the credential-store service.
+    #[arg(long, value_name = "SERVICE")]
+    pub service: Option<String>,
+    /// keychain provider: the credential-store account.
+    #[arg(long, value_name = "ACCOUNT")]
+    pub account: Option<String>,
+    /// command provider: one argv element per flag, in order.
+    #[arg(long = "argv", value_name = "ARG")]
+    pub argv: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ProviderKind {
+    /// Read an environment variable.
+    Env,
+    /// Read the platform credential store.
+    Keychain,
+    /// Run an external command; its stdout supplies the value.
+    Command,
 }
 
 pub struct Invocation {
@@ -95,9 +178,28 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             stderr: String::new(),
         });
     }
+    if matches!(
+        &invocation.command,
+        Command::Set(_)
+            | Command::Unset { .. }
+            | Command::Init
+            | Command::Credential(CredentialArgs {
+                command: CredentialCommand::Add(_),
+            })
+    ) {
+        return execute_write(invocation, &env);
+    }
     let config = Config::load(None, &env)?;
     match invocation.command {
         Command::Validate => unreachable!("validate returns before loading the configuration"),
+        Command::Set(_)
+        | Command::Unset { .. }
+        | Command::Init
+        | Command::Credential(CredentialArgs {
+            command: CredentialCommand::Add(_),
+        }) => {
+            unreachable!("write commands return before loading the configuration")
+        }
         Command::Run(args) => {
             if invocation.json {
                 return Err(AppError::Usage(
@@ -273,6 +375,129 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             })
         }
     }
+}
+
+/// Runs a config-write command (`set`, `unset`, `init`, `credential add`).
+/// Write commands load and validate through `config::write` themselves, so
+/// they run before the read-side `Config::load`.
+fn execute_write(
+    invocation: Invocation,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<Output, AppError> {
+    let command_name = match &invocation.command {
+        Command::Set(_) => "set",
+        Command::Unset { .. } => "unset",
+        Command::Init => "init",
+        Command::Credential(_) => "credential add",
+        _ => unreachable!("execute_write handles only write commands"),
+    };
+    if invocation.json {
+        return Err(AppError::Usage(format!(
+            "{command_name} does not support --json; write commands have no JSON output"
+        )));
+    }
+    let stdout = match invocation.command {
+        Command::Set(args) => write::set(
+            SetRequest {
+                profile_flag: invocation.profile,
+                path: args.path,
+                value: match args.value_type {
+                    ValueType::String => ValueSpec::String(args.value),
+                    ValueType::Int => ValueSpec::Int(args.value),
+                    ValueType::Float => ValueSpec::Float(args.value),
+                    ValueType::Bool => ValueSpec::Bool(args.value),
+                    ValueType::Json => ValueSpec::Json(args.value),
+                },
+                description: args.description,
+                create_profile: args.create_profile,
+            },
+            env,
+        )?,
+        Command::Unset { path } => write::unset(invocation.profile.as_deref(), &path, env)?,
+        Command::Init => write::init(env)?,
+        Command::Credential(CredentialArgs {
+            command: CredentialCommand::Add(args),
+        }) => write::credential_add(credential_add_request(args)?, env)?,
+        _ => unreachable!("execute_write handles only write commands"),
+    };
+    Ok(Output {
+        stdout,
+        stderr: String::new(),
+    })
+}
+
+/// Maps `credential add` flags onto the provider schema, refusing missing or
+/// mismatched provider-specific flags (AC-005.4).
+fn credential_add_request(args: CredentialAddArgs) -> Result<CredentialAddRequest, AppError> {
+    let CredentialAddArgs {
+        name,
+        description,
+        provider,
+        inject_as,
+        env_var,
+        service,
+        account,
+        argv,
+    } = args;
+    let missing = |flag: &str, provider: &str| {
+        AppError::Usage(format!(
+            "--{flag} is required for the {provider} provider; add --{flag} and retry"
+        ))
+    };
+    let mismatched = |flag: &str, provider: &str| {
+        AppError::Usage(format!(
+            "--{flag} does not apply to the {provider} provider; drop --{flag} and retry"
+        ))
+    };
+    let spec = match provider {
+        ProviderKind::Env => {
+            if service.is_some() {
+                return Err(mismatched("service", "env"));
+            }
+            if account.is_some() {
+                return Err(mismatched("account", "env"));
+            }
+            if !argv.is_empty() {
+                return Err(mismatched("argv", "env"));
+            }
+            ProviderSpec::Env {
+                var: env_var.ok_or_else(|| missing("env-var", "env"))?,
+            }
+        }
+        ProviderKind::Keychain => {
+            if env_var.is_some() {
+                return Err(mismatched("env-var", "keychain"));
+            }
+            if !argv.is_empty() {
+                return Err(mismatched("argv", "keychain"));
+            }
+            ProviderSpec::Keychain {
+                service: service.ok_or_else(|| missing("service", "keychain"))?,
+                account: account.ok_or_else(|| missing("account", "keychain"))?,
+            }
+        }
+        ProviderKind::Command => {
+            if env_var.is_some() {
+                return Err(mismatched("env-var", "command"));
+            }
+            if service.is_some() {
+                return Err(mismatched("service", "command"));
+            }
+            if account.is_some() {
+                return Err(mismatched("account", "command"));
+            }
+            if argv.is_empty() {
+                return Err(missing("argv", "command"));
+            }
+            ProviderSpec::Command { argv }
+        }
+    };
+    Ok(CredentialAddRequest {
+        name,
+        description,
+        provider: spec,
+        inject_as,
+    })
 }
 
 fn reject_json_for_credential_action(json: bool, action: &str) -> Result<(), AppError> {

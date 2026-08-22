@@ -135,6 +135,22 @@ pub fn assert_omits(run: &Run, needle: &str, context: &str) {
     );
 }
 
+/// Stages inline TOML content as a mode-0600 config file in a fresh temp
+/// directory. The write suites use this instead of on-disk fixtures because
+/// each test mutates its own copy.
+pub fn staged_config(content: &str) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("a temp dir for a staged config");
+    let path = dir.path().join("config.toml");
+    fs::write(&path, content).expect("the staged config is written");
+    restrict_permissions(&path);
+    (dir, path)
+}
+
+/// Reads a staged config back for content assertions.
+pub fn read_config(path: &Path) -> String {
+    fs::read_to_string(path).expect("the staged config reads")
+}
+
 /// A fixture config staged for use as a real config file.
 ///
 /// The copy lives in a temp directory at mode 0600, which git cannot record
