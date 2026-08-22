@@ -71,12 +71,12 @@ fn read_config(path: &Path) -> Result<String, AppError> {
     };
     match std::fs::metadata(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(failure(
-            "config file not found; create it or point AGENT_CONTEXT_FILE at an existing file"
+            "config file not found; create it or point AGENTENV_FILE at an existing file"
                 .to_owned(),
         )),
         Err(error) => Err(failure(format!("cannot inspect the config file: {error}"))),
         Ok(metadata) if metadata.is_dir() => Err(failure(
-            "the config path is a directory, not a file; point AGENT_CONTEXT_FILE at a regular \
+            "the config path is a directory, not a file; point AGENTENV_FILE at a regular \
              file"
                 .to_owned(),
         )),
@@ -193,11 +193,11 @@ inject_as = "OPENAI_API_KEY"
 
     #[test]
     fn load_reads_the_file_via_the_environment() {
-        // AC-001.1 (logic level): AGENT_CONTEXT_FILE is honored.
+        // AC-001.1 (logic level): AGENTENV_FILE is honored.
         let (_dir, path) = staged_file("context.toml", VALID_CONFIG);
         let path_text = path.display().to_string();
         let env = move |name: &str| match name {
-            "AGENT_CONTEXT_FILE" => Some(path_text.clone()),
+            "AGENTENV_FILE" => Some(path_text.clone()),
             _ => None,
         };
         let config = Config::load(None, &env).expect("the env-specified file loads");
@@ -206,10 +206,10 @@ inject_as = "OPENAI_API_KEY"
 
     #[test]
     fn load_treats_an_empty_environment_value_as_unset() {
-        // SPEC-AS-028: with no HOME and an empty AGENT_CONTEXT_FILE, the
+        // SPEC-AS-028: with no HOME and an empty AGENTENV_FILE, the
         // base directory cannot be determined.
         let env = |name: &str| match name {
-            "AGENT_CONTEXT_FILE" => Some(String::new()),
+            "AGENTENV_FILE" => Some(String::new()),
             _ => None,
         };
         match Config::load(None, &env) {
@@ -384,7 +384,7 @@ inject_as = "X"
         let (_other_dir, other_path) = staged_file("other.toml", "version = 1\n");
         let other_text = other_path.display().to_string();
         let env = move |name: &str| match name {
-            "AGENT_CONTEXT_FILE" => Some(other_text.clone()),
+            "AGENTENV_FILE" => Some(other_text.clone()),
             _ => None,
         };
         let config = Config::load(Some(&path), &env).expect("the explicit file wins");

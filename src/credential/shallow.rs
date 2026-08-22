@@ -178,7 +178,7 @@ mod tests {
             name: "personal".to_owned(),
             description: "d".to_owned(),
             provider: Provider::Keychain {
-                service: "agent-context".to_owned(),
+                service: "agentenv".to_owned(),
                 account: "personal".to_owned(),
             },
             inject_as: "OPENAI_API_KEY".to_owned(),

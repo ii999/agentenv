@@ -29,7 +29,7 @@ impl Provider for EnvProvider {
         let environment = |name: &str| std::env::var_os(name);
         let value = env_value(&environment, &self.variable).ok_or_else(|| {
             AppError::Credential(format!(
-                "env credential '{}' is unset; set {} and run 'agent-context credential check {}'",
+                "env credential '{}' is unset; set {} and run 'agentenv credential check {}'",
                 self.credential_name, self.variable, self.credential_name
             ))
         })?;
@@ -38,7 +38,7 @@ impl Provider for EnvProvider {
 
     fn store(&self, _value: Secret) -> Result<(), AppError> {
         Err(AppError::Usage(format!(
-            "env credentials are managed externally through {}; set the environment variable and run 'agent-context credential check {}'",
+            "env credentials are managed externally through {}; set the environment variable and run 'agentenv credential check {}'",
             self.variable, self.credential_name
         )))
     }
@@ -59,7 +59,7 @@ fn captured_from_os(
 
     CapturedSecret::new(bytes).into_secret().map_err(|error| {
         AppError::Credential(format!(
-            "env credential '{}' in {} is invalid: {error}; set a valid value and run 'agent-context credential check {}'",
+            "env credential '{}' in {} is invalid: {error}; set a valid value and run 'agentenv credential check {}'",
             credential_name, variable, credential_name
         ))
     })

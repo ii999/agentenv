@@ -105,7 +105,7 @@ fn profile_recovery_and_usage_errors_keep_their_exit_codes() {
     assert_exit(&empty_find, 1, "empty find needle");
     assert_mentions(
         &empty_find,
-        "agent-context list",
+        "agentenv list",
         "empty find offers a next action",
     );
 

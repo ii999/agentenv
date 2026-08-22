@@ -230,7 +230,7 @@ fn launch(
 
         let error = command.exec();
         Err(AppError::TargetNotExecutable(format!(
-            "'{program}' could not be executed: {error}; verify the target command and try 'agent-context run --with <entry> -- <command> [args...]'"
+            "'{program}' could not be executed: {error}; verify the target command and try 'agentenv run --with <entry> -- <command> [args...]'"
         )))
     }
 
@@ -238,7 +238,7 @@ fn launch(
     {
         let status = command.status().map_err(|error| {
             AppError::TargetNotExecutable(format!(
-                "'{program}' could not be executed: {error}; verify the target command and try 'agent-context run --with <entry> -- <command> [args...]'"
+                "'{program}' could not be executed: {error}; verify the target command and try 'agentenv run --with <entry> -- <command> [args...]'"
             ))
         })?;
         std::process::exit(

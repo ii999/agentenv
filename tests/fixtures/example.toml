@@ -41,6 +41,6 @@ inject_as = "OPENAI_API_KEY"
 [credentials.openai_personal]
 description = "Access credential for the personal OpenAI account."
 provider = "keychain"
-service = "agent-context"
+service = "agentenv"
 account = "openai-personal"
 inject_as = "OPENAI_API_KEY"

@@ -39,7 +39,7 @@ fn check_reports_env_and_missing_keychain_without_exposing_values() {
     let keychain_missing = run_ac(
         config.path(),
         &[(
-            "AGENT_CONTEXT_TEST_KEYCHAIN",
+            "AGENTENV_TEST_KEYCHAIN",
             config.store_path().to_str().unwrap(),
         )],
         &["credential", "check", "openai_personal"],
@@ -49,7 +49,7 @@ fn check_reports_env_and_missing_keychain_without_exposing_values() {
         4,
         "a missing keychain item fails resolution",
     );
-    assert_mentions(&keychain_missing, "agent-context", "the service is named");
+    assert_mentions(&keychain_missing, "agentenv", "the service is named");
     assert_mentions(&keychain_missing, "openai-personal", "the account is named");
 }
 
@@ -77,7 +77,7 @@ fn command_provider_captures_stdout_without_shell_expansion_or_output_leaks() {
     assert_omits(
         &run,
         COMMAND_SENTINEL,
-        "the captured command value never reaches agent-context output",
+        "the captured command value never reaches agentenv output",
     );
     assert_eq!(
         fs::read_to_string(recorder).expect("the provider recorded its argv"),
@@ -131,7 +131,7 @@ fn keychain_set_round_trips_exact_piped_bytes_and_rejects_external_providers() {
     let store = config.store_path();
     let empty = run_with_input(
         config.path(),
-        &[("AGENT_CONTEXT_TEST_KEYCHAIN", store.to_str().unwrap())],
+        &[("AGENTENV_TEST_KEYCHAIN", store.to_str().unwrap())],
         &["credential", "set", "openai_personal"],
         b"\n",
     );
@@ -140,7 +140,7 @@ fn keychain_set_round_trips_exact_piped_bytes_and_rejects_external_providers() {
 
     let set = run_with_input(
         config.path(),
-        &[("AGENT_CONTEXT_TEST_KEYCHAIN", store.to_str().unwrap())],
+        &[("AGENTENV_TEST_KEYCHAIN", store.to_str().unwrap())],
         &["credential", "set", "openai_personal"],
         b"hunter2\n",
     );
@@ -158,7 +158,7 @@ fn keychain_set_round_trips_exact_piped_bytes_and_rejects_external_providers() {
 
     let check = run_ac(
         config.path(),
-        &[("AGENT_CONTEXT_TEST_KEYCHAIN", store.to_str().unwrap())],
+        &[("AGENTENV_TEST_KEYCHAIN", store.to_str().unwrap())],
         &["credential", "check", "openai_personal"],
     );
     assert_exit(&check, 0, "the stored value resolves");
@@ -184,7 +184,7 @@ fn keychain_set_reports_test_store_write_failures() {
         .join("test-keychain.json");
     let run = run_with_input(
         config.path(),
-        &[("AGENT_CONTEXT_TEST_KEYCHAIN", store_path.to_str().unwrap())],
+        &[("AGENTENV_TEST_KEYCHAIN", store_path.to_str().unwrap())],
         &["credential", "set", "openai_personal"],
         b"hunter2\n",
     );
@@ -247,14 +247,14 @@ fn interactive_set_does_not_echo_the_typed_secret() {
             pixel_height: 0,
         })
         .expect("a pseudo-terminal is available");
-    let binary = assert_cmd::cargo::cargo_bin("agent-context");
+    let binary = assert_cmd::cargo::cargo_bin("agentenv");
     let mut command = CommandBuilder::new(binary);
     command.env_clear();
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
-    command.env("AGENT_CONTEXT_FILE", config.path());
-    command.env("AGENT_CONTEXT_TEST_KEYCHAIN", config.store_path());
+    command.env("AGENTENV_FILE", config.path());
+    command.env("AGENTENV_TEST_KEYCHAIN", config.store_path());
     command.args(["credential", "set", "openai_personal"]);
 
     let mut child = pty
@@ -337,7 +337,7 @@ fn interactive_set_does_not_echo_the_typed_secret() {
     let check = run_ac(
         config.path(),
         &[(
-            "AGENT_CONTEXT_TEST_KEYCHAIN",
+            "AGENTENV_TEST_KEYCHAIN",
             config.store_path().to_str().expect("test paths are UTF-8"),
         )],
         &["credential", "check", "openai_personal"],
@@ -358,7 +358,7 @@ inject_as = "OPENAI_API_KEY"
 [credentials.openai_personal]
 description = "Personal credential."
 provider = "keychain"
-service = "agent-context"
+service = "agentenv"
 account = "openai-personal"
 inject_as = "OPENAI_API_KEY"
 "#
@@ -425,8 +425,7 @@ impl ConfigFile {
 }
 
 fn run_with_input(config: &Path, envs: &[(&str, &str)], args: &[&str], input: &[u8]) -> Run {
-    let mut command =
-        Command::cargo_bin("agent-context").expect("the agent-context binary is built");
+    let mut command = Command::cargo_bin("agentenv").expect("the agentenv binary is built");
     command.env_clear();
     #[cfg(unix)]
     const PASSTHROUGH_ENV: &[&str] = &["PATH"];
@@ -437,7 +436,7 @@ fn run_with_input(config: &Path, envs: &[(&str, &str)], args: &[&str], input: &[
             command.env(name, value);
         }
     }
-    command.env("AGENT_CONTEXT_FILE", config);
+    command.env("AGENTENV_FILE", config);
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -453,7 +452,7 @@ fn run_with_input(config: &Path, envs: &[(&str, &str)], args: &[&str], input: &[
         for (channel, text) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
             assert!(
                 !text.contains(sentinel),
-                "agent-context {args:?} leaked sentinel #{index} on {channel}"
+                "agentenv {args:?} leaked sentinel #{index} on {channel}"
             );
         }
     }

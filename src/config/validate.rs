@@ -249,7 +249,7 @@ fn validate_inject_table(
                 path: violation_path,
                 message: format!(
                     "inject value for '{key}' does not resolve within entry '{entry}': \
-                     '{source}'; run 'agent-context list {entry}' to see its fields"
+                     '{source}'; run 'agentenv list {entry}' to see its fields"
                 ),
             }),
             Some(Value::String(source_value)) => {
@@ -962,7 +962,7 @@ inject_as = "OPENAI_API_KEY"
     #[test]
     fn keychain_credential_is_valid_with_both_fields() {
         assert_valid(
-            "version = 1\n\n[credentials.c]\ndescription = \"d\"\nprovider = \"keychain\"\nservice = \"agent-context\"\naccount = \"personal\"\ninject_as = \"X\"\n",
+            "version = 1\n\n[credentials.c]\ndescription = \"d\"\nprovider = \"keychain\"\nservice = \"agentenv\"\naccount = \"personal\"\ninject_as = \"X\"\n",
         );
     }
 

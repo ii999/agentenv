@@ -83,7 +83,7 @@ pub fn single_entry_name(input: &str) -> Result<String, AppError> {
     let segments = Segments::parse(input)?;
     if segments.len() != 1 {
         return Err(AppError::Usage(format!(
-            "'{input}' must name one entry; use 'agent-context get {input}' to read a field path"
+            "'{input}' must name one entry; use 'agentenv get {input}' to read a field path"
         )));
     }
     Ok(segments.as_slice()[0].clone())
@@ -171,7 +171,7 @@ pub fn resolve<'a>(profile: &'a Profile, segments: &Segments) -> Result<&'a Valu
     let Some(entry) = profile.entries.get(entry_name.as_str()) else {
         return Err(AppError::NotFound(format!(
             "unknown path '{}': entry '{}' is not defined in profile '{}'; run \
-             'agent-context list' to see the entries of the active profile",
+             'agentenv list' to see the entries of the active profile",
             segments.render(),
             entry_name,
             profile.name
@@ -182,7 +182,7 @@ pub fn resolve<'a>(profile: &'a Profile, segments: &Segments) -> Result<&'a Valu
     for segment in &parts[1..] {
         let Some(table) = current.as_table() else {
             return Err(AppError::NotFound(format!(
-                "unknown path '{}': '{}' is a {} and has no field '{}'; run 'agent-context \
+                "unknown path '{}': '{}' is a {} and has no field '{}'; run 'agentenv \
                  get {}' to read it",
                 segments.render(),
                 render_segments(traversed.iter().copied()),
@@ -193,7 +193,7 @@ pub fn resolve<'a>(profile: &'a Profile, segments: &Segments) -> Result<&'a Valu
         };
         let Some(next) = table.get(segment.as_str()) else {
             return Err(AppError::NotFound(format!(
-                "unknown path '{}': entry '{}' has no field '{}'; run 'agent-context list {}' \
+                "unknown path '{}': entry '{}' has no field '{}'; run 'agentenv list {}' \
                  to see its fields",
                 segments.render(),
                 entry_name,
@@ -345,7 +345,7 @@ key = "value"
         match resolve(&profile, &segments("nosuch.field")) {
             Err(AppError::NotFound(message)) => {
                 assert!(message.contains("nosuch.field"), "{message}");
-                assert!(message.contains("agent-context list"), "{message}");
+                assert!(message.contains("agentenv list"), "{message}");
             }
             other => panic!("expected a not-found error, got {other:?}"),
         }

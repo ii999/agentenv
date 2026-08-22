@@ -1,6 +1,6 @@
 //! `test-probe`: the target process used by the `run` integration tests.
 //!
-//! `run` replaces agent-context with its target, so the only way a test can
+//! `run` replaces agentenv with its target, so the only way a test can
 //! observe what was injected is to have the target report it. This binary
 //! writes its argv and its environment to the file named by `TEST_PROBE_OUT`,
 //! one tab-separated record per line:

@@ -5,7 +5,7 @@ use thiserror::Error;
 /// Bytes captured from an external credential source before validation.
 ///
 /// ```compile_fail
-/// use agent_context::credential::CapturedSecret;
+/// use agentenv::credential::CapturedSecret;
 ///
 /// fn requires_display(_: impl std::fmt::Display) {}
 /// fn assert_not_display(value: CapturedSecret) {
@@ -14,7 +14,7 @@ use thiserror::Error;
 /// ```
 ///
 /// ```compile_fail
-/// use agent_context::credential::CapturedSecret;
+/// use agentenv::credential::CapturedSecret;
 ///
 /// fn requires_serialize(_: impl serde::Serialize) {}
 /// fn assert_not_serializable(value: CapturedSecret) {
@@ -27,7 +27,7 @@ pub struct CapturedSecret(Vec<u8>);
 /// serialized by callers.
 ///
 /// ```compile_fail
-/// use agent_context::credential::Secret;
+/// use agentenv::credential::Secret;
 ///
 /// fn requires_display(_: impl std::fmt::Display) {}
 /// fn assert_not_display(value: Secret) {
@@ -36,7 +36,7 @@ pub struct CapturedSecret(Vec<u8>);
 /// ```
 ///
 /// ```compile_fail
-/// use agent_context::credential::Secret;
+/// use agentenv::credential::Secret;
 ///
 /// fn requires_serialize(_: impl serde::Serialize) {}
 /// fn assert_not_serializable(value: Secret) {

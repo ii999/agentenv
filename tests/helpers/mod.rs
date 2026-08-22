@@ -1,4 +1,4 @@
-//! Shared invocation harness for the agent-context integration suites.
+//! Shared invocation harness for the agentenv integration suites.
 //!
 //! Each integration test file compiles as its own binary, so every suite
 //! (`security_p1` today; `query_p1`, `credential_p2`, `security_p3` later)
@@ -32,14 +32,14 @@ pub const SENTINELS: &[&str] = &[
 ];
 
 /// Variables the child keeps. PATH is required to locate and execute the
-/// binary; everything else — notably `AGENT_CONTEXT_*`, `XDG_*` and `HOME` —
+/// binary; everything else — notably `AGENTENV_*`, `XDG_*` and `HOME` —
 /// is dropped so the developer's own environment can never steer a test.
 #[cfg(unix)]
 const PASSTHROUGH_ENV: &[&str] = &["PATH"];
 #[cfg(windows)]
 const PASSTHROUGH_ENV: &[&str] = &["PATH", "SYSTEMROOT"];
 
-/// What one agent-context invocation produced.
+/// What one agentenv invocation produced.
 pub struct Run {
     pub stdout: String,
     pub stderr: String,
@@ -54,16 +54,16 @@ impl Run {
     }
 }
 
-/// Runs agent-context against `config` with a scrubbed environment.
+/// Runs agentenv against `config` with a scrubbed environment.
 ///
 /// The child starts from an empty environment plus PATH, then receives
-/// `AGENT_CONTEXT_FILE` and whatever `envs` supplies, so config resolution
+/// `AGENTENV_FILE` and whatever `envs` supplies, so config resolution
 /// depends only on what a test states. Before returning, every captured
 /// invocation is checked for planted secrets: a leak fails the test that
 /// caused it, whatever that test was asserting.
 pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
-    let mut command = Command::cargo_bin("agent-context")
-        .expect("the agent-context binary is built before integration tests run");
+    let mut command = Command::cargo_bin("agentenv")
+        .expect("the agentenv binary is built before integration tests run");
 
     command.env_clear();
     for name in PASSTHROUGH_ENV {
@@ -71,7 +71,7 @@ pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
             command.env(name, value);
         }
     }
-    command.env("AGENT_CONTEXT_FILE", config);
+    command.env("AGENTENV_FILE", config);
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -79,7 +79,7 @@ pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
 
     let output = command
         .output()
-        .unwrap_or_else(|error| panic!("failed to run agent-context {args:?}: {error}"));
+        .unwrap_or_else(|error| panic!("failed to run agentenv {args:?}: {error}"));
 
     let run = Run {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -97,7 +97,7 @@ fn assert_no_sentinels(run: &Run, args: &[&str]) {
         for (channel, text) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
             assert!(
                 !text.contains(sentinel),
-                "agent-context {args:?} leaked sentinel #{index} on {channel}"
+                "agentenv {args:?} leaked sentinel #{index} on {channel}"
             );
         }
     }

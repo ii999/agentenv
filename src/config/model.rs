@@ -145,7 +145,7 @@ impl Config {
     }
 
     /// Resolves the active profile (SPEC-004): the `--profile` flag, else
-    /// the `AGENT_CONTEXT_PROFILE` environment value, else the file's
+    /// the `AGENTENV_PROFILE` environment value, else the file's
     /// `default_profile`. An empty flag value is a usage error; an empty
     /// environment value counts as unset (SPEC-AS-028), so callers may pass
     /// raw environment values.
@@ -157,7 +157,7 @@ impl Config {
         if let Some(flag) = flag {
             if flag.is_empty() {
                 return Err(AppError::Usage(
-                    "--profile requires a profile name; run 'agent-context list --profiles' to see the defined profiles"
+                    "--profile requires a profile name; run 'agentenv list --profiles' to see the defined profiles"
                         .to_owned(),
                 ));
             }
@@ -179,11 +179,11 @@ impl Config {
         let names: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
         if names.is_empty() {
             Err(AppError::NotFound(format!(
-                "profile '{name}' is not defined; the config file defines no profiles; add a [profiles.<name>] table or run 'agent-context list --profiles'"
+                "profile '{name}' is not defined; the config file defines no profiles; add a [profiles.<name>] table or run 'agentenv list --profiles'"
             )))
         } else {
             Err(AppError::NotFound(format!(
-                "profile '{name}' is not defined; available profiles: {}; run 'agent-context list --profiles'",
+                "profile '{name}' is not defined; available profiles: {}; run 'agentenv list --profiles'",
                 names.join(", ")
             )))
         }
@@ -308,14 +308,14 @@ fn no_selection_error(profiles: &[Profile]) -> AppError {
     if names.is_empty() {
         AppError::NotFound(
             "no profile is selected and the config file defines no profiles; add a [profiles.<name>] \
-             table with a default_profile, or run 'agent-context list --profiles'"
+             table with a default_profile, or run 'agentenv list --profiles'"
                 .to_owned(),
         )
     } else {
         AppError::NotFound(format!(
             "no profile is selected; available profiles: {}; set --profile or \
-             AGENT_CONTEXT_PROFILE, set default_profile in the config file, or run \
-             'agent-context list --profiles'",
+             AGENTENV_PROFILE, set default_profile in the config file, or run \
+             'agentenv list --profiles'",
             names.join(", ")
         ))
     }
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn select_profile_env_beats_default() {
-        // AC-004.1: AGENT_CONTEXT_PROFILE beats default_profile.
+        // AC-004.1: AGENTENV_PROFILE beats default_profile.
         let config = config_with_profiles(&["work", "personal"], Some("work"));
         let selected = config
             .select_profile(None, Some("personal"))

@@ -32,7 +32,7 @@ impl Provider for CommandProvider {
         let program = self.program();
         if program.is_empty() {
             return Err(AppError::Credential(format!(
-                "command credential '{}' has no argv[0]; edit its credential definition and run 'agent-context credential check {}'",
+                "command credential '{}' has no argv[0]; edit its credential definition and run 'agentenv credential check {}'",
                 self.credential_name, self.credential_name
             )));
         }
@@ -44,13 +44,13 @@ impl Provider for CommandProvider {
             .output()
             .map_err(|error| {
                 AppError::Credential(format!(
-                    "command credential '{}' could not start argv[0] '{}': {error}; verify the command and run 'agent-context credential check {}'",
+                    "command credential '{}' could not start argv[0] '{}': {error}; verify the command and run 'agentenv credential check {}'",
                     self.credential_name, program, self.credential_name
                 ))
             })?;
         if !output.status.success() {
             return Err(AppError::Credential(format!(
-                "command credential '{}' exited unsuccessfully (argv[0] '{}'); fix the command and run 'agent-context credential check {}'",
+                "command credential '{}' exited unsuccessfully (argv[0] '{}'); fix the command and run 'agentenv credential check {}'",
                 self.credential_name, program, self.credential_name
             )));
         }
@@ -59,11 +59,11 @@ impl Provider for CommandProvider {
             .into_secret()
             .map_err(|error| match error {
                 SecretDomainError::Empty => AppError::Credential(format!(
-                    "command credential '{}' produced no output or only whitespace; fix argv[0] '{}' and run 'agent-context credential check {}'",
+                    "command credential '{}' produced no output or only whitespace; fix argv[0] '{}' and run 'agentenv credential check {}'",
                     self.credential_name, program, self.credential_name
                 )),
                 _ => AppError::Credential(format!(
-                    "command credential '{}' returned an invalid value: {error}; fix argv[0] '{}' and run 'agent-context credential check {}'",
+                    "command credential '{}' returned an invalid value: {error}; fix argv[0] '{}' and run 'agentenv credential check {}'",
                     self.credential_name, program, self.credential_name
                 )),
             })
@@ -71,7 +71,7 @@ impl Provider for CommandProvider {
 
     fn store(&self, _value: Secret) -> Result<(), AppError> {
         Err(AppError::Usage(format!(
-            "command credentials are managed externally; update argv[0] '{}' and run 'agent-context credential check {}'",
+            "command credentials are managed externally; update argv[0] '{}' and run 'agentenv credential check {}'",
             self.program(),
             self.credential_name
         )))

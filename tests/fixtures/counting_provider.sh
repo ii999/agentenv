@@ -8,10 +8,10 @@
 # by several references — identical effective pairs, or one credential under two
 # target names — is resolved once and injected under each target name.
 #
-# <value> goes to stdout, which agent-context captures as the credential value.
+# <value> goes to stdout, which agentenv captures as the credential value.
 # Nothing is written to stderr: a command provider's stderr is inherited, and a
 # planted sentinel must never reach an inherited channel, so the suite-wide
-# no-secret grep measures agent-context's own output only.
+# no-secret grep measures agentenv's own output only.
 #
 # Pairs with tests/fixtures/bin/probe.rs (the `test-probe` binary): the probe
 # reports which names the child received, this script reports how many times the

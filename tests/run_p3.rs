@@ -101,10 +101,10 @@ fn run_preserves_a_target_termination_signal() {
 
     let workspace = Workspace::new();
     let config = workspace.stage_config(RUNNER_CONFIG);
-    let output = std::process::Command::cargo_bin("agent-context")
-        .expect("agent-context is built")
+    let output = std::process::Command::cargo_bin("agentenv")
+        .expect("agentenv is built")
         .env_clear()
-        .env("AGENT_CONTEXT_FILE", config)
+        .env("AGENTENV_FILE", config)
         .env("SOURCE_TOKEN", SENTINEL_PLAIN)
         .args([
             "run",
@@ -116,17 +116,17 @@ fn run_preserves_a_target_termination_signal() {
             "kill -TERM $$",
         ])
         .output()
-        .expect("agent-context launches");
+        .expect("agentenv launches");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stdout.contains(SENTINEL_PLAIN),
-        "agent-context leaked the injected sentinel on stdout"
+        "agentenv leaked the injected sentinel on stdout"
     );
     assert!(
         !stderr.contains(SENTINEL_PLAIN),
-        "agent-context leaked the injected sentinel on stderr"
+        "agentenv leaked the injected sentinel on stderr"
     );
     assert_eq!(output.status.signal(), Some(15));
 }

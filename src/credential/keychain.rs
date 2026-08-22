@@ -29,7 +29,7 @@ impl KeychainProvider {
 
     fn write_error(&self, error: impl std::fmt::Display) -> AppError {
         AppError::Credential(format!(
-            "keychain credential '{}' for service '{}' and account '{}' could not be stored: {error}; check the platform keychain and retry 'agent-context credential set {}'",
+            "keychain credential '{}' for service '{}' and account '{}' could not be stored: {error}; check the platform keychain and retry 'agentenv credential set {}'",
             self.credential_name, self.service, self.account, self.credential_name
         ))
     }
@@ -45,7 +45,7 @@ impl Provider for KeychainProvider {
         if let Some(store) = TestStore::from_environment() {
             return store.read(&self.service, &self.account)?.ok_or_else(|| {
                 AppError::Credential(format!(
-                    "keychain credential '{}' is missing for service '{}' and account '{}'; set it with 'agent-context credential set {}'",
+                    "keychain credential '{}' is missing for service '{}' and account '{}'; set it with 'agentenv credential set {}'",
                     self.credential_name, self.service, self.account, self.credential_name
                 ))
             });
@@ -55,7 +55,7 @@ impl Provider for KeychainProvider {
         let value = entry.get_secret().map_err(|error| self.read_error(error))?;
         CapturedSecret::new(value).into_secret().map_err(|error| {
             AppError::Credential(format!(
-                "keychain credential '{}' for service '{}' and account '{}' has an invalid value: {error}; set it again with 'agent-context credential set {}'",
+                "keychain credential '{}' for service '{}' and account '{}' has an invalid value: {error}; set it again with 'agentenv credential set {}'",
                 self.credential_name, self.service, self.account, self.credential_name
             ))
         })

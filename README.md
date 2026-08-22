@@ -1,6 +1,6 @@
-# agent-context
+# agentenv
 
-`agent-context` is a local-first command-line interface for browsing a user's
+`agentenv` is a local-first command-line interface for browsing a user's
 environment configuration and using credentials without printing them. It
 reads a TOML file, exposes ordinary values as text or JSON, and can launch a
 target process with selected configuration and credential values in a
@@ -8,25 +8,25 @@ temporary environment.
 
 The configuration file contains ordinary values and references to credentials.
 Credential values live in an environment variable, a platform credential
-store, or an external password-manager command. `agent-context` does not write
+store, or an external password-manager command. `agentenv` does not write
 credentials back to the TOML file.
 
 ## Configuration
 
 By default, the configuration file is:
 
-- Unix-like systems: `$XDG_CONFIG_HOME/agent-context/context.toml`, or
-  `~/.config/agent-context/context.toml` when `XDG_CONFIG_HOME` is unset.
-- Windows: `%APPDATA%\agent-context\context.toml`.
+- Unix-like systems: `$XDG_CONFIG_HOME/agentenv/context.toml`, or
+  `~/.config/agentenv/context.toml` when `XDG_CONFIG_HOME` is unset.
+- Windows: `%APPDATA%\agentenv\context.toml`.
 
-Set `AGENT_CONTEXT_FILE` to use another file. On Unix-like systems, the file's
-permission bits must be a subset of `0600`; run `agent-context validate` after
+Set `AGENTENV_FILE` to use another file. On Unix-like systems, the file's
+permission bits must be a subset of `0600`; run `agentenv validate` after
 creating or changing the file.
 
 Profile selection uses this precedence:
 
 1. `--profile <NAME>`
-2. `AGENT_CONTEXT_PROFILE`
+2. `AGENTENV_PROFILE`
 3. `default_profile` in the file
 
 The schema is open for fields under profile entries. Each profile and each
@@ -79,7 +79,7 @@ inject_as = "OPENAI_API_KEY"
 [credentials.openai_personal]
 description = "Access credential for the personal OpenAI account."
 provider = "keychain"
-service = "agent-context"
+service = "agentenv"
 account = "openai-personal"
 inject_as = "OPENAI_API_KEY"
 ```
@@ -105,24 +105,24 @@ and is not part of the path. Arrays are read as whole values with `get --json`.
 Projects can place this block in `AGENTS.md`:
 
 ```md
-User environment information is available through `agent-context`.
+User environment information is available through `agentenv`.
 
-- Run `agent-context list --json` to discover available configuration.
-- Run `agent-context show <name> --json` before using an unfamiliar entry.
-- Use `agent-context get <path>` to retrieve ordinary values.
-- Use `agent-context run --with <entry> -- <command>` when credentials are required.
+- Run `agentenv list --json` to discover available configuration.
+- Run `agentenv show <name> --json` before using an unfamiliar entry.
+- Use `agentenv get <path>` to retrieve ordinary values.
+- Use `agentenv run --with <entry> -- <command>` when credentials are required.
 - Never print, log, persist, or summarize resolved credentials.
 - Report missing configuration or credentials explicitly.
 ```
 
 Use the commands in this order:
 
-1. Discover available profiles and entries with `agent-context list --json`.
-2. Inspect an unfamiliar entry with `agent-context show <name> --json`.
-3. Read an ordinary scalar with `agent-context get <path>`; use `--json` for
+1. Discover available profiles and entries with `agentenv list --json`.
+2. Inspect an unfamiliar entry with `agentenv show <name> --json`.
+3. Read an ordinary scalar with `agentenv get <path>`; use `--json` for
    an array or table.
 4. When a target needs credentials, use
-   `agent-context run --with <entry> -- <command> [args...]`.
+   `agentenv run --with <entry> -- <command> [args...]`.
 
 If the requested profile, entry, field, or credential is missing, report that
 fact explicitly. Do not guess a field name, silently switch profiles, or
@@ -130,11 +130,11 @@ substitute another credential.
 
 ### Finding injection target names
 
-Use `agent-context credential list --json` to see each credential's default
+Use `agentenv credential list --json` to see each credential's default
 environment target in its `inject_as` member. For an entry that contains a
 credential reference, inspect the `reference` member of its JSON output from
-`agent-context list --json` or `agent-context show <name> --json`. You can also
-read the raw reference directly with `agent-context get <path>`.
+`agentenv list --json` or `agentenv show <name> --json`. You can also
+read the raw reference directly with `agentenv get <path>`.
 
 For example, a reference of
 `credential://company_llm?as=LLM_API_KEY` injects `LLM_API_KEY` for that use,
@@ -145,15 +145,15 @@ even when the credential definition's `inject_as` is `OPENAI_API_KEY`.
 The main query commands are:
 
 ```bash
-agent-context list --json
-agent-context list --profiles
-agent-context list <entry> --json
-agent-context show <entry> --json
-agent-context get <path>
-agent-context get <path> --json
-agent-context find <needle> --json
-agent-context find <needle> --all-profiles
-agent-context validate
+agentenv list --json
+agentenv list --profiles
+agentenv list <entry> --json
+agentenv show <entry> --json
+agentenv get <path>
+agentenv get <path> --json
+agentenv find <needle> --json
+agentenv find <needle> --all-profiles
+agentenv validate
 ```
 
 `list`, `show`, `get`, and `find` support `--profile <NAME>` and `--json`.
@@ -164,9 +164,9 @@ every profile. `get --json` emits the raw JSON value for its path.
 Credential commands are:
 
 ```bash
-agent-context credential list --json
-agent-context credential check <name>
-agent-context credential set <name>
+agentenv credential list --json
+agentenv credential check <name>
+agentenv credential set <name>
 ```
 
 `credential list` performs only a shallow status check and does not read a
@@ -206,8 +206,8 @@ inject_as = "OPENAI_API_KEY"
 Use at least one `--with` entry and place the target after `--`:
 
 ```bash
-agent-context run --with llm -- llm-client request
-agent-context run --with llm --with kubernetes -- deploy-tool sync
+agentenv run --with llm -- llm-client request
+agentenv run --with llm --with kubernetes -- deploy-tool sync
 ```
 
 Before launching the target, `run` builds and checks the complete injection
@@ -221,17 +221,17 @@ used with two different target names is resolved once and injected under both
 names. Distinct sources targeting the same environment name are an injection
 conflict: `run` reports the conflict with exit code 4, does not resolve a
 provider, and does not launch the target. Injected variables override matching
-variables inherited from the `agent-context` process; inherited variables by
+variables inherited from the `agentenv` process; inherited variables by
 themselves are never conflicts.
 
 The target receives its normal standard input, output, and error streams.
-`agent-context` does not capture or rewrite them, and the target's exit status
+`agentenv` does not capture or rewrite them, and the target's exit status
 is returned to the caller. A target that cannot be executed returns exit code
 `127`.
 
 ## Safety and threat model
 
-`agent-context` itself never prints a resolved credential to standard output or
+`agentenv` itself never prints a resolved credential to standard output or
 standard error and writes no log files. Provider-captured candidate bytes are
 also excluded from diagnostics, including when a provider exits unsuccessfully
 or returns an invalid value. Configuration diagnostics do not echo TOML source

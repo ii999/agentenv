@@ -15,12 +15,12 @@
 //!   asserts the resolution count exactly.
 //!
 //! The child environment is observed through the `test-probe` binary
-//! (`tests/fixtures/bin/probe.rs`). `run` replaces agent-context with its
+//! (`tests/fixtures/bin/probe.rs`). `run` replaces agentenv with its
 //! target, so the target itself reports what it received: with `TEST_PROBE_OUT`
 //! pointing into the test's workspace, the probe writes one `argv\t<value>`
 //! record per argument and one `env\t<NAME>=<VALUE>` record per variable. The
 //! injected sentinels therefore live in the target's own file — the target's
-//! channels are outside the SPEC-019 boundary — and never in agent-context's
+//! channels are outside the SPEC-019 boundary — and never in agentenv's
 //! output.
 //!
 //! AC-016.9's remaining row, the Windows case-variant pair, needs Windows
@@ -633,7 +633,7 @@ fn plan_args(entries: &[&str], target: &Path, target_args: &[&str]) -> Vec<Strin
     args
 }
 
-/// Invokes agent-context through the shared harness, so the per-invocation
+/// Invokes agentenv through the shared harness, so the per-invocation
 /// sentinel check of AC-019.1 covers this suite too, with `TEST_PROBE_OUT`
 /// pointing at where the target should report.
 fn run_plan(config: &Path, args: &[String], report: &Path) -> Run {

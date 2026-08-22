@@ -3,14 +3,14 @@ mod cli;
 use std::io::{self, Write};
 use std::process;
 
-use agent_context::error::AppError;
+use agentenv::error::AppError;
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
 use crate::cli::commands::{execute, Command, Invocation};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "agent-context",
+    name = "agentenv",
     version,
     about = "Inspect agent context without exposing credentials"
 )]
@@ -88,7 +88,7 @@ fn write_error(error: &AppError) -> io::Result<()> {
     match error {
         AppError::Config(violations) => {
             let env = |name: &str| std::env::var(name).ok();
-            if let Ok(path) = agent_context::config::locate::resolve_path(None, &env) {
+            if let Ok(path) = agentenv::config::locate::resolve_path(None, &env) {
                 writeln!(stderr, "configuration file: {}", path.display())?;
             }
             for violation in violations {

@@ -117,7 +117,7 @@ pub(crate) fn entry_table<'a>(profile: &'a Profile, name: &str) -> Result<&'a Ta
             &names
         };
         return Err(AppError::NotFound(format!(
-            "entry '{name}' is not defined in profile '{}'; available entries: {available}; run 'agent-context list' to see the entries",
+            "entry '{name}' is not defined in profile '{}'; available entries: {available}; run 'agentenv list' to see the entries",
             profile.name
         )));
     };
@@ -170,7 +170,7 @@ pub fn find<'a>(
 ) -> Result<Vec<Match>, AppError> {
     if needle.is_empty() {
         return Err(AppError::Usage(
-            "find requires a non-empty search string; provide a non-empty search string, or run 'agent-context list'"
+            "find requires a non-empty search string; provide a non-empty search string, or run 'agentenv list'"
                 .to_owned(),
         ));
     }

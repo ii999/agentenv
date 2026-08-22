@@ -23,12 +23,12 @@ pub(crate) struct TestStore {
 
 impl TestStore {
     pub(crate) fn from_environment() -> Option<Self> {
-        Self::from_env_value(std::env::var_os("AGENT_CONTEXT_TEST_KEYCHAIN"))
+        Self::from_env_value(std::env::var_os("AGENTENV_TEST_KEYCHAIN"))
     }
 
     fn from_env_value(value: Option<OsString>) -> Option<Self> {
         let environment = |_: &str| value.clone();
-        env_value(&environment, "AGENT_CONTEXT_TEST_KEYCHAIN")
+        env_value(&environment, "AGENTENV_TEST_KEYCHAIN")
             .map(PathBuf::from)
             .map(|path| Self { path })
     }
@@ -46,7 +46,7 @@ impl TestStore {
             .map(Some)
             .map_err(|error| {
                 AppError::Credential(format!(
-                    "test keychain item for service '{}' and account '{}' is invalid: {error}; set it again with 'agent-context credential set'",
+                    "test keychain item for service '{}' and account '{}' is invalid: {error}; set it again with 'agentenv credential set'",
                     service, account
                 ))
             })

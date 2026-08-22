@@ -3,12 +3,12 @@ use std::path::Path;
 
 use clap::{Args, Subcommand};
 
-use agent_context::config::{Config, CredentialDef, Provider};
-use agent_context::credential::{provider_for, CapturedSecret, Secret};
-use agent_context::error::AppError;
-use agent_context::path::{single_entry_name, Segments};
-use agent_context::runner::InjectionPlan;
-use agent_context::{query, render};
+use agentenv::config::{Config, CredentialDef, Provider};
+use agentenv::credential::{provider_for, CapturedSecret, Secret};
+use agentenv::error::AppError;
+use agentenv::path::{single_entry_name, Segments};
+use agentenv::runner::InjectionPlan;
+use agentenv::{query, render};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -101,7 +101,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         Command::Run(args) => {
             if invocation.json {
                 return Err(AppError::Usage(
-                    "run does not support --json; use 'agent-context run --with <entry> -- <command> [args...]'"
+                    "run does not support --json; use 'agentenv run --with <entry> -- <command> [args...]'"
                         .to_owned(),
                 ));
             }
@@ -197,7 +197,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                     },
                     value.type_str(),
                     if value.as_table().is_some() {
-                        "; use 'agent-context show <entry>' for a readable entry view"
+                        "; use 'agentenv show <entry>' for a readable entry view"
                     } else {
                         ""
                     }
@@ -259,7 +259,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             let credential = credential_for(&config, &name)?;
             if !matches!(&credential.provider, Provider::Keychain { .. }) {
                 return Err(AppError::Usage(format!(
-                    "credential '{}' uses the {} provider and is managed externally; use its provider's tooling, then run 'agent-context credential check {}'",
+                    "credential '{}' uses the {} provider and is managed externally; use its provider's tooling, then run 'agentenv credential check {}'",
                     name,
                     credential.provider.kind(),
                     name
@@ -278,7 +278,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
 fn reject_json_for_credential_action(json: bool, action: &str) -> Result<(), AppError> {
     if json {
         return Err(AppError::Usage(format!(
-            "credential {action} does not support --json; run 'agent-context credential {action} <name>'"
+            "credential {action} does not support --json; run 'agentenv credential {action} <name>'"
         )));
     }
     Ok(())
@@ -297,7 +297,7 @@ fn credential_for<'a>(config: &'a Config, name: &str) -> Result<&'a CredentialDe
             defined.join(", ")
         };
         AppError::NotFound(format!(
-            "credential '{name}' is not defined; defined credentials: {names}; run 'agent-context credential list' to inspect them"
+            "credential '{name}' is not defined; defined credentials: {names}; run 'agentenv credential list' to inspect them"
         ))
     })
 }
@@ -307,7 +307,7 @@ fn read_secret_for_set() -> Result<Secret, AppError> {
         read_terminal_secret()
             .map_err(|error| {
                 AppError::Usage(format!(
-                    "could not read the credential value: {error}; retry 'agent-context credential set <name>'"
+                    "could not read the credential value: {error}; retry 'agentenv credential set <name>'"
                 ))
             })?
             .into_bytes()
@@ -315,7 +315,7 @@ fn read_secret_for_set() -> Result<Secret, AppError> {
         let mut bytes = Vec::new();
         io::stdin().read_to_end(&mut bytes).map_err(|error| {
             AppError::Usage(format!(
-                "could not read credential input: {error}; pipe a value and retry 'agent-context credential set <name>'"
+                "could not read credential input: {error}; pipe a value and retry 'agentenv credential set <name>'"
             ))
         })?;
         bytes
@@ -325,7 +325,7 @@ fn read_secret_for_set() -> Result<Secret, AppError> {
         .into_secret()
         .map_err(|error| {
         AppError::Usage(format!(
-            "credential value is invalid: {error}; provide a non-empty UTF-8 value and retry 'agent-context credential set <name>'"
+            "credential value is invalid: {error}; provide a non-empty UTF-8 value and retry 'agentenv credential set <name>'"
         ))
     })
 }
@@ -348,8 +348,8 @@ fn select_profile<'a>(
     config: &'a Config,
     flag: Option<&str>,
     env: &impl Fn(&str) -> Option<String>,
-) -> Result<&'a agent_context::config::Profile, AppError> {
-    let env_profile = env("AGENT_CONTEXT_PROFILE");
+) -> Result<&'a agentenv::config::Profile, AppError> {
+    let env_profile = env("AGENTENV_PROFILE");
     config.select_profile(flag, env_profile.as_deref())
 }
 
@@ -365,16 +365,16 @@ fn validate_permissions(
     {
         use std::os::unix::fs::PermissionsExt;
 
-        let path = agent_context::config::locate::resolve_path(explicit_file, env)?;
+        let path = agentenv::config::locate::resolve_path(explicit_file, env)?;
         let metadata = std::fs::metadata(&path).map_err(|error| {
-            AppError::Config(vec![agent_context::error::Violation {
+            AppError::Config(vec![agentenv::error::Violation {
                 path: path.display().to_string(),
                 message: format!("cannot inspect config-file permissions: {error}"),
             }])
         })?;
         let mode = metadata.permissions().mode() & 0o777;
         if mode & !0o600 != 0 {
-            return Err(AppError::Config(vec![agent_context::error::Violation {
+            return Err(AppError::Config(vec![agentenv::error::Violation {
                 path: path.display().to_string(),
                 message: format!(
                     "config-file permissions are {mode:04o}; permissions must be a subset of 0600"

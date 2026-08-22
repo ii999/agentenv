@@ -1,6 +1,6 @@
 //! Config file location (SPEC-001).
 //!
-//! Priority: an explicit file (caller-provided), else `AGENT_CONTEXT_FILE`,
+//! Priority: an explicit file (caller-provided), else `AGENTENV_FILE`,
 //! else the platform default - `$XDG_CONFIG_HOME` when it names an absolute
 //! path, else `~/.config` on Unix, `%APPDATA%` on Windows (`XDG_CONFIG_HOME`
 //! is not consulted there). Environment values that are empty count as
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::env_value;
 use crate::error::{AppError, Violation};
 
-const CONFIG_DIR: &str = "agent-context";
+const CONFIG_DIR: &str = "agentenv";
 const CONFIG_FILE: &str = "context.toml";
 
 /// Resolves the config file path. Pure environment logic with no filesystem
@@ -24,7 +24,7 @@ pub fn resolve_path(
     if let Some(path) = explicit_file {
         return Ok(path.to_path_buf());
     }
-    if let Some(file) = env_value(env, "AGENT_CONTEXT_FILE") {
+    if let Some(file) = env_value(env, "AGENTENV_FILE") {
         return Ok(PathBuf::from(file));
     }
     default_path(env)
@@ -46,8 +46,8 @@ fn default_path(env: &impl Fn(&str) -> Option<String>) -> Result<PathBuf, AppErr
             .join(CONFIG_FILE)),
         None => Err(AppError::Config(vec![Violation {
             path: "HOME".to_owned(),
-            message: "cannot locate the config file: HOME is not set and AGENT_CONTEXT_FILE is \
-                      not set; set HOME, XDG_CONFIG_HOME, or AGENT_CONTEXT_FILE"
+            message: "cannot locate the config file: HOME is not set and AGENTENV_FILE is \
+                      not set; set HOME, XDG_CONFIG_HOME, or AGENTENV_FILE"
                 .to_owned(),
         }])),
     }
@@ -60,8 +60,8 @@ fn default_path(env: &impl Fn(&str) -> Option<String>) -> Result<PathBuf, AppErr
         Some(appdata) => Ok(Path::new(&appdata).join(CONFIG_DIR).join(CONFIG_FILE)),
         None => Err(AppError::Config(vec![Violation {
             path: "APPDATA".to_owned(),
-            message: "cannot locate the config file: APPDATA is not set and AGENT_CONTEXT_FILE \
-                      is not set; set APPDATA or AGENT_CONTEXT_FILE"
+            message: "cannot locate the config file: APPDATA is not set and AGENTENV_FILE \
+                      is not set; set APPDATA or AGENTENV_FILE"
                 .to_owned(),
         }])),
     }
@@ -86,30 +86,27 @@ mod tests {
     #[test]
     fn explicit_file_wins_over_everything() {
         // AC-001.1 (logic level).
-        let env = env_of(&[("AGENT_CONTEXT_FILE", "/tmp/other.toml")]);
+        let env = env_of(&[("AGENTENV_FILE", "/tmp/other.toml")]);
         let path = resolve_path(Some(Path::new("/tmp/x.toml")), &env).expect("explicit wins");
         assert_eq!(path, PathBuf::from("/tmp/x.toml"));
     }
 
     #[test]
-    fn agent_context_file_beats_platform_default() {
+    fn agentenv_file_beats_platform_default() {
         // AC-001.1 (logic level).
-        let env = env_of(&[
-            ("AGENT_CONTEXT_FILE", "/tmp/x.toml"),
-            ("HOME", "/home/user"),
-        ]);
+        let env = env_of(&[("AGENTENV_FILE", "/tmp/x.toml"), ("HOME", "/home/user")]);
         let path = resolve_path(None, &env).expect("the env var wins");
         assert_eq!(path, PathBuf::from("/tmp/x.toml"));
     }
 
     #[test]
-    fn empty_agent_context_file_counts_as_unset() {
+    fn empty_agentenv_file_counts_as_unset() {
         // SPEC-AS-028.
-        let env = env_of(&[("AGENT_CONTEXT_FILE", ""), ("HOME", "/home/user")]);
+        let env = env_of(&[("AGENTENV_FILE", ""), ("HOME", "/home/user")]);
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agent-context/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/context.toml")
         );
     }
 
@@ -117,7 +114,7 @@ mod tests {
     fn absolute_xdg_config_home_is_used() {
         let env = env_of(&[("XDG_CONFIG_HOME", "/xdg/base"), ("HOME", "/home/user")]);
         let path = resolve_path(None, &env).expect("XDG wins");
-        assert_eq!(path, PathBuf::from("/xdg/base/agent-context/context.toml"));
+        assert_eq!(path, PathBuf::from("/xdg/base/agentenv/context.toml"));
     }
 
     #[test]
@@ -127,7 +124,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agent-context/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/context.toml")
         );
     }
 
@@ -137,7 +134,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agent-context/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/context.toml")
         );
     }
 
@@ -147,7 +144,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agent-context/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/context.toml")
         );
     }
 
@@ -161,7 +158,7 @@ mod tests {
                 let violation = &violations[0];
                 assert_eq!(violation.path, "HOME");
                 assert!(violation.message.contains("HOME"), "{}", violation);
-                assert!(violation.message.contains("AGENT_CONTEXT_FILE"));
+                assert!(violation.message.contains("AGENTENV_FILE"));
             }
             other => panic!("expected a config error, got {other:?}"),
         }
@@ -185,7 +182,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("APPDATA is used");
         assert_eq!(
             path,
-            PathBuf::from(r"C:\Users\u\AppData\Roaming\agent-context\context.toml")
+            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\context.toml")
         );
     }
 
@@ -199,7 +196,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("APPDATA is used");
         assert_eq!(
             path,
-            PathBuf::from(r"C:\Users\u\AppData\Roaming\agent-context\context.toml")
+            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\context.toml")
         );
     }
 
