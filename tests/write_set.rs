@@ -4,6 +4,7 @@
 
 mod helpers;
 
+#[cfg(unix)]
 use std::fs;
 
 use helpers::{

@@ -99,6 +99,7 @@ mod tests {
         assert_eq!(path, PathBuf::from("/tmp/x.toml"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn empty_agentenv_file_counts_as_unset() {
         // SPEC-AS-028.
@@ -110,6 +111,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn absolute_xdg_config_home_is_used() {
         let env = env_of(&[("XDG_CONFIG_HOME", "/xdg/base"), ("HOME", "/home/user")]);
@@ -117,6 +119,7 @@ mod tests {
         assert_eq!(path, PathBuf::from("/xdg/base/agentenv/config.toml"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn relative_xdg_config_home_is_ignored() {
         // AC-001.4.
@@ -128,6 +131,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn empty_xdg_config_home_is_ignored() {
         let env = env_of(&[("XDG_CONFIG_HOME", ""), ("HOME", "/home/user")]);
@@ -138,6 +142,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn home_default_path() {
         let env = env_of(&[("HOME", "/home/user")]);
@@ -148,6 +153,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn missing_home_names_the_remedies() {
         // AC-001.3 / EDGE-014 (logic level).
@@ -164,6 +170,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn empty_home_counts_as_unset() {
         let env = env_of(&[("HOME", "")]);

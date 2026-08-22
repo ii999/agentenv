@@ -5,6 +5,7 @@ mod helpers;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
 use assert_cmd::cargo::CommandCargoExt;
 use helpers::{assert_exit, run_ac, SENTINEL_PLAIN};
 use tempfile::TempDir;

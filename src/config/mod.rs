@@ -160,6 +160,12 @@ name = "COMPANY_LLM_TOKEN"
 inject_as = "OPENAI_API_KEY"
 "#;
 
+    /// The environment variable the platform default path is derived from.
+    #[cfg(unix)]
+    const BASE_ENV: &str = "HOME";
+    #[cfg(windows)]
+    const BASE_ENV: &str = "APPDATA";
+
     fn no_env(_: &str) -> Option<String> {
         None
     }
@@ -207,15 +213,15 @@ inject_as = "OPENAI_API_KEY"
 
     #[test]
     fn load_treats_an_empty_environment_value_as_unset() {
-        // SPEC-AS-028: with no HOME and an empty AGENTENV_FILE, the
-        // base directory cannot be determined.
+        // SPEC-AS-028: with no base directory variable and an empty
+        // AGENTENV_FILE, the base directory cannot be determined.
         let env = |name: &str| match name {
             "AGENTENV_FILE" => Some(String::new()),
             _ => None,
         };
         match Config::load(None, &env) {
             Err(AppError::Config(violations)) => {
-                assert_eq!(violations[0].path, "HOME");
+                assert_eq!(violations[0].path, BASE_ENV);
             }
             other => panic!("expected a config error, got {other:?}"),
         }
@@ -337,16 +343,14 @@ inject_as = "X"
     }
 
     #[test]
+    #[cfg(unix)]
     fn load_rejects_an_unreadable_file() {
         // SPEC-001 (logic level): EACCES maps to an exit-2 config error
-        // naming the path and the error.
+        // naming the path and the error. Windows has no mode-bit equivalent
+        // that blocks reads, so the simulation is unix-only.
+        use std::os::unix::fs::PermissionsExt;
         let (_dir, path) = staged_file("config.toml", VALID_CONFIG);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
-                .expect("permissions are set");
-        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("permissions are set");
         match Config::load(Some(&path), &no_env) {
             Err(AppError::Config(violations)) => {
                 assert!(
@@ -397,7 +401,11 @@ inject_as = "X"
         // AC-001.3 (logic level) through load itself.
         match Config::load(None, &no_env) {
             Err(AppError::Config(violations)) => {
-                assert!(violations[0].message.contains("HOME"), "{}", violations[0]);
+                assert!(
+                    violations[0].message.contains(BASE_ENV),
+                    "{}",
+                    violations[0]
+                );
             }
             other => panic!("expected a config error, got {other:?}"),
         }
