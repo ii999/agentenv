@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "changeId": "002-002-config-write",
+  "name": "002-config-write",
+  "entrypoint": "architecture",
+  "tier": "light",
+  "created": "2026-08-22T08:26:24.370603+00:00",
+  "status": "active",
+  "artifactOrder": [
+    "prd",
+    "architecture",
+    "spec",
+    "spec-review",
+    "plan",
+    "tasks",
+    "validation"
+  ],
+  "localOnly": true,
+  "git": {
+    "branch": "sdd/002-config-write",
+    "baseBranch": "main",
+    "baseCommit": "8bfc93e2656686d0a0cfbec9af154e0d67d1e8b5",
+    "policy": "ask",
+    "merged": false,
+    "dirtyBaseline": null
+  }
+}
