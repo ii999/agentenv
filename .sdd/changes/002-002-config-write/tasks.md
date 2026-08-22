@@ -122,7 +122,7 @@ Checkpoint: all four commands work end to end; README documents them; full `carg
 
 ### Group 3: Validation
 
-- [ ] T900 [Validation] Run acceptance validation and update validation report
+- [x] T900 [Validation] Run acceptance validation and update validation report
   - Files: `.sdd/changes/002-002-config-write/validation.md`
   - Depends on: all implementation tasks
   - Spec refs: all
