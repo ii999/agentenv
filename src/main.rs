@@ -6,7 +6,7 @@ use std::process;
 use agentenv::error::AppError;
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
-use crate::cli::commands::{execute, Command, Invocation};
+use crate::cli::{execute, Command, Invocation};
 
 #[derive(Debug, Parser)]
 #[command(

@@ -3,7 +3,7 @@
 use serde_json::{json, Map, Value as JsonValue};
 use toml::Value;
 
-use crate::query::{
+use super::{
     json_value, scalar_text, CredentialView, EntryView, Field, FieldValue, Listing, Match,
     MatchKind, ProfileListing,
 };

@@ -4,6 +4,8 @@
 //! Credential references are represented by their stored URI and a shallow
 //! summary; none of the view variants can contain a resolved secret.
 
+pub mod render;
+
 use serde_json::{Map, Number, Value as JsonValue};
 use toml::{Table, Value};
 
