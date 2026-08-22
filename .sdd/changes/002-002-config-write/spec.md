@@ -201,6 +201,12 @@ Verification:
 | AC-005.1..5 | SPEC-005 | Phase 3 | cargo test (integration) | Draft |
 | AC-006.1..2 | SPEC-006 | Phases 1–3 | cargo test (sentinel checks) | Draft |
 
+## Verification
+
+- Automated: `cargo test` — pipeline unit tests (`config::write`) plus the four integration suites (`write_set`, `write_unset`, `write_init`, `write_credential_add`), including sentinel leak checks on every invocation via the shared harness.
+- Static: `cargo clippy --all-targets`, `cargo fmt --check`.
+- Code review: EDGE-012 (read-only/full filesystem) and the Windows rename-replace posture are verified by review, consistent with v1.
+
 ## Implementation Notes
 
 - Exit statuses reuse the v1 mapping: 1 usage, 2 configuration/validation/write-I/O, 3 unknown profile/entry/path/name. No new statuses.
