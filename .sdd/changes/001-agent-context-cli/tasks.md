@@ -128,7 +128,7 @@ Checkpoint: Phase 2 acceptance passes — `credential check` reports per-provide
   - Verification: `cargo test --features test-keychain --all-targets && cargo clippy --all-targets -- -D warnings && cargo fmt --check` — expected: ALL suites green including previously red `security_p3`; AC-017.1 byte assertions and AC-017.3 signal(15) pass on macOS
   - Report: `.sdd/changes/001-agent-context-cli/reports/task-T007-report.md`
 
-- [ ] T008 [Phase 3] README per SPEC-022
+- [x] T008 [Phase 3] README per SPEC-022
   - Files: `README.md`
   - Depends on: T007 (documents the final surface)
   - Spec refs: SPEC-022

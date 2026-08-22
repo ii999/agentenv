@@ -10,3 +10,5 @@
 - 2026-08-22 T006: impact delta: The `run_ac` seed was re-verified before writing any code with the generating
 - 2026-08-22 T007: DONE (report: task-T007-report.md)
 - 2026-08-22 T007: impact delta: InjectionPlan: the brief's zero-call-site seed is expected because this task
+- 2026-08-22 T008: DONE (report: task-T008-report.md)
+- 2026-08-22 T008: impact delta: No impact seeds or source call sites apply to this documentation-only task.

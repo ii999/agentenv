@@ -1,0 +1,281 @@
+# agent-context
+
+`agent-context` is a local-first command-line interface for browsing a user's
+environment configuration and using credentials without printing them. It
+reads a TOML file, exposes ordinary values as text or JSON, and can launch a
+target process with selected configuration and credential values in a
+temporary environment.
+
+The configuration file contains ordinary values and references to credentials.
+Credential values live in an environment variable, a platform credential
+store, or an external password-manager command. `agent-context` does not write
+credentials back to the TOML file.
+
+## Configuration
+
+By default, the configuration file is:
+
+- Unix-like systems: `$XDG_CONFIG_HOME/agent-context/context.toml`, or
+  `~/.config/agent-context/context.toml` when `XDG_CONFIG_HOME` is unset.
+- Windows: `%APPDATA%\agent-context\context.toml`.
+
+Set `AGENT_CONTEXT_FILE` to use another file. On Unix-like systems, the file's
+permission bits must be a subset of `0600`; run `agent-context validate` after
+creating or changing the file.
+
+Profile selection uses this precedence:
+
+1. `--profile <NAME>`
+2. `AGENT_CONTEXT_PROFILE`
+3. `default_profile` in the file
+
+The schema is open for fields under profile entries. Each profile and each
+entry needs a non-empty `description`. The reserved `inject` table maps target
+environment-variable names to scalar field paths in the same entry.
+
+### Example
+
+```toml
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Day-to-day development environment for company projects."
+
+[profiles.work.llm]
+description = "Default LLM for company projects."
+endpoint = "https://llm.example.com/v1"
+model = "company-model"
+credential = "credential://company_llm"
+
+[profiles.work.llm.inject]
+OPENAI_BASE_URL = "endpoint"
+OPENAI_MODEL = "model"
+
+[profiles.work.ci]
+description = "Labels used when submitting CI jobs for company projects."
+tags = ["linux", "self-hosted"]
+
+[profiles.work.kubernetes]
+description = "Kubernetes staging environment used during development."
+context = "company-staging"
+namespace = "developer-tools"
+
+[profiles.personal]
+description = "Environment for personal projects."
+
+[profiles.personal.llm]
+description = "Default public LLM for personal projects."
+endpoint = "https://api.openai.com/v1"
+model = "gpt-5"
+credential = "credential://openai_personal"
+
+[credentials.company_llm]
+description = "Access credential for the company LLM."
+provider = "env"
+name = "COMPANY_LLM_TOKEN"
+inject_as = "OPENAI_API_KEY"
+
+[credentials.openai_personal]
+description = "Access credential for the personal OpenAI account."
+provider = "keychain"
+service = "agent-context"
+account = "openai-personal"
+inject_as = "OPENAI_API_KEY"
+```
+
+Credential references have one of these forms:
+
+```text
+credential://<name>
+credential://<name>?as=<ENV>
+```
+
+`<name>` uses letters, digits, `_`, and `-`; `<ENV>` must be a valid
+environment-variable name. A `?as=` value overrides the credential's default
+`inject_as` only for that reference. Ordinary reads return the reference, not
+the credential value.
+
+Entry paths use dot-separated segments, with double quotes for a segment that
+contains punctuation or spaces. A profile name is selected with `--profile`
+and is not part of the path. Arrays are read as whole values with `get --json`.
+
+## Agent usage protocol
+
+Projects can place this block in `AGENTS.md`:
+
+```md
+User environment information is available through `agent-context`.
+
+- Run `agent-context list --json` to discover available configuration.
+- Run `agent-context show <name> --json` before using an unfamiliar entry.
+- Use `agent-context get <path>` to retrieve ordinary values.
+- Use `agent-context run --with <entry> -- <command>` when credentials are required.
+- Never print, log, persist, or summarize resolved credentials.
+- Report missing configuration or credentials explicitly.
+```
+
+Use the commands in this order:
+
+1. Discover available profiles and entries with `agent-context list --json`.
+2. Inspect an unfamiliar entry with `agent-context show <name> --json`.
+3. Read an ordinary scalar with `agent-context get <path>`; use `--json` for
+   an array or table.
+4. When a target needs credentials, use
+   `agent-context run --with <entry> -- <command> [args...]`.
+
+If the requested profile, entry, field, or credential is missing, report that
+fact explicitly. Do not guess a field name, silently switch profiles, or
+substitute another credential.
+
+### Finding injection target names
+
+Use `agent-context credential list --json` to see each credential's default
+environment target in its `inject_as` member. For an entry that contains a
+credential reference, inspect the `reference` member of its JSON output from
+`agent-context list --json` or `agent-context show <name> --json`. You can also
+read the raw reference directly with `agent-context get <path>`.
+
+For example, a reference of
+`credential://company_llm?as=LLM_API_KEY` injects `LLM_API_KEY` for that use,
+even when the credential definition's `inject_as` is `OPENAI_API_KEY`.
+
+## CLI reference
+
+The main query commands are:
+
+```bash
+agent-context list --json
+agent-context list --profiles
+agent-context list <entry> --json
+agent-context show <entry> --json
+agent-context get <path>
+agent-context get <path> --json
+agent-context find <needle> --json
+agent-context find <needle> --all-profiles
+agent-context validate
+```
+
+`list`, `show`, `get`, and `find` support `--profile <NAME>` and `--json`.
+`list --profiles` lists profiles without selecting one. `find` searches entry
+names, field names, descriptions, and string values; `--all-profiles` searches
+every profile. `get --json` emits the raw JSON value for its path.
+
+Credential commands are:
+
+```bash
+agent-context credential list --json
+agent-context credential check <name>
+agent-context credential set <name>
+```
+
+`credential list` performs only a shallow status check and does not read a
+secret store or execute a provider command. `credential check` resolves one
+credential and reports availability without printing its value. `credential
+set` accepts a keychain credential from a hidden terminal prompt or standard
+input. Environment and command credentials are managed by their external
+systems and cannot be set by this command.
+
+## Providers
+
+Prefer `keychain` or `command` for local development:
+
+- `keychain` uses the platform credential store: Keychain on macOS, Credential
+  Manager on Windows, and a secret-service implementation such as GNOME
+  Keyring or KWallet on Linux.
+- `command` executes `argv` directly through the operating system, without a
+  shell. Its standard output supplies the credential; the provider strips one
+  trailing newline. Standard input and standard error remain available to the
+  external command for interactive authentication.
+- `env` is useful for CI and already-managed shells. Its value is readable by
+  any process that inherits the environment, including an agent process, so it
+  is a weaker choice for local use.
+
+For example, a command provider can delegate to an existing password manager:
+
+```toml
+[credentials.production_llm]
+description = "Production LLM credential."
+provider = "command"
+argv = ["op", "read", "op://Engineering/Production LLM/token"]
+inject_as = "OPENAI_API_KEY"
+```
+
+## Running with injected values
+
+Use at least one `--with` entry and place the target after `--`:
+
+```bash
+agent-context run --with llm -- llm-client request
+agent-context run --with llm --with kubernetes -- deploy-tool sync
+```
+
+Before launching the target, `run` builds and checks the complete injection
+plan. It collects credential references and values declared by the entry's
+`inject` table. Credential references use `inject_as` or their `?as=` override;
+`inject` values are converted from strings, integers, floats, or booleans to
+environment strings.
+
+Repeated identical credential-and-target pairs are deduplicated. A credential
+used with two different target names is resolved once and injected under both
+names. Distinct sources targeting the same environment name are an injection
+conflict: `run` reports the conflict with exit code 4, does not resolve a
+provider, and does not launch the target. Injected variables override matching
+variables inherited from the `agent-context` process; inherited variables by
+themselves are never conflicts.
+
+The target receives its normal standard input, output, and error streams.
+`agent-context` does not capture or rewrite them, and the target's exit status
+is returned to the caller. A target that cannot be executed returns exit code
+`127`.
+
+## Safety and threat model
+
+`agent-context` itself never prints a resolved credential to standard output or
+standard error and writes no log files. Provider-captured candidate bytes are
+also excluded from diagnostics, including when a provider exits unsuccessfully
+or returns an invalid value. Configuration diagnostics do not echo TOML source
+lines or open-schema field values; command-provider diagnostics identify only
+`argv[0]`.
+
+This protects against accidental leaks from the CLI. It does not defend
+against a malicious local process. The launched `run` target can read the
+credentials intentionally placed in its own environment. The target's
+standard output and error are external-process output and pass through
+unchanged; they are outside the CLI's no-secret invariant. A `command`
+provider's inherited standard input and standard error are also owned by that
+external command and outside the invariant.
+
+`credential set` is the deliberate exception: it writes the entered value to
+the selected platform credential store. No other command prints or persists
+that value.
+
+### Sensitive-field guardrail
+
+Validation checks string fields whose names are exactly `token`, `password`,
+`secret`, `api_key`, or `private_key`, or end in one of those suffixes. Such a
+field must contain a `credential://` reference. The check covers matching
+field names in nested profile data, including tables inside arrays; it does
+not inspect every string for secret-like contents. It is a guardrail against
+common plaintext credential fields, not a secret scanner. The reserved
+`inject` table is excluded because its keys are environment-variable targets.
+
+## Exit statuses
+
+Commands use these statuses:
+
+| Status | Meaning |
+| ---: | --- |
+| `0` | Success |
+| `1` | Usage or argument error |
+| `2` | Configuration-file error, including validation or Unix permission failure |
+| `3` | Unknown profile, entry, field path, or credential name |
+| `4` | Credential resolution/store failure or injection conflict |
+| `127` | `run` target could not be executed |
+
+## Windows support
+
+Windows behavior is specified and code-reviewed, but not machine-verified in
+v1. The documented behavior uses `%APPDATA%` for the default configuration
+path, Windows Credential Manager for `keychain`, case-insensitive environment
+variable conflict checks, and a shared console when `run` waits for the target.
