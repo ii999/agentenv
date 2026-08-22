@@ -11,7 +11,7 @@ use agent_context::runner::InjectionPlan;
 use agent_context::{query, render};
 
 #[derive(Debug, Subcommand)]
-pub enum QueryCommand {
+pub enum Command {
     /// Run a command with the selected entries' injected environment.
     Run(RunArgs),
     /// List entries in the active profile.
@@ -74,7 +74,7 @@ pub enum CredentialCommand {
 pub struct Invocation {
     pub profile: Option<String>,
     pub json: bool,
-    pub command: QueryCommand,
+    pub command: Command,
 }
 
 pub struct Output {
@@ -84,7 +84,7 @@ pub struct Output {
 
 pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     let env = |name: &str| std::env::var(name).ok();
-    if matches!(&invocation.command, QueryCommand::Validate) {
+    if matches!(&invocation.command, Command::Validate) {
         if invocation.json {
             return Err(AppError::Usage(
                 "validate does not support --json".to_owned(),
@@ -97,8 +97,8 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     }
     let config = Config::load(None, &env)?;
     match invocation.command {
-        QueryCommand::Validate => unreachable!("validate returns before loading the configuration"),
-        QueryCommand::Run(args) => {
+        Command::Validate => unreachable!("validate returns before loading the configuration"),
+        Command::Run(args) => {
             if invocation.json {
                 return Err(AppError::Usage(
                     "run does not support --json; use 'agent-context run --with <entry> -- <command> [args...]'"
@@ -112,7 +112,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 Err(error) => Err(error),
             }
         }
-        QueryCommand::List(args) if args.profiles => {
+        Command::List(args) if args.profiles => {
             if args.entry.is_some() {
                 return Err(AppError::Usage(
                     "list accepts either --profiles or an entry name".to_owned(),
@@ -129,7 +129,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 stderr: String::new(),
             })
         }
-        QueryCommand::List(args) => {
+        Command::List(args) => {
             let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
             if let Some(entry_argument) = args.entry {
                 let entry_name = single_entry_name(&entry_argument)?;
@@ -156,7 +156,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 })
             }
         }
-        QueryCommand::Show {
+        Command::Show {
             entry: entry_argument,
         } => {
             let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
@@ -172,7 +172,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 stderr: String::new(),
             })
         }
-        QueryCommand::Get { path } => {
+        Command::Get { path } => {
             let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
             let path = Segments::parse(&path)?;
             let value = query::get(profile, &path)?;
@@ -204,7 +204,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 )))
             }
         }
-        QueryCommand::Find(args) => {
+        Command::Find(args) => {
             let selected = if args.all_profiles {
                 config.profiles.iter().collect::<Vec<_>>()
             } else {
@@ -227,7 +227,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             };
             Ok(Output { stdout, stderr })
         }
-        QueryCommand::Credential(CredentialArgs {
+        Command::Credential(CredentialArgs {
             command: CredentialCommand::List,
         }) => {
             let credentials = query::credentials(&config, &env);
@@ -241,7 +241,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 stderr: String::new(),
             })
         }
-        QueryCommand::Credential(CredentialArgs {
+        Command::Credential(CredentialArgs {
             command: CredentialCommand::Check { name },
         }) => {
             reject_json_for_credential_action(invocation.json, "check")?;
@@ -252,7 +252,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 stderr: String::new(),
             })
         }
-        QueryCommand::Credential(CredentialArgs {
+        Command::Credential(CredentialArgs {
             command: CredentialCommand::Set { name },
         }) => {
             reject_json_for_credential_action(invocation.json, "set")?;

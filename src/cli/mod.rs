@@ -1,3 +1,3 @@
-//! CLI command definitions and read-only command dispatch.
+//! CLI command definitions and dispatch.
 
-pub mod query_cmds;
+pub mod commands;

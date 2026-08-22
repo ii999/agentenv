@@ -6,7 +6,7 @@ use std::process;
 use agent_context::error::AppError;
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
-use crate::cli::query_cmds::{execute, Invocation, QueryCommand};
+use crate::cli::commands::{execute, Command, Invocation};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -22,7 +22,7 @@ struct Cli {
     json: bool,
 
     #[command(subcommand)]
-    command: Option<QueryCommand>,
+    command: Option<Command>,
 }
 
 fn main() {
