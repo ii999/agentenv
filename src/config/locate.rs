@@ -12,7 +12,7 @@ use super::env_value;
 use crate::error::{AppError, Violation};
 
 const CONFIG_DIR: &str = "agentenv";
-const CONFIG_FILE: &str = "context.toml";
+const CONFIG_FILE: &str = "config.toml";
 
 /// Resolves the config file path. Pure environment logic with no filesystem
 /// access, so callers (such as the CLI, to name the file in diagnostics) can
@@ -106,7 +106,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agentenv/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/config.toml")
         );
     }
 
@@ -114,7 +114,7 @@ mod tests {
     fn absolute_xdg_config_home_is_used() {
         let env = env_of(&[("XDG_CONFIG_HOME", "/xdg/base"), ("HOME", "/home/user")]);
         let path = resolve_path(None, &env).expect("XDG wins");
-        assert_eq!(path, PathBuf::from("/xdg/base/agentenv/context.toml"));
+        assert_eq!(path, PathBuf::from("/xdg/base/agentenv/config.toml"));
     }
 
     #[test]
@@ -124,7 +124,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agentenv/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/config.toml")
         );
     }
 
@@ -134,7 +134,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agentenv/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/config.toml")
         );
     }
 
@@ -144,7 +144,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("HOME is used");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/agentenv/context.toml")
+            PathBuf::from("/home/user/.config/agentenv/config.toml")
         );
     }
 
@@ -182,7 +182,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("APPDATA is used");
         assert_eq!(
             path,
-            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\context.toml")
+            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\config.toml")
         );
     }
 
@@ -196,7 +196,7 @@ mod tests {
         let path = resolve_path(None, &env).expect("APPDATA is used");
         assert_eq!(
             path,
-            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\context.toml")
+            PathBuf::from(r"C:\Users\u\AppData\Roaming\agentenv\config.toml")
         );
     }
 

@@ -402,7 +402,7 @@ impl ConfigFile {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = TempDir::new().expect("a temp directory is available");
-        let path = directory.path().join("context.toml");
+        let path = directory.path().join("config.toml");
         fs::write(&path, contents).expect("the credential config is written");
         #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))

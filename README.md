@@ -15,9 +15,9 @@ credentials back to the TOML file.
 
 By default, the configuration file is:
 
-- Unix-like systems: `$XDG_CONFIG_HOME/agentenv/context.toml`, or
-  `~/.config/agentenv/context.toml` when `XDG_CONFIG_HOME` is unset.
-- Windows: `%APPDATA%\agentenv\context.toml`.
+- Unix-like systems: `$XDG_CONFIG_HOME/agentenv/config.toml`, or
+  `~/.config/agentenv/config.toml` when `XDG_CONFIG_HOME` is unset.
+- Windows: `%APPDATA%\agentenv\config.toml`.
 
 Set `AGENTENV_FILE` to use another file. On Unix-like systems, the file's
 permission bits must be a subset of `0600`; run `agentenv validate` after

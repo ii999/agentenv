@@ -195,7 +195,7 @@ impl Workspace {
     }
 
     fn stage_config(&self, content: &str) -> PathBuf {
-        let path = self.path("context.toml");
+        let path = self.path("config.toml");
         fs::write(&path, content).expect("the test config is written");
         restrict_permissions(&path);
         path

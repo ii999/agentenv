@@ -172,7 +172,7 @@ inject_as = "OPENAI_API_KEY"
 
     #[test]
     fn load_builds_the_model_from_a_valid_file() {
-        let (_dir, path) = staged_file("context.toml", VALID_CONFIG);
+        let (_dir, path) = staged_file("config.toml", VALID_CONFIG);
         let config = Config::load(Some(&path), &no_env).expect("the valid config loads");
         assert_eq!(config.version, 1);
         assert_eq!(config.default_profile.as_deref(), Some("work"));
@@ -194,7 +194,7 @@ inject_as = "OPENAI_API_KEY"
     #[test]
     fn load_reads_the_file_via_the_environment() {
         // AC-001.1 (logic level): AGENTENV_FILE is honored.
-        let (_dir, path) = staged_file("context.toml", VALID_CONFIG);
+        let (_dir, path) = staged_file("config.toml", VALID_CONFIG);
         let path_text = path.display().to_string();
         let env = move |name: &str| match name {
             "AGENTENV_FILE" => Some(path_text.clone()),
@@ -264,7 +264,7 @@ inject_as = "OPENAI_API_KEY"
         let text = format!(
             "version = 1\n\n[profiles.work]\ndescription = \"d\"\n\n[profiles.work.llm]\ndescription = \"d\"\napi_key = {sentinel}\n"
         );
-        let (_dir, path) = staged_file("context.toml", &text);
+        let (_dir, path) = staged_file("config.toml", &text);
         match Config::load(Some(&path), &no_env) {
             Err(AppError::Config(violations)) => {
                 assert_eq!(violations.len(), 1);
@@ -304,7 +304,7 @@ provider = "vault"
 name = "X"
 inject_as = "X"
 "#;
-        let (_dir, path) = staged_file("context.toml", text);
+        let (_dir, path) = staged_file("config.toml", text);
         match Config::load(Some(&path), &no_env) {
             Err(AppError::Config(violations)) => {
                 let paths: Vec<&str> = violations.iter().map(|v| v.path.as_str()).collect();
@@ -326,7 +326,7 @@ inject_as = "X"
     #[test]
     fn load_empty_file_reports_missing_version() {
         // EDGE-003 (logic level).
-        let (_dir, path) = staged_file("context.toml", "");
+        let (_dir, path) = staged_file("config.toml", "");
         match Config::load(Some(&path), &no_env) {
             Err(AppError::Config(violations)) => {
                 assert_eq!(violations[0].path, "version");
@@ -339,7 +339,7 @@ inject_as = "X"
     fn load_rejects_an_unreadable_file() {
         // SPEC-001 (logic level): EACCES maps to an exit-2 config error
         // naming the path and the error.
-        let (_dir, path) = staged_file("context.toml", VALID_CONFIG);
+        let (_dir, path) = staged_file("config.toml", VALID_CONFIG);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -361,7 +361,7 @@ inject_as = "X"
     #[test]
     fn load_accepts_a_config_without_profiles_or_credentials() {
         // EDGE-016 (logic level): absent tables are valid.
-        let (_dir, path) = staged_file("context.toml", "version = 1\n");
+        let (_dir, path) = staged_file("config.toml", "version = 1\n");
         let config = Config::load(Some(&path), &no_env).expect("a bare version loads");
         assert!(config.profiles.is_empty());
         assert!(config.credentials.is_empty());

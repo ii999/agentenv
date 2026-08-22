@@ -734,7 +734,7 @@ impl Workspace {
     /// Stages the config at mode 0600, which the Unix permission gate requires
     /// of any config that should load cleanly.
     fn stage_config(&self, contents: &str) -> PathBuf {
-        let path = self.path("context.toml");
+        let path = self.path("config.toml");
         fs::write(&path, contents).expect("the injection config is written");
         set_mode(&path, 0o600);
         path
