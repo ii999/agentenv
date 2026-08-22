@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-version:
+    name: Check tag against crate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          crate_version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "agentenv") | .version')
+          tag_version=${GITHUB_REF_NAME#v}
+          if [ "$crate_version" != "$tag_version" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${crate_version}" >&2
+            exit 1
+          fi
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: check-version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --bin agentenv --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          staging="agentenv-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir "$staging"
+          bin=agentenv
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            bin=agentenv.exe
+          fi
+          cp "target/${{ matrix.target }}/release/${bin}" README.md "$staging/"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            7z a "${staging}.zip" "$staging"
+          else
+            tar czf "${staging}.tar.gz" "$staging"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentenv-${{ matrix.target }}
+          path: |
+            agentenv-*.tar.gz
+            agentenv-*.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum -- * > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

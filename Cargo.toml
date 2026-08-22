@@ -24,6 +24,10 @@ toml_edit = "0.25"
 name = "test-probe"
 path = "tests/fixtures/bin/probe.rs"
 
+[profile.release]
+strip = true
+lto = "thin"
+
 [features]
 test-keychain = []
 
