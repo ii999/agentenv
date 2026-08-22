@@ -1,0 +1,10 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Day-to-day development environment for company projects."
+
+[profiles.work.llm]
+description = "Default LLM for company projects."
+endpoint = "https://llm.example.com/v1"
+api_key = "sk-sentinel-a1-9f3k7q"

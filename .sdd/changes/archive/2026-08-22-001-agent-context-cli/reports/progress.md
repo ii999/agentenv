@@ -1,0 +1,15 @@
+- 2026-08-22 T001: DONE (report: task-T001-report.md)
+- 2026-08-22 T002: DONE (report: task-T002-report.md)
+- 2026-08-22 T002: impact delta: None. The Impact Map declared no seeds, and no existing call site was found or
+- 2026-08-22 T003: DONE (report: task-T003-report.md)
+- 2026-08-22 T003: impact delta: Impact-seed re-verification with `git grep -n -F -- ':(exclude).sdd/'`
+- 2026-08-22 T004: DONE (report: task-T004-report.md)
+- 2026-08-22 T005: DONE (report: task-T005-report.md)
+- 2026-08-22 T005: impact delta: `shallow_status` moved from `src/shallow.rs` to `src/credential/shallow.rs`; its call site is now `src/query.rs`, with no observable Phase-1 behavior change. `run_ac` remained read-only; `run_with_input` now applies the same sentinel and environment rules locally. `AppError::Credential` is used by provider resolution and store failures. The credential CLI actions remain in `src/cli/query_cmds.rs`, which differs from the task-text path suggestion but matches the existing command-dispatch structure.
+- 2026-08-22 T006: DONE (report: task-T006-report.md)
+- 2026-08-22 T006: impact delta: The `run_ac` seed was re-verified before writing any code with the generating
+- 2026-08-22 T007: DONE (report: task-T007-report.md)
+- 2026-08-22 T007: impact delta: InjectionPlan: the brief's zero-call-site seed is expected because this task
+- 2026-08-22 T008: DONE (report: task-T008-report.md)
+- 2026-08-22 T008: impact delta: No impact seeds or source call sites apply to this documentation-only task.
+- 2026-08-22 T900: DONE (report: task-T900-report.md)

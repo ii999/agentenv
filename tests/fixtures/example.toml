@@ -1,0 +1,46 @@
+version = 1
+default_profile = "work"
+
+[profiles.work]
+description = "Day-to-day development environment for company projects."
+
+[profiles.work.llm]
+description = "Default LLM for company projects."
+endpoint = "https://llm.example.com/v1"
+model = "company-model"
+credential = "credential://company_llm"
+
+[profiles.work.llm.inject]
+OPENAI_BASE_URL = "endpoint"
+OPENAI_MODEL = "model"
+
+[profiles.work.ci]
+description = "Labels used when submitting CI jobs for company projects."
+tags = ["linux", "self-hosted"]
+
+[profiles.work.kubernetes]
+description = "Kubernetes staging environment used during development."
+context = "company-staging"
+namespace = "developer-tools"
+
+[profiles.personal]
+description = "Environment for personal projects."
+
+[profiles.personal.llm]
+description = "Default public LLM for personal projects."
+endpoint = "https://api.openai.com/v1"
+model = "gpt-5"
+credential = "credential://openai_personal"
+
+[credentials.company_llm]
+description = "Access credential for the company LLM."
+provider = "env"
+name = "COMPANY_LLM_TOKEN"
+inject_as = "OPENAI_API_KEY"
+
+[credentials.openai_personal]
+description = "Access credential for the personal OpenAI account."
+provider = "keychain"
+service = "agent-context"
+account = "openai-personal"
+inject_as = "OPENAI_API_KEY"

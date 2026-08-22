@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "artifactRoot": ".sdd",
+  "language": "en",
+  "workflow": "my-sdd-loop",
+  "useGithubIssues": false,
+  "useGithubPullRequests": false,
+  "implementationPolicy": {
+    "defaultTdd": "necessary-only",
+    "primaryGate": "spec acceptance criteria",
+    "parallelAgents": "only for independent files, independent subsystems, or independent research"
+  },
+  "git": {
+    "policy": "ask",
+    "branchPrefix": "sdd",
+    "commitGranularity": "tier-default",
+    "protectedBranches": ["main", "master"],
+    "handoffRoots": [".codex/handoffs", ".claude/handoffs", ".copilot/handoffs"]
+  },
+  "artifactOrder": [
+    "prd",
+    "architecture",
+    "spec",
+    "spec-review",
+    "plan",
+    "tasks",
+    "validation",
+    "archive"
+  ]
+}
