@@ -103,7 +103,14 @@ and is not part of the path. Arrays are read as whole values with `get --json`.
 
 ## Agent usage protocol
 
-Projects can place this block in `AGENTS.md`:
+A full agent skill ships in `skills/agentenv/`. For agent runtimes that load
+skills (such as Claude Code), copy the directory to `~/.claude/skills/agentenv/`
+for all projects or `.claude/skills/agentenv/` inside one project; the skill
+covers discovery, reading, credential-injected runs, writes, and the
+no-secret rules in one document.
+
+For runtimes without skill support, projects can place this block in
+`AGENTS.md`:
 
 ```md
 User environment information is available through `agentenv`.
