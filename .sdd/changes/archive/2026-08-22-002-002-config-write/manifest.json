@@ -5,7 +5,7 @@
   "entrypoint": "architecture",
   "tier": "light",
   "created": "2026-08-22T08:26:24.370603+00:00",
-  "status": "active",
+  "status": "archived",
   "artifactOrder": [
     "prd",
     "architecture",
@@ -22,6 +22,8 @@
     "baseCommit": "8bfc93e2656686d0a0cfbec9af154e0d67d1e8b5",
     "policy": "ask",
     "merged": false,
-    "dirtyBaseline": null
-  }
+    "dirtyBaseline": null,
+    "branchRetained": true
+  },
+  "archived": "2026-08-22T09:36:02.806581+00:00"
 }
