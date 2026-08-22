@@ -145,7 +145,7 @@ Checkpoint: Phase 3 acceptance passes — `run --with llm -- <probe>` injects ex
 
 ### Group 5: Validation
 
-- [ ] T900 [Validation] Run acceptance validation and update validation report
+- [x] T900 [Validation] Run acceptance validation and update validation report
   - Files: `.sdd/changes/001-agent-context-cli/validation.md`
   - Depends on: T001–T008
   - Spec refs: all

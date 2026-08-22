@@ -1,4 +1,9 @@
 //! Integration coverage for Phase-2 credential resolution and storage.
+//!
+//! The whole suite requires the `test-keychain` feature: without it the
+//! binary's keychain provider reaches the user's real credential store, so
+//! these tests must not run at all in an unfeatured build.
+#![cfg(feature = "test-keychain")]
 
 mod helpers;
 
