@@ -154,7 +154,6 @@ fn is_executable(path: &Path, _metadata: &std::fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     use tempfile::TempDir;
@@ -231,11 +230,27 @@ mod tests {
         );
     }
 
+    /// A file the platform's executability rule classifies as requested:
+    /// permission bits on unix, an `.exe` extension on Windows.
+    #[cfg(unix)]
     fn executable_file(dir: &TempDir, name: &str, executable: bool) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
         let path = dir.path().join(name);
         fs::write(&path, "#!/bin/sh\nexit 0\n").expect("the file is written");
         let mode = if executable { 0o755 } else { 0o644 };
         fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("permissions are set");
+        path
+    }
+
+    #[cfg(windows)]
+    fn executable_file(dir: &TempDir, name: &str, executable: bool) -> PathBuf {
+        let file_name = if executable {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        };
+        let path = dir.path().join(file_name);
+        fs::write(&path, "exit 0\n").expect("the file is written");
         path
     }
 
@@ -345,7 +360,12 @@ mod tests {
         let empty = TempDir::new().expect("another temp dir");
         executable_file(&dir, "probe-cmd", true);
         let credential = command_credential(&["probe-cmd"]);
-        let path_value = format!("{}:{}", empty.path().display(), dir.path().display());
+        let path_value = format!(
+            "{}{}{}",
+            empty.path().display(),
+            super::path_separator(),
+            dir.path().display()
+        );
         assert_eq!(
             shallow_status(&credential, &env_of(&[("PATH", &path_value)])),
             Status::Configured
