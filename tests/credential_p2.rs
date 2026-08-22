@@ -22,6 +22,7 @@ use helpers::{assert_exit, assert_mentions, assert_omits, run_ac, Run, SENTINELS
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tempfile::TempDir;
 
+#[cfg(unix)]
 const COMMAND_SENTINEL: &str = "credential-p2-command-sentinel-7x4m";
 
 #[test]
@@ -53,6 +54,10 @@ fn check_reports_env_and_missing_keychain_without_exposing_values() {
     assert_mentions(&keychain_missing, "openai-personal", "the account is named");
 }
 
+// The command-provider fixtures are /bin/sh scripts, so these two tests are
+// unix-only; the provider itself spawns processes through the portable
+// std::process::Command path.
+#[cfg(unix)]
 #[test]
 fn command_provider_captures_stdout_without_shell_expansion_or_output_leaks() {
     let directory = TempDir::new().expect("a temp directory is available");
@@ -86,6 +91,7 @@ fn command_provider_captures_stdout_without_shell_expansion_or_output_leaks() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn command_provider_failures_redact_captured_candidate_bytes() {
     let directory = TempDir::new().expect("a temp directory is available");
@@ -365,6 +371,7 @@ inject_as = "OPENAI_API_KEY"
     .to_owned()
 }
 
+#[cfg(unix)]
 fn command_config(script: &Path, arguments: &[&str]) -> String {
     let mut argv = vec![toml_string(script.to_str().expect("test paths are UTF-8"))];
     argv.extend(arguments.iter().map(|argument| toml_string(argument)));
@@ -378,13 +385,12 @@ fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("test strings serialize")
 }
 
+#[cfg(unix)]
 fn executable_script(directory: &TempDir, name: &str, contents: &str) -> PathBuf {
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     let path = directory.path().join(name);
     fs::write(&path, contents).expect("the provider fixture is written");
-    #[cfg(unix)]
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
         .expect("the provider fixture is executable");
     path
