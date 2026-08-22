@@ -7,9 +7,8 @@ together with the agentenv agent skill.
 .DESCRIPTION
 Downloads the x86_64 Windows archive for the requested release, verifies its
 SHA-256 checksum, installs agentenv.exe into the install directory, and
-installs the agent skill to ~\.agents\skills. Downloads use the GitHub CLI
-when it is installed and signed in, which is required while the repository
-is private; otherwise they use plain HTTPS.
+installs the agent skill to ~\.agents\skills. Downloads use plain HTTPS
+from GitHub Releases.
 
 .PARAMETER Version
 Release tag to install, e.g. v0.1.1. Defaults to AGENTENV_VERSION or the
@@ -44,26 +43,12 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
     throw "No prebuilt binary for Windows $env:PROCESSOR_ARCHITECTURE; build from source with 'cargo build --release'."
 }
 
-$useGh = $false
-if (Get-Command gh -ErrorAction SilentlyContinue) {
-    gh auth status *> $null
-    if ($LASTEXITCODE -eq 0) { $useGh = $true }
-}
-
 if (-not $Version) {
-    if ($useGh) {
-        $Version = gh release view --repo $repo --json tagName --jq .tagName
-        if ($LASTEXITCODE -ne 0 -or -not $Version) {
-            throw 'Cannot determine the latest release through the GitHub CLI; pass -Version <tag>.'
-        }
+    try {
+        $Version = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
     }
-    else {
-        try {
-            $Version = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
-        }
-        catch {
-            throw "Cannot determine the latest release; sign in with 'gh auth login' (required while the repository is private) or pass -Version <tag>."
-        }
+    catch {
+        throw 'Cannot determine the latest release; pass -Version <tag>.'
     }
 }
 
@@ -72,20 +57,12 @@ $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRan
 New-Item -ItemType Directory -Path $workDir | Out-Null
 
 function Get-ReleaseFile([string]$Name) {
-    if ($script:useGh) {
-        gh release download $script:Version --repo $script:repo --pattern $Name --dir $script:workDir
-        if ($LASTEXITCODE -ne 0) {
-            throw "Cannot download $Name from release $($script:Version) through the GitHub CLI."
-        }
+    try {
+        Invoke-WebRequest "https://github.com/$($script:repo)/releases/download/$($script:Version)/$Name" `
+            -OutFile (Join-Path $script:workDir $Name)
     }
-    else {
-        try {
-            Invoke-WebRequest "https://github.com/$($script:repo)/releases/download/$($script:Version)/$Name" `
-                -OutFile (Join-Path $script:workDir $Name)
-        }
-        catch {
-            throw "Cannot download $Name from release $($script:Version); sign in with 'gh auth login' (required while the repository is private)."
-        }
+    catch {
+        throw "Cannot download $Name from release $($script:Version)."
     }
 }
 

@@ -26,15 +26,13 @@ prebuilt binaries and a `SHA256SUMS` checksum file for:
 
 ### Install script
 
-The scripts download the archive for the current platform, verify its
-SHA-256 checksum, and install the binary and the agent skill. Downloads use
-the GitHub CLI when it is installed and signed in — required while the
-repository is private — and plain HTTPS otherwise.
+The scripts download the archive for the current platform over HTTPS,
+verify its SHA-256 checksum, and install the binary and the agent skill.
 
 On macOS and Linux:
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/ii999/agentenv/main/install.sh | bash
 ```
 
 The binary lands in `~/.local/bin` and the agent skill in
@@ -42,11 +40,18 @@ The binary lands in `~/.local/bin` and the agent skill in
 skill to `~/.claude/skills` for Claude Code, `--no-skill` to install the
 binary only, `--version <tag>` to pin a release, and `--dir <path>` to
 change the binary directory (`AGENTENV_VERSION` and `AGENTENV_INSTALL_DIR`
-work the same way).
+work the same way). When piping, place options after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ii999/agentenv/main/install.sh \
+    | bash -s -- --claude-skills
+```
 
 On Windows (PowerShell 7+):
 
 ```powershell
+Invoke-RestMethod https://raw.githubusercontent.com/ii999/agentenv/main/install.ps1 `
+    -OutFile install.ps1
 pwsh -File install.ps1
 ```
 
@@ -57,8 +62,9 @@ in `~\.agents\skills\agentenv`. The matching switches are `-ClaudeSkills`,
 ### Manual download
 
 ```bash
-gh release download v0.1.1 --repo ii999/agentenv \
-    --pattern 'agentenv-v0.1.1-aarch64-apple-darwin.tar.gz' --pattern SHA256SUMS
+base=https://github.com/ii999/agentenv/releases/download/v0.1.1
+curl -fsSLO "$base/agentenv-v0.1.1-aarch64-apple-darwin.tar.gz"
+curl -fsSLO "$base/SHA256SUMS"
 shasum -a 256 --check --ignore-missing SHA256SUMS
 tar -xzf agentenv-v0.1.1-aarch64-apple-darwin.tar.gz
 install -m 755 agentenv-v0.1.1-aarch64-apple-darwin/agentenv ~/.local/bin/
