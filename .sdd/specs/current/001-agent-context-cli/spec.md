@@ -426,7 +426,7 @@ Source trace: PRD-FR-003 (adoption), spec-review SUG-003.
 
 Acceptance criteria:
 
-- AC-022.1: README exists and contains every SPEC-022 item: tool overview, config schema example, the §7 snippet's six bullet points, the discover → inspect → get → `run --with` flow with the no-guessing rule, a threat-model section, the provider guidance, the sensitive-check guardrail caveat, a note on target-name discovery (default `inject_as` via `credential list`; per-reference `?as=` via the JSON `reference` member or `get`), and a statement that Windows behavior is specified and code-reviewed but not machine-verified in v1 (SPEC-AS-025); verified by checklist inspection at validation.
+- AC-022.1: README exists and contains every SPEC-022 item: tool overview, config schema example, the §7 snippet's six bullet points, the discover → inspect → get → `run --with` flow with the no-guessing rule, a threat-model section, the provider guidance, the sensitive-check guardrail caveat, a note on target-name discovery (default `inject_as` via `credential list`; per-reference `?as=` via the JSON `reference` member or `get`), and an accurate Windows verification statement distinguishing CI's isolated keychain from native Credential Manager machine verification (SPEC-AS-025); verified by checklist inspection at validation.
 
 Verification: Manual: inspection recorded in validation.md.
 
@@ -535,7 +535,7 @@ Verification: Manual: inspection recorded in validation.md.
 - SPEC-AS-022: `get --json` emits the raw JSON value without a `version` envelope, adopting design §5.4 over the §5.9 envelope wording (and over PRD-NFR-003's version clause) for this one command.
 - SPEC-AS-023: `show` takes an entry name and `find` takes a needle; design §5.1's dotted-path wording for those two commands is narrowed to `get` (their §5.2–§5.5 examples use entry names/needles only).
 - SPEC-AS-024: Keys that are the empty string are not addressable by the path grammar (like double-quote-bearing keys, SPEC-AS-010); they remain visible in listings and JSON.
-- SPEC-AS-025: Cross-OS CI (build/test matrix for macOS/Linux/Windows) is a post-v1 follow-up: the repository is local-first with no CI infrastructure. v1 verification runs on the development machine (macOS); Windows- and Linux-specific behaviors are specified here and code-reviewed but not machine-verified in v1. Recorded as an accepted risk in validation.md, surfaced to the user at acceptance.
+- SPEC-AS-025: The original v1 cross-OS verification risk is resolved. CI runs the test suite on macOS, Linux, and Windows; its credential tests use the isolated file-backed `test-keychain` store. Separate Windows machine verification covers the PowerShell installer, `%APPDATA%` path resolution, validated writes, case-insensitive injection conflicts, process launch and exit-code passthrough, and a native Credential Manager `credential set` → `credential check` → credential-injected `run` round trip. Shared-console Ctrl-C delivery follows the documented Windows process model but is not separately simulated by the automated suite.
 - SPEC-AS-026: PRD-NFR-003's latency clause is discharged by ARCH-001's structural properties plus one recorded cold-start measurement (Implementation Notes); no automated latency gate exists.
 
 ## Clarifications
