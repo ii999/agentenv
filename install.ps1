@@ -11,7 +11,7 @@ installs the agent skill to ~\.agents\skills. Downloads use plain HTTPS
 from GitHub Releases.
 
 .PARAMETER Version
-Release tag to install, e.g. v0.1.1. Defaults to AGENTENV_VERSION or the
+Release tag to install, e.g. v0.1.2. Defaults to AGENTENV_VERSION or the
 latest release.
 
 .PARAMETER InstallDir

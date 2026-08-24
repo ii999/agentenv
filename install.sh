@@ -6,7 +6,7 @@
 #   ./install.sh [--version <tag>] [--dir <install-dir>] [--claude-skills] [--no-skill]
 #
 # Options:
-#   --version <tag>   Release tag to install, e.g. v0.1.1. Defaults to the
+#   --version <tag>   Release tag to install, e.g. v0.1.2. Defaults to the
 #                     latest release. AGENTENV_VERSION works the same way.
 #   --dir <path>      Binary install directory. Defaults to ~/.local/bin.
 #                     AGENTENV_INSTALL_DIR works the same way.

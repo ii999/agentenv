@@ -62,12 +62,12 @@ in `~\.agents\skills\agentenv`. The matching switches are `-ClaudeSkills`,
 ### Manual download
 
 ```bash
-base=https://github.com/ii999/agentenv/releases/download/v0.1.1
-curl -fsSLO "$base/agentenv-v0.1.1-aarch64-apple-darwin.tar.gz"
+base=https://github.com/ii999/agentenv/releases/download/v0.1.2
+curl -fsSLO "$base/agentenv-v0.1.2-aarch64-apple-darwin.tar.gz"
 curl -fsSLO "$base/SHA256SUMS"
 shasum -a 256 --check --ignore-missing SHA256SUMS
-tar -xzf agentenv-v0.1.1-aarch64-apple-darwin.tar.gz
-install -m 755 agentenv-v0.1.1-aarch64-apple-darwin/agentenv ~/.local/bin/
+tar -xzf agentenv-v0.1.2-aarch64-apple-darwin.tar.gz
+install -m 755 agentenv-v0.1.2-aarch64-apple-darwin/agentenv ~/.local/bin/
 ```
 
 Substitute the archive name for your platform from the table above. On Linux,
