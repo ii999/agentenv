@@ -52,7 +52,14 @@ impl Provider for KeychainProvider {
         }
         let entry = keyring::Entry::new(&self.service, &self.account)
             .map_err(|error| self.read_error(error))?;
-        let value = entry.get_secret().map_err(|error| self.read_error(error))?;
+        // Pair `get_password` with `set_password`: Windows stores passwords as
+        // UTF-16 credential blobs, while `get_secret` returns those raw bytes.
+        // The password API performs the platform-native decoding before the
+        // value enters agentenv's UTF-8-only secret container.
+        let value = entry
+            .get_password()
+            .map_err(|error| self.read_error(error))?
+            .into_bytes();
         CapturedSecret::new(value).into_secret().map_err(|error| {
             AppError::Credential(format!(
                 "keychain credential '{}' for service '{}' and account '{}' has an invalid value: {error}; set it again with 'agentenv credential set {}'",
