@@ -428,6 +428,64 @@ The target receives its normal standard input, output, and error streams.
 is returned to the caller. A target that cannot be executed returns exit code
 `127`.
 
+### Pure runs
+
+`run --pure` launches the target with a curated minimal environment instead
+of the full inherited one. The child environment is built in three layers —
+a fixed platform base, then explicitly kept variables, then the planned
+injections — and contains nothing else. Stray variables in the calling shell,
+including exported tokens meant for other tools, never reach the target.
+
+```bash
+agentenv run --pure --with llm -- llm-client request
+agentenv run --pure --keep AWS_REGION --with llm -- deploy-tool sync
+```
+
+The base is a closed list per platform; no name is carried by prefix or
+pattern, and names unset in the parent are not synthesized:
+
+- Unix-like systems: `PATH`, `HOME`, `TMPDIR`, `TERM`, `USER`, `LOGNAME`,
+  `SHELL`, `LANG`, `TZ`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+  `AGENTENV_FILE`, `AGENTENV_PROFILE`, `AGENTENV_NO_PROJECT`, and the locale
+  variables `LC_ALL`, `LC_COLLATE`, `LC_CTYPE`, `LC_MESSAGES`, `LC_MONETARY`,
+  `LC_NUMERIC`, `LC_TIME`, `LC_ADDRESS`, `LC_IDENTIFICATION`,
+  `LC_MEASUREMENT`, `LC_NAME`, `LC_PAPER`, `LC_TELEPHONE`.
+- Windows: `PATH`, `PATHEXT`, `SystemRoot`, `SystemDrive`, `windir`,
+  `ComSpec`, `TEMP`, `TMP`, `USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`,
+  `APPDATA`, `LOCALAPPDATA`, `ProgramData`, `ProgramFiles`,
+  `ProgramFiles(x86)`, `ProgramW6432`, `CommonProgramFiles`,
+  `CommonProgramFiles(x86)`, `CommonProgramW6432`, `ALLUSERSPROFILE`,
+  `PUBLIC`, `COMPUTERNAME`, `USERNAME`, `USERDOMAIN`, `OS`,
+  `NUMBER_OF_PROCESSORS`, `PROCESSOR_ARCHITECTURE`, `AGENTENV_FILE`,
+  `AGENTENV_PROFILE`, `AGENTENV_NO_PROJECT`.
+
+The `AGENTENV_*` names and the platform configuration locations are carried
+so that a nested `agentenv` call inside a pure target resolves the same
+configuration file and profile as the caller.
+
+`--keep <NAME>` carries one additional parent variable and can be repeated.
+Names are exact — `[A-Za-z_][A-Za-z0-9_]*`, the same grammar as `inject_as` —
+so platform names outside it, such as Windows names containing parentheses,
+are covered by the base only. `--keep` without `--pure`, an invalid name, or
+an empty name is a usage error (exit `1`) detected before configuration
+loading. A kept name that is unset in the parent is reported on standard
+error and the run continues without it; the report concerns inheritance only
+and appears even when an injection supplies the same name. Injections
+override kept and base variables alike.
+
+TLS and proxy configuration — `SSL_CERT_FILE`, `SSL_CERT_DIR`, `HTTP_PROXY`,
+`HTTPS_PROXY`, `NO_PROXY`, and their lowercase forms — is deliberately not in
+the base, because proxy URLs can embed credentials. On machines that need
+them, carry them explicitly:
+
+```bash
+agentenv run --pure --keep HTTPS_PROXY --keep NO_PROXY --with llm -- llm-client request
+```
+
+Under `--pure`, a non-absolute target is resolved against the child
+environment's `PATH`; the platform's additional search locations (such as the
+Windows system directories) remain in effect.
+
 ### Docker Compose pairing
 
 Keep non-secret defaults, such as ports and image tags, in `.env`. Supply
@@ -466,6 +524,14 @@ standard output and error are external-process output and pass through
 unchanged; they are outside the CLI's no-secret invariant. A `command`
 provider's inherited standard input and standard error are also owned by that
 external command and outside the invariant.
+
+`run --pure` is an environment filter for the launched target, never a
+sandbox. The pure target still runs as the same user, in the same working
+directory, with inherited standard streams and file descriptors, full
+filesystem access — including the user's `agentenv` configuration and the
+platform credential store — and unrestricted network access. Credential
+resolution is unchanged by `--pure`: a `command` provider's subprocess keeps
+the full parent environment.
 
 `credential set` is the deliberate exception: it writes the entered value to
 the selected platform credential store. No other command prints or persists

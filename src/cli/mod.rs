@@ -13,12 +13,12 @@ mod write;
 
 use clap::{Args, Subcommand};
 
-use agentenv::config::Config;
+use agentenv::config::{is_valid_env_name, Config};
 use agentenv::error::AppError;
 use agentenv::path::{single_entry_name, Segments};
 use agentenv::project::{model::ProjectPin, ProjectContext};
 use agentenv::query::{self, render};
-use agentenv::runner::InjectionPlan;
+use agentenv::runner::{EnvironmentMode, InjectionPlan};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -88,9 +88,47 @@ pub struct RunArgs {
     /// Entry to inject; repeat this option to combine entries.
     #[arg(long = "with", value_name = "ENTRY", required = true, num_args = 1)]
     pub entries: Vec<String>,
+    /// Launch with a curated minimal environment (base + --keep + injections)
+    /// instead of the full parent environment.
+    #[arg(long)]
+    pub pure: bool,
+    /// With --pure, carry this parent variable into the target; repeatable.
+    #[arg(long = "keep", value_name = "NAME", num_args = 1)]
+    pub keep: Vec<String>,
     /// The command to launch, after `--`.
     #[arg(last = true, required = true, value_name = "COMMAND")]
     pub command: Vec<String>,
+}
+
+/// Validates `--pure`/`--keep` combinations during argument handling, before
+/// project discovery, configuration loading, or credential resolution
+/// (SPEC-002). Diagnostics never reproduce an argument's text at or after its
+/// first `=` (SPEC-004).
+pub fn validate_run_environment_flags(args: &RunArgs) -> Result<(), AppError> {
+    if !args.pure && !args.keep.is_empty() {
+        return Err(AppError::Usage(
+            "--keep requires --pure; add --pure or drop --keep".to_owned(),
+        ));
+    }
+    for name in &args.keep {
+        if is_valid_env_name(name) {
+            continue;
+        }
+        return Err(AppError::Usage(
+            if let Some((shown, _)) = name.split_once('=') {
+                format!(
+                    "--keep '{shown}' includes '='; pass only the environment variable name \
+                 ([A-Za-z_][A-Za-z0-9_]*)"
+                )
+            } else {
+                format!(
+                    "--keep '{name}' is not a valid environment variable name; use \
+                 [A-Za-z_][A-Za-z0-9_]*"
+                )
+            },
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Args)]
@@ -253,8 +291,17 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 &env,
                 &invocation.project,
             )?;
+            // main validates before the prelude; revalidating here keeps the
+            // invariant local, so a future caller cannot silently discard a
+            // --keep given without --pure (SPEC-AS-003).
+            validate_run_environment_flags(&args)?;
+            let mode = if args.pure {
+                EnvironmentMode::pure(args.keep)?
+            } else {
+                EnvironmentMode::inherit()
+            };
             let plan = InjectionPlan::build(&config, profile, &args.entries)?;
-            match plan.resolve_and_launch(args.command) {
+            match plan.resolve_and_launch(args.command, mode) {
                 Ok(never) => match never {},
                 Err(error) => Err(error),
             }

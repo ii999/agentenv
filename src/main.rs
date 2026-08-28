@@ -35,6 +35,12 @@ fn main() {
     let Some(command) = cli.command else {
         print_help_and_exit();
     };
+    if let Command::Run(args) = &command {
+        if let Err(error) = cli::validate_run_environment_flags(args) {
+            let _ = write_error(&error);
+            process::exit(error.exit_code());
+        }
+    }
     let project = if matches!(&command, Command::Project(_)) {
         ProjectContext::None
     } else {
