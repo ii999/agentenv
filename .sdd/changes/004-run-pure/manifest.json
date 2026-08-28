@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "changeId": "004-run-pure",
+  "name": "run-pure",
+  "entrypoint": "idea",
+  "tier": "light",
+  "created": "2026-08-28T10:24:36.017927+00:00",
+  "status": "active",
+  "artifactOrder": [
+    "prd",
+    "architecture",
+    "spec",
+    "spec-review",
+    "plan",
+    "tasks",
+    "validation"
+  ],
+  "localOnly": true,
+  "git": {
+    "branch": "sdd/004-run-pure",
+    "baseBranch": "main",
+    "baseCommit": "917fd4be3b190864eabd27a964c71a80b2d2cd82",
+    "policy": "ask",
+    "merged": false,
+    "dirtyBaseline": null
+  }
+}
