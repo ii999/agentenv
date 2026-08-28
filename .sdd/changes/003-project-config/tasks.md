@@ -112,7 +112,7 @@ Checkpoint: `cargo test` green with the suite fully hermetic; a `.agentenv.toml`
   - Verification: `cargo test --test project_trust` — expected: all pass; `cargo test` — expected: no regressions; `cargo fmt --check` — expected: exit 0.
   - Report: `.sdd/changes/003-project-config/reports/task-T005-report.md`
 
-- [ ] T006 [Phase 1] Implement the project facade (`ProjectContext` resolve / allow / revoke)
+- [x] T006 [Phase 1] Implement the project facade (`ProjectContext` resolve / allow / revoke)
   - Files: `src/project/mod.rs` (facade lives here), `tests/project_facade.rs` (create)
   - Depends on: T002, T003, T005
   - Spec refs: SPEC-003 (allow/revoke command halves), SPEC-005 evaluation-order step 2 (the single-snapshot classification — read it in full), SPEC-001 (bypass handled by callers, not here)

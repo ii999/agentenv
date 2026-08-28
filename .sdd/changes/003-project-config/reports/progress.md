@@ -8,3 +8,5 @@
 - 2026-08-28 T003: impact delta: None. The impact map reported no call sites, and the required seed search found
 - 2026-08-28 T005: DONE (report: task-T005-report.md)
 - 2026-08-28 T005: impact delta: None. The re-verified tracked call sites match the Impact Map; only `src/project/trust.rs` was modified.
+- 2026-08-28 T006: DONE (report: task-T006-report.md)
+- 2026-08-28 T006: impact delta: The required seed search found the expected `ProjectContext` location in `src/project/mod.rs`; broad lexical `resolve`, `allow`, and `revoke` matches are unrelated existing APIs. No existing facade call sites were introduced or required updates.
