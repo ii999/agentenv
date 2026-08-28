@@ -18,7 +18,7 @@
 
 - Introduce a checked-in project file that can pin a profile and declare required entries/fields, discovered from the working directory.
 - Gate every effect of that file behind user-owned trust-on-first-use approval of its exact content.
-- Keep all existing behavior byte-identical when no project file exists, and keep the no-secret invariant untouched.
+- Keep all existing functional command behavior byte-identical when no project file exists (help/usage/version surfaces change additively for the new flag and subcommand), and keep the no-secret invariant untouched.
 
 ## Non-Goals
 

@@ -156,14 +156,22 @@ Both fresh clean-context lanes: Revise, no Criticals in the spec core; strong co
 
 Codex open questions answered in the revision: reported paths use the discovered spelling (canonical is trust identity only — Implementation Notes); trust-store read-side permission checking explicitly excluded with rationale (SPEC-AS-008); `--create-profile` remains explicit-flag-only (REV-033).
 
+## Round 6 — Final verification re-check (Codex gpt-5.6-sol, xhigh, read-only; handoff `003-project-config--spec-review-r6-codex`)
+
+Verdict: 12 of 13 resolved; **no new Critical/Important findings**; internal consistency confirmed (phase re-cut, AC numbering, member state table, exit matrix, facade types all coherent; no dangling references). One residual, purely mechanical:
+
+| ID | Severity | Finding | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R6-001 | Important (P2, residual of R5-005) | SPEC-009's help/usage/version exemption was not propagated to PRD-NFR-004, PRD-SM-003, the PRD acceptance summary, and the architecture compatibility goal, which retained unconditional wording | The four locations the lane enumerated updated with the identical exemption wording; verified against the lane's list | Fixed (REV-039) |
+
 ## Approval Decision
 
-Decision: Revise (round 5 revisions applied) — one final targeted cross-provider re-check verifies R5-001..013; per the loop cap, if any Critical/Important survives it, the loop stops and reports to the user instead of iterating further.
+Decision: **Approved** (round 6).
 
 Approval rationale:
 
-- The escalation round surfaced contract-consistency issues (accepted-spec conflicts, phase economics) rather than design flaws; both lanes' findings were consolidated and every one has an applied revision, including the Phase re-cut that removes the placeholder state entirely.
+- Six review rounds converged monotonically (14 → 5 → 3 → 1 → 13-consolidated-escalation → 1 mechanical residual), the final independent lane found no new Critical/Important defects and confirmed cross-artifact consistency, and the sole residual was a wording propagation of an already-accepted decision, applied exactly as the lane prescribed at its four enumerated locations (REV-039).
 
 Conditions:
 
-- Final re-check must confirm R5-001..013 resolved with no new Critical/Important findings; otherwise stop and report.
+- None. Minor/Suggestion-level items are carried into planning: the fault-injection fs seam (verification detail for tasks), the manual latency measurement (validation.md obligation), and the release-note entry for the additive help-surface change.

@@ -72,7 +72,7 @@ As a developer or agent, I want the project file to declare required entries and
 - PRD-NFR-001 (security): The project file cannot cause any credential value to be printed, persisted, or rerouted to a different environment-variable target; the no-secret invariant of the existing CLI is unchanged.
 - PRD-NFR-002 (predictability): Every new failure mode (unparseable project file, forbidden content, unknown pinned profile, untrusted file, unsatisfied requirement) has a defined exit status and an error message naming the next action; no silent fallback anywhere.
 - PRD-NFR-003 (agent ergonomics): New JSON output is stable, and project-file discovery adds no perceptible startup latency to per-turn agent invocation.
-- PRD-NFR-004 (compatibility): Existing configurations, command-line surfaces, and exit statuses continue to work unchanged in the absence of a project file.
+- PRD-NFR-004 (compatibility): Existing configurations, functional command invocations, and exit statuses continue to work unchanged in the absence of a project file. Help, usage, and version renderings are exempt: they change additively to list the new flag, subcommand, and release version, recorded in the release notes.
 
 ## Data and Entities
 
@@ -93,7 +93,7 @@ As a developer or agent, I want the project file to declare required entries and
 
 - PRD-SM-001: In a trusted project, an agent following the documented protocol resolves the intended profile and learns all declared requirements without asking the user or reading prose instructions.
 - PRD-SM-002: A user cloning a repository with a project file observes zero behavior change in every agentenv command until they run the approval command.
-- PRD-SM-003: All pre-existing commands behave byte-identically in trees without a project file.
+- PRD-SM-003: All pre-existing functional command invocations behave byte-identically in trees without a project file (help, usage, and version renderings exempt per PRD-NFR-004).
 
 ## Constraints
 
@@ -124,7 +124,7 @@ The product requirement is accepted when:
 - A trusted project file pins profile selection per PRD-FR-002 and the requirement report works in text and JSON per PRD-FR-003.
 - An untrusted, edited, or revoked project file is fully inert and explicitly reported, per PRD-FR-004/FR-007.
 - Forbidden project-file content fails validation with an explicit error per PRD-FR-006.
-- All pre-existing behavior is unchanged when no project file is present per PRD-NFR-004.
+- All pre-existing functional behavior is unchanged when no project file is present per PRD-NFR-004 (help/usage/version surfaces change additively as recorded there).
 
 ## Traceability Seeds
 
