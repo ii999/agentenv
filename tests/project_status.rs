@@ -63,7 +63,7 @@ impl Fixture {
 
     fn approve(&self) {
         let env = |name: &str| match name {
-            "XDG_STATE_HOME" => Some(self.state.display().to_string()),
+            name if name == helpers::STATE_BASE_ENV => Some(self.state.display().to_string()),
             _ => None,
         };
         agentenv::project::allow(&self.cwd, &env).expect("project is approved");
