@@ -4,3 +4,5 @@
 - 2026-08-28 T004: impact delta: The impact map predicted no existing call sites. Re-verification with `git grep -n -F -e TrustStore -e StoreFs -e project::trust -e fingerprint -- ':(exclude).sdd/'` found no hits outside the two files this task authored, other than the explanatory comment added beside the new `sha2` entry in `Cargo.toml`. No coupling was discovered and the map needs no correction.
 - 2026-08-28 T002: DONE (report: task-T002-report.md)
 - 2026-08-28 T002: impact delta: The existing mapped call sites were unchanged. This task adds the expected `Segments::parse` and `Violation` uses in `src/project/model.rs`.
+- 2026-08-28 T003: DONE (report: task-T003-report.md)
+- 2026-08-28 T003: impact delta: None. The impact map reported no call sites, and the required seed search found

@@ -64,7 +64,7 @@ Checkpoint: `cargo test` green with the suite fully hermetic; a `.agentenv.toml`
   - Verification: `cargo test --test project_schema` — expected: all pass, covering every SPEC-002 acceptance criterion plus the valid-file case; `cargo test` — expected: no regressions.
   - Report: `.sdd/changes/003-project-config/reports/task-T002-report.md`
 
-- [ ] T003 [P] [Phase 1] Implement project-file discovery (`project::locate`)
+- [x] T003 [P] [Phase 1] Implement project-file discovery (`project::locate`)
   - Files: `src/project/locate.rs` (create), `src/project/mod.rs` (add `pub mod locate;`)
   - Depends on: none (coordinate `src/project/mod.rs` with T002: each task adds only its own `pub mod` line)
   - Spec refs: SPEC-001
