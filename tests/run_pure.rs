@@ -111,6 +111,13 @@ fn read_report(path: &Path) -> String {
     fs::read_to_string(path).expect("the target writes its environment report")
 }
 
+/// A curated-base name present on each platform's list, set by the test so
+/// its carriage is observable.
+#[cfg(unix)]
+const PLATFORM_BASE_NAME: &str = "HOME";
+#[cfg(windows)]
+const PLATFORM_BASE_NAME: &str = "TEMP";
+
 #[test]
 fn pure_carries_base_keeps_and_injections_and_nothing_else() {
     // AC-001.1: base + keeps + injections reach the probe; a stray parent
@@ -125,7 +132,7 @@ fn pure_carries_base_keeps_and_injections_and_nothing_else() {
         &config,
         &[
             ("SOURCE_TOKEN", SENTINEL_PLAIN),
-            ("HOME", &home),
+            (PLATFORM_BASE_NAME, &home),
             ("PARENT_SECRET", "stray-parent-value"),
             ("TEST_PROBE_OUT", report.to_str().expect("report is UTF-8")),
         ],
@@ -148,8 +155,8 @@ fn pure_carries_base_keeps_and_injections_and_nothing_else() {
     let report = read_report(&report);
     assert!(report.contains("env\tPATH="), "the base carries PATH");
     assert!(
-        report.contains(&format!("env\tHOME={home}\n")),
-        "the base carries the parent HOME value"
+        report.contains(&format!("env\t{PLATFORM_BASE_NAME}={home}\n")),
+        "the base carries the parent {PLATFORM_BASE_NAME} value"
     );
     assert!(
         report.contains(&format!("env\tOPENAI_API_KEY={SENTINEL_PLAIN}\n")),
@@ -165,9 +172,13 @@ fn pure_carries_base_keeps_and_injections_and_nothing_else() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn pure_excludes_unlisted_lc_names() {
-    // AC-001.6: the base is a closed list; LC_ prefix grants nothing.
+    // AC-001.2 (Unix-scoped by the spec) and AC-001.6: the locale names are
+    // in the Unix base and the base is a closed list; LC_ prefix grants
+    // nothing. On Windows the base carries no LC_ name at all, so exclusion
+    // holds trivially and is covered by the seam unit test.
     let workspace = Workspace::new();
     let config = workspace.stage_config(RUNNER_CONFIG);
     let report = workspace.path("probe-report");

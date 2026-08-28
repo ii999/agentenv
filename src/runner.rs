@@ -435,23 +435,36 @@ mod tests {
             .collect()
     }
 
+    /// A base name specific to each platform's curated list.
+    #[cfg(not(windows))]
+    const PLATFORM_BASE_NAME: &str = "TERM";
+    #[cfg(windows)]
+    const PLATFORM_BASE_NAME: &str = "TEMP";
+
     #[test]
     fn base_names_are_carried_and_unlisted_names_dropped() {
-        let parent = pairs(&[("PATH", "/bin"), ("TERM", "xterm"), ("STRAY_SECRET", "x")]);
+        let parent = pairs(&[
+            ("PATH", "/bin"),
+            (PLATFORM_BASE_NAME, "carried"),
+            ("STRAY_SECRET", "x"),
+        ]);
         let (selected, missing) = select_pure_environment(parent, &[]);
         let names: Vec<_> = selected.iter().map(|(n, _)| n.clone()).collect();
         assert!(names.contains(&OsString::from("PATH")));
-        assert!(names.contains(&OsString::from("TERM")));
+        assert!(names.contains(&OsString::from(PLATFORM_BASE_NAME)));
         assert!(!names.contains(&OsString::from("STRAY_SECRET")));
         assert!(missing.is_empty());
     }
 
     #[test]
     fn unlisted_lc_names_are_excluded() {
-        // AC-001.6 (seam level): the base is a closed list, not an LC_ prefix.
+        // AC-001.6 (seam level): the base is a closed list, not an LC_
+        // prefix. LC_ALL sits in the Unix base only, so its carriage is a
+        // Unix assertion; the exclusion holds on every platform.
         let parent = pairs(&[("LC_ALL", "C"), ("LC_SECRET_TOKEN", "sentinel-lc")]);
         let (selected, _) = select_pure_environment(parent, &[]);
         let names: Vec<_> = selected.iter().map(|(n, _)| n.clone()).collect();
+        #[cfg(not(windows))]
         assert!(names.contains(&OsString::from("LC_ALL")));
         assert!(!names.contains(&OsString::from("LC_SECRET_TOKEN")));
     }

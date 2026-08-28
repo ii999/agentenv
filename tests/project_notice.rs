@@ -3,7 +3,7 @@
 mod helpers;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use helpers::{assert_exit, command_with_project_discovery, staged_config};
 use tempfile::TempDir;
@@ -92,7 +92,7 @@ impl ProjectFixture {
     }
 }
 
-fn assert_single_notice(run: &helpers::Run, project: &PathBuf) {
+fn assert_single_notice(run: &helpers::Run, project: &Path) {
     assert_eq!(
         run.stderr.lines().count(),
         1,

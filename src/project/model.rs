@@ -131,9 +131,7 @@ fn validate_profile(
     file: &Path,
     violations: &mut Vec<Violation>,
 ) -> Option<ProjectPin> {
-    let Some(value) = root.get("profile") else {
-        return None;
-    };
+    let value = root.get("profile")?;
     let Some(name) = value.as_str() else {
         violations.push(violation(
             "profile",
