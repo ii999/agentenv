@@ -49,7 +49,7 @@ Name equivalence is one rule applied uniformly to base membership, `--keep` matc
 
 Base and keep names absent from the parent environment are simply absent from the child; nothing is synthesized. Injections override a same-name (per the equivalence rule) base or kept variable, matching the precedence `run` documents today.
 
-Under `--pure`, the target program is resolved against the child environment's `PATH` on all platforms. When the child has no `PATH`, lookup of a non-absolute target falls back to platform-defined behavior; a target that genuinely cannot be found exits 127 as documented.
+Under `--pure`, resolution of a non-absolute target consults the child environment's `PATH` on all platforms; this spec constrains that precedence only, and platform-defined additional search locations remain in effect. On Windows, the standard process launcher also searches the application and system directories and finally the parent process's `PATH`, so a target reachable through those locations launches normally. On Unix, a child with no `PATH` falls back to the platform's default search path. A target that no permitted location can supply exits 127 as documented.
 
 Source trace:
 
@@ -258,4 +258,14 @@ Two independent clean-context lanes reviewed the draft: Codex `gpt-5.6-sol` (xhi
 - [Minor] REV-213: `CommonProgramFiles(x86)` asymmetry. Fixed: added; SPEC-AS-004 notes it.
 - [Minor] REV-214/REV-107: OS-string preservation covered names only and was untestable through the lossy probe. Fixed: values included in SPEC-001 and EDGE-005, seam-level Unix unit test required.
 
-Decision: Pending (targeted re-check of the revisions dispatched)
+### Round 2 (targeted re-check) — 2026-08-28
+
+Cross-provider re-check by Codex `gpt-5.6-sol` (xhigh, delegate, read-only) against the revised spec and code ground truth. All 16 deduplicated round-1 findings verified resolved. One new finding:
+
+- [Important] REV-301: the round-1 fix for REV-210 introduced an all-platform child-`PATH` lookup rule that is ambiguous on Windows, where the standard launcher also searches application/system directories and falls back to the parent `PATH`. Fixed: SPEC-001 now constrains only child-`PATH` precedence and explicitly permits the platform's additional search locations, with the Windows order documented.
+
+Lane recommendation: Approve with revisions. The single revision (REV-301) is applied above; no further re-check is warranted for a documentation-of-platform-behavior fix.
+
+Decision: Approved
+
+Approval note: the user is driving this change through the loop and answered the three scoping questions that fixed the design; per the review gate's autonomous-progress provision, approval of the revised text is recorded here as an explicit assumption rather than a per-revision user sign-off.
