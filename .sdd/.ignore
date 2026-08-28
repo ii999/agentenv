@@ -5,3 +5,11 @@
 # Re-include with `!changes/superseded/**` below this block if needed.
 changes/superseded/**
 # <<< my-sdd-loop managed <<<
+
+# >>> sdd-loop managed (do not edit inside markers) >>>
+# Superseded changes: kept in git for history, hidden from coding-agent code
+# search so obsolete specs/diffs do not pollute results. Active and archived
+# changes stay searchable. Retire a change with `sdd.py supersede <id>`.
+# Re-include with `!changes/superseded/**` below this block if needed.
+changes/superseded/**
+# <<< sdd-loop managed <<<
