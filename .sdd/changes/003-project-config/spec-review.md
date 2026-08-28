@@ -134,14 +134,36 @@ Verdict: Revise. R3-001 and R3-002 confirmed resolved. One residual:
 | --- | --- | --- | --- | --- |
 | R4-001 | Important (P2, residual of R3-003) | The facade offered no path for `project allow` to approve the exact bytes it validated — the caller would have to re-read the file, reintroducing the time-of-check/time-of-use window | Facade-owned `project::allow`/`revoke` operations performing discovery, single read, validation, fingerprinting, and store mutation over one snapshot; SPEC-003 binds approval to the validated bytes; AC-003.12 (fault-injection) added | Fixed (REV-025) |
 
+## Round 5 — Escalation: full two-lane round (Claude opus xhigh native; Codex gpt-5.6-sol xhigh read-only delegate, handoff `003-project-config--spec-review-r5-codex`)
+
+Both fresh clean-context lanes: Revise, no Criticals in the spec core; strong convergence (SPEC-009 impossibility, `--create-profile` conflict, next-action gap, JSON degraded states, and the changed-invalid collision found independently by both). Consolidated and deduplicated:
+
+| ID | Severity | Finding (lanes) | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R5-001 | Important | `project status --json` payload on exit 5/6 contradicts the accepted change-001 "empty stdout on non-zero exit" JSON rule; `version: null` and the nested envelope deviate unrecorded (Claude; Codex JSON overlap) | Deviation recorded as a deliberate, documented exception in SPEC-006 (payload on 0/5/6; exit 2 empty); SPEC-008 documents it | Fixed (REV-026) |
+| R5-002 | Important | Phase-1 "checking not yet implemented" placeholder state made the MVP happy path exit 6 and shipped placeholder output; JSON semantics for unchecked `entries`/`satisfied`/ordering undefined (both lanes) | Requirement checking moved into Phase 1 (phases re-cut: P1 = pin+trust+status complete, P2 = docs); AC-006.6a/b merged into AC-006.6 over a full member state table defining every member per state, ordering, and nullability | Fixed (REV-027) |
+| R5-003 | Important | Approved-file-edited-to-invalid satisfies both `untrusted-changed` and `invalid` with no precedence (both lanes) | Precedence stated: `invalid` outranks `changed`; member table row; AC-006.13, AC-003.13, EDGE-011 | Fixed (REV-028) |
+| R5-004 | Important | `--no-project`/`AGENTENV_NO_PROJECT` interaction with the `project` subcommand group unspecified (Claude) | Bypass scoped to commands outside the `project` group; `project` subcommands always discover; AC-001.4 reworded, AC-001.5 added | Fixed (REV-029) |
+| R5-005 | Important/P1 | SPEC-009 byte-identity literally unsatisfiable: help/usage/version surfaces necessarily change with the new flag, subcommand, and version bump (both lanes) | Scoped to functional invocations; help/usage/version exempt and recorded for release notes; PRD-SM-002/-003 readings recorded (SPEC-AS-009) | Fixed (REV-030) |
+| R5-006 | Important | Accepted next-action error contract (change-001 SPEC-018) not carried into new error surfaces (both lanes) | Binding sentence added to SPEC-005 and SPEC-010; remedies added to AC-003.5/.6/.8, AC-005.3/.7, AC-006.3/.5/.7/.12 | Fixed (REV-031) |
+| R5-007 | Important | Notice lifecycle had no feasible seam: clap parse errors exit before dispatch, errors return no output, `run` never returns (Codex) | Pre-dispatch prelude owns discovery + notice (ARCH-004); parse-failure invocations out of scope; AC-005.9 added | Fixed (REV-032) |
+| R5-008 | Important | Pin applied to `--create-profile` contradicts the accepted explicit-flag contract (both lanes) | `--create-profile` exempted everywhere (SPEC-004, Scope, ARCH-005); AC-004.8 extended | Fixed (REV-033) |
+| R5-009 | Important | Revoke specced to read/validate content, so a changed/invalid/unreadable file could not be revoked (Codex) | Revoke is path-only record removal (SPEC-003, facade); AC-003.13; AC-003.10 extended to record preservation | Fixed (REV-034) |
+| R5-010 | Important | Trust-state machine omitted canonicalization failure, disappearance races, and discovery-probe anomalies (Codex; Claude minor) | Classified via the read-failure branch; non-regular files skipped by the walk (SPEC-001, AC-001.2, EDGE-012); discovery never fails a command | Fixed (REV-035) |
+| R5-011 | Important | Harness isolation missed direct binary invocations (`tests/run_p3.rs`, `tests/credential_p2.rs`) (Codex) | SPEC-009 enumerates and isolates them individually | Fixed (REV-036) |
+| R5-012 | Minor | `fields` resolution wrongly imported `inject` source restrictions; requires entry-key grammar unstated; AC-003.11/.12 asserted internals and test mechanics; trust-store read-permission rule unstated; no trusted-no-notice AC; envelope unspecified for `discovered: false`; AC-001.2 duplicated SPEC-005; PRD listed an approval-time attribute and stale open questions | SPEC-007 any-value resolution + AC-007.7; entry-key rule in SPEC-002/AC-002.4; ACs restated observable with fault injection moved to Verification and an injectable fs seam recorded; SPEC-AS-008; AC-005.8; member state table covers no-file; AC-001.2 replaced with a discovery-specific case; PRD synced, PRD-Qs marked resolved | Fixed (REV-037) |
+| R5-013 | Suggestion | Unbounded attacker-supplied file read; PRD-SM-002 never reconciled with the notice | 64 KiB ceiling (SPEC-002, AC-002.7, EDGE-013); SPEC-AS-009 records the SM-002 reading | Accepted (REV-038) |
+
+Codex open questions answered in the revision: reported paths use the discovered spelling (canonical is trust identity only — Implementation Notes); trust-store read-side permission checking explicitly excluded with rationale (SPEC-AS-008); `--create-profile` remains explicit-flag-only (REV-033).
+
 ## Approval Decision
 
-Decision: Revise (round 4 revision applied) — escalated to one full two-lane round per the review-loop cap (an Important finding persisted through three targeted cycles). The full round reviews the completely revised spec and architecture with fresh clean-context Codex-provider and Claude-provider lanes.
+Decision: Revise (round 5 revisions applied) — one final targeted cross-provider re-check verifies R5-001..013; per the loop cap, if any Critical/Important survives it, the loop stops and reports to the user instead of iterating further.
 
 Approval rationale:
 
-- Convergence across cycles was monotonic (14 → 5 → 3 → 1 findings), and every finding has an applied revision; the escalation round validates the whole revised artifact rather than a diff.
+- The escalation round surfaced contract-consistency issues (accepted-spec conflicts, phase economics) rather than design flaws; both lanes' findings were consolidated and every one has an applied revision, including the Phase re-cut that removes the placeholder state entirely.
 
 Conditions:
 
-- The full round must report no unresolved Critical/Important findings for approval.
+- Final re-check must confirm R5-001..013 resolved with no new Critical/Important findings; otherwise stop and report.

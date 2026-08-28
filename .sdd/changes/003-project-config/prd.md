@@ -79,7 +79,7 @@ As a developer or agent, I want the project file to declare required entries and
 | Entity | Description | Key attributes | Notes |
 | --- | --- | --- | --- |
 | Project file | Checked-in TOML discovered from the working directory | profile pin; requirement declarations (entries, optional fields, reasons) | Selection/declaration only; no values, credentials, or inject content |
-| Trust record | User-owned approval of one project file's exact content | file identity; content fingerprint; approval time | Never stored in the repository; any content change invalidates it |
+| Trust record | User-owned approval of one project file's exact content | file identity (canonical path); content fingerprint | Never stored in the repository; any content change invalidates it |
 | Requirement report | Result of checking declarations against the active profile | per-requirement satisfied/unsatisfied and reason | Text and JSON output |
 
 ## UX and Interaction Notes
@@ -113,9 +113,9 @@ As a developer or agent, I want the project file to declare required entries and
 
 | ID | Question | Owner | Resolution |
 | --- | --- | --- | --- |
-| PRD-Q-001 | Exact project file name and discovery stopping rules | Architecture | Open — settle in architecture.md |
-| PRD-Q-002 | Trust-state storage location and fingerprint mechanism | Architecture | Open — settle in architecture.md |
-| PRD-Q-003 | CLI surface naming (`agentenv project status/allow/…`) and exit-code assignments | Architecture | Open — settle in architecture.md |
+| PRD-Q-001 | Exact project file name and discovery stopping rules | Architecture | Resolved: ARCH-001 (`.agentenv.toml`, walk CWD→root, nearest wins) |
+| PRD-Q-002 | Trust-state storage location and fingerprint mechanism | Architecture | Resolved: ARCH-002 (user state dir, canonical path + SHA-256 of content) |
+| PRD-Q-003 | CLI surface naming (`agentenv project status/allow/…`) and exit-code assignments | Architecture | Resolved: ARCH-003 (`project status/allow/revoke`; statuses 5 and 6 added — spec SPEC-006) |
 
 ## Acceptance Summary
 
