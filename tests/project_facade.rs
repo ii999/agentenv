@@ -136,6 +136,9 @@ fn missing_state_base_is_unavailable_for_reads_and_an_error_for_mutations() {
             ..
         } => {
             assert!(message.contains(STATE_BASE_ENV));
+            // The Unix diagnostic also names the HOME fallback; the Windows
+            // one names only LOCALAPPDATA.
+            #[cfg(unix)]
             assert!(message.contains("HOME"));
         }
         other => panic!("expected unavailable state, got {other:?}"),
@@ -174,7 +177,7 @@ fn corrupt_trust_store_is_propagated_as_a_configuration_error() {
     let tree = tree();
     project_file(&tree, VALID);
     let state = tree.path().join("state");
-    let store = state.join("agentenv/trust.toml");
+    let store = state.join("agentenv").join("trust.toml");
     fs::create_dir_all(store.parent().expect("store has a parent"))
         .expect("state directory is created");
     fs::write(&store, "not a trust store").expect("corrupt store is written");
