@@ -14,6 +14,9 @@ serde = { version = "1", features = ["derive"] }
 # serde_json::Number opaque: do not use #[serde(untagged)]/#[serde(flatten)]
 # over numbers or compare Number values structurally while it is on.
 serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+# Fingerprints the exact bytes of a project file for the trust store
+# (project::trust); a content change is what returns a file to untrusted.
+sha2 = "0.10"
 thiserror = "2"
 toml = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.25"

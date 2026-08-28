@@ -78,7 +78,7 @@ Checkpoint: `cargo test` green with the suite fully hermetic; a `.agentenv.toml`
   - Verification: `cargo test project::locate` — expected: new unit tests pass; `cargo test` — expected: no regressions.
   - Report: `.sdd/changes/003-project-config/reports/task-T003-report.md`
 
-- [ ] T004 [Phase 1] Author the failing trust-gate test suite (TDD contract for T005)
+- [x] T004 [Phase 1] Author the failing trust-gate test suite (TDD contract for T005)
   - Files: `src/project/trust.rs` (create: interface skeletons with `todo!()` bodies), `src/project/mod.rs` (add `pub mod trust;`), `tests/project_trust.rs` (create), `Cargo.toml` (add `sha2 = "0.10"` to `[dependencies]`)
   - Depends on: none
   - Spec refs: SPEC-003 (store semantics); EDGE-004b
