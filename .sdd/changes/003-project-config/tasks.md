@@ -170,7 +170,7 @@ Checkpoint: `src/project/` is complete and library-level tested: schema, discove
   - Verification: `cargo test --test project_status` — expected: all pass, covering every SPEC-006 acceptance criterion (exits 0/2/5/6), AC-007.1, AC-007.2, AC-007.3, AC-007.4, AC-007.5, AC-007.6, AC-007.7 (incl. counting-provider AC-007.4 and table/credential-ref AC-007.7), snapshot per state-table row, AC-010.3 sentinel + full-envelope assertion; `cargo test` — expected: full suite green.
   - Report: `.sdd/changes/003-project-config/reports/task-T008-report.md`
 
-- [ ] T009 [Phase 1] Cross-cutting acceptance tests: sentinels, canary, injection probe
+- [x] T009 [Phase 1] Cross-cutting acceptance tests: sentinels, canary, injection probe
   - Files: `tests/project_security.rs` (create), `tests/fixtures/project/` (sentinel fixtures as needed)
   - Depends on: T008
   - Spec refs: SPEC-010, SPEC-009
