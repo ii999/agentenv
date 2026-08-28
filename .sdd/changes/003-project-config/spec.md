@@ -83,7 +83,7 @@ Verification:
 
 ### SPEC-003: Trust lifecycle and store durability
 
-A project file MUST have no effect until the user approves its exact content. Approval state MUST be stored outside the repository in a user-owned store keyed by the file's canonical absolute path with a fingerprint of its exact bytes, so that any content change or path change returns the file to the untrusted state. `agentenv project allow` MUST validate then record approval; `agentenv project revoke` MUST remove it. Every store mutation MUST be atomic: the store is replaced via a temporary file (created with `0600` permissions on Unix before content is written) and rename, so an interrupted mutation leaves the previous store intact. Concurrent mutations serialize as last-writer-wins per whole-store mutation; a mutation MUST never drop records it was not asked to change.
+A project file MUST have no effect until the user approves its exact content. Approval state MUST be stored outside the repository in a user-owned store keyed by the file's canonical absolute path with a fingerprint of its exact bytes, so that any content change or path change returns the file to the untrusted state. `agentenv project allow` MUST validate then record approval; `agentenv project revoke` MUST remove it. Every store mutation MUST be atomic: the store is replaced via a temporary file (created with `0600` permissions on Unix before content is written) and rename, so an interrupted mutation leaves the previous store intact. Concurrent mutations serialize as last-writer-wins per whole-store mutation: a mutation MUST preserve every record present in the store snapshot it read, and a concurrent update committed after that snapshot was read may be overwritten (the loser re-runs its operation) — this trade-off is documented behavior.
 
 Source trace:
 
@@ -141,7 +141,7 @@ Command scope and evaluation order:
 - Discovery runs for every invocation except `--help`, `--version`, and bypassed invocations (AC-001.4).
 - The `project` subcommands consume the file directly and never emit the notice; their output is the report itself.
 - Every other command (including `init`, `validate`, the write commands, and `run`) emits the notice when an untrusted file is discovered — on success and on failure alike, and for `run` before the target process replaces or starts.
-- Evaluation order per invocation: (1) discovery; (2) trust resolution — a corrupt trust store fails with exit 2 (AC-003.8); an unresolvable state base (required environment variables unset) degrades the file to untrusted with the notice naming the unresolvable state location; (3) trusted-file content read — a file with an approval record for its canonical path that cannot be read fails with exit status 2 naming the file; a file without an approval record that cannot be read or parsed is untrusted; (4) user-config load and the command proper, unchanged.
+- Evaluation order per invocation: (1) discovery; (2) trust resolution, ordered as canonical-path resolution → path-only approval-record lookup → content read → fingerprint comparison → parse — a corrupt trust store fails with exit 2 (AC-003.8); for commands outside the `project` group an unresolvable state base (required environment variables unset) degrades the file to untrusted with the notice naming the unresolvable state location, while `project status` represents the same state in its report (`trust` = `unavailable`, AC-006.11) and `project allow`/`revoke` fail explicitly (exit 2, EDGE-004b); (3) trusted-file content read — a file with an approval record for its canonical path that cannot be read fails with exit status 2 naming the file; a file without an approval record that cannot be read or parsed is untrusted; (4) user-config load and the command proper, unchanged.
 - The notice MUST never appear on stdout and MUST never alter any stdout payload, JSON or text.
 
 Source trace:
@@ -165,13 +165,18 @@ Verification:
 
 ### SPEC-006: `agentenv project status`
 
-`agentenv project status` MUST always produce its report — it never fails because the user configuration is missing, invalid, or has no selectable profile, and never fails because the pin names an undefined profile. It reports, in text and `--json`: whether a project file was discovered (and its path), its trust state (`trusted`, `untrusted-new`, `untrusted-changed`, or `invalid` with violations), its profile pin, and the requirement report. When requirements cannot be checked (no user config, no selectable profile, or a pin naming an undefined profile), the requirement section MUST state that requirements were not checked and name the reason.
+`agentenv project status` MUST always produce its report except on the two infrastructure failures that exit 2 (corrupt trust store; unreadable file with an approval record) — it never fails because the user configuration is missing, invalid, or has no selectable profile, never fails because the pin names an undefined profile, and represents an unresolvable state base inside the report (`trust` = `unavailable`) rather than failing. It reports, in text and `--json`: whether a project file was discovered (and its path), its trust state (`trusted`, `untrusted-new`, `untrusted-changed`, `invalid` with violations, or `unavailable` with a reason when the trust store's state base cannot be resolved), its profile pin, and the requirement report. When requirements cannot be checked (no user config, unparseable user config, no selectable profile, or a pin naming an undefined profile), the requirement section MUST state that requirements were not checked and name the reason.
 
-Exit status:
+Exit status (exhaustive matrix; the first matching row applies):
 
-- 0 — no project file discovered; or a trusted file whose declared requirements were checked and are all satisfied (a trusted file declaring no requirements exits 0).
-- 5 — the discovered file is untrusted (new or changed) or invalid.
-- 6 — the file is trusted but at least one requirement is unsatisfied, or requirements could not be checked.
+| Condition | Status |
+| --- | --- |
+| Corrupt trust store (AC-003.8), or a discovered file with an approval record that cannot be read (SPEC-005 order step 3) | 2 |
+| No project file discovered | 0 |
+| Discovered file untrusted (new or changed), invalid, or trust `unavailable` (state base unresolvable) | 5 |
+| Trusted; zero requirements declared (regardless of whether selection is degraded) | 0 |
+| Trusted; ≥1 declared requirement unsatisfied, or requirements declared but uncheckable | 6 |
+| Trusted; all declared requirements checked and satisfied | 0 |
 
 The `--json` output is a single JSON document with this envelope, frozen from Phase 1 and extended only additively:
 
@@ -182,6 +187,7 @@ The `--json` output is a single JSON document with this envelope, frozen from Ph
     "discovered": true,
     "path": "/abs/path/.agentenv.toml",
     "trust": "trusted",
+    "trust_reason": null,
     "violations": [ { "path": "requires.llm.reason", "message": "…" } ],
     "profile_pin": "work",
     "requirements": {
@@ -196,7 +202,7 @@ The `--json` output is a single JSON document with this envelope, frozen from Ph
 }
 ```
 
-Member semantics: `version` is the user-config schema version, `null` when the user config is unavailable; `path`, `trust`, and `profile_pin` are `null` when absent (`trust` is `null` only when `discovered` is `false`); `violations` is an empty array except in the `invalid` state; `requirements.checked` is `false` with a non-null `reason` when checking did not run; `entries` lists every declared requirement with `missing` naming absent entries or field paths; members are never omitted.
+Member semantics: `version` is the user-config schema version, `null` when the user config is unavailable; `path` and `trust` are `null` exactly when `discovered` is `false`; `profile_pin` is the file's pin whenever the file parses (`trusted`, `untrusted-new`, `untrusted-changed`) and `null` when it declares no pin, does not parse (`invalid`), or `trust` is `unavailable`; `trust` is one of `trusted`, `untrusted-new`, `untrusted-changed`, `invalid`, `unavailable`; `trust_reason` is a non-null string exactly when `trust` is `unavailable` (naming the unresolvable state location) and `null` otherwise; `violations` is an empty array except in the `invalid` state; `requirements.checked` is `false` with a non-null `reason` when checking did not run; `entries` lists every declared requirement with `missing` naming absent entries or field paths (`entries` is empty when `trust` is not `trusted` because an untrusted file's declarations are not consumed); members are never omitted.
 
 Source trace:
 
@@ -214,6 +220,10 @@ Acceptance criteria:
 - AC-006.6b (Phase 2): GIVEN a trusted file with declared requirements, WHEN `project status --json` runs, THEN the same envelope carries the populated requirement entries; no member is renamed, removed, or re-typed relative to Phase 1.
 - AC-006.7: GIVEN a discovered trusted file and no user config file, WHEN `project status` runs, THEN it reports discovery, trust, and pin; the requirement section states requirements were not checked because the user config is unavailable; `version` is `null` in JSON; and the exit status is 6 when requirements are declared, else 0.
 - AC-006.8: GIVEN a trusted pin naming an undefined profile, WHEN `project status` runs, THEN the report states the pin and that requirements were not checked because the pinned profile is not defined, and the exit status is 6 when requirements are declared, else 0.
+- AC-006.9: GIVEN a discovered trusted file and an unparseable user config file, WHEN `project status` runs, THEN the report is produced, the requirement section names the user config as the reason checking did not run, `version` is `null` in JSON, and the exit status is 6 when requirements are declared, else 0.
+- AC-006.10: GIVEN a trusted file declaring requirements but no pin, a user config with no `default_profile`, and no flag or environment selection, WHEN `project status` runs, THEN the requirement section states no profile was selectable and the exit status is 6.
+- AC-006.11: GIVEN a discovered project file and no resolvable state base (relevant environment variables unset), WHEN `project status` runs, THEN the report carries `trust` = `unavailable` with `trust_reason` naming the unresolvable state location, no notice is emitted, and the exit status is 5.
+- AC-006.12: GIVEN a corrupt trust store, WHEN `project status` runs, THEN it fails with exit status 2 naming the store path (AC-003.8), producing no report.
 
 Verification:
 
@@ -280,7 +290,9 @@ Verification:
 
 ### SPEC-010: No-secret invariant under a project file
 
-A discovered project file — in any trust state — MUST NOT cause a credential value to be printed, persisted, or rerouted: discovery, validation, trust operations, and `project status` MUST NOT resolve credentials, execute provider commands, or read secret stores; the only way a project file changes which credentials `run` injects, or under which environment names, is by selecting a different profile through a trusted pin (SPEC-004); and no diagnostic, notice, report, or error introduced by this change echoes project-file string values, user-config values, or TOML source lines — they name paths only, consistent with the accepted no-echo rules.
+A discovered project file — in any trust state — MUST NOT cause a credential value to be printed, persisted, or rerouted: discovery, validation, trust operations, and `project status` MUST NOT resolve credentials, execute provider commands, or read secret stores; and the only way a project file changes which credentials `run` injects, or under which environment names, is by selecting a different profile through a trusted pin (SPEC-004).
+
+Output discipline: every *diagnostic* introduced by this change — validation violations, error messages, and the untrusted-file notice — names TOML paths and file paths only and never echoes project-file string values, user-config values, or TOML source lines, consistent with the accepted no-echo rules. The `project status` *report* is the deliberate, bounded exception: it exposes exactly the schema-declared selection/declaration metadata — the file path, trust state and reason, violation paths, the profile pin, requirement entry names, field paths, and requirement reasons — and nothing else. No other command surface exposes project-file string values.
 
 Source trace:
 
@@ -289,13 +301,15 @@ Source trace:
 
 Acceptance criteria:
 
-- AC-010.1: GIVEN a project file (valid or invalid, trusted or not) containing a distinctive sentinel string in every string position, WHEN every new command (`project status`, `allow`, `revoke`) and every notice-emitting path runs, THEN the sentinel never appears in any stdout or stderr output.
-- AC-010.2: GIVEN a profile whose entries reference a counting command provider, WHEN `project status`, `project allow`, and `project revoke` run, THEN the provider execution count is unchanged.
-- AC-010.3: GIVEN a trusted pin selecting a profile, WHEN `run` injects credentials, THEN the injected names and sources are exactly those of the selected profile's entries as defined in the user config — the project file contributes no injection target and no credential selection beyond the profile choice.
+- AC-010.1: GIVEN an invalid project file whose forbidden or malformed positions carry a distinctive sentinel string, WHEN `project allow` and `project status` report its violations and WHEN any other command emits the notice, THEN every message names paths only and the sentinel never appears in any stdout or stderr output.
+- AC-010.2: GIVEN an untrusted but schema-valid project file whose `profile` and `reason` values carry a sentinel string, WHEN any command outside the `project` group runs, THEN the sentinel never appears in that command's stdout or stderr (the notice names the file path only).
+- AC-010.3: GIVEN a trusted valid project file, WHEN `project status` runs, THEN its report contains the pin and requirement reasons (the intended exposure) and contains no user-config values beyond profile and entry names.
+- AC-010.4: GIVEN a profile whose entries reference a counting command provider, WHEN `project status`, `project allow`, and `project revoke` run, THEN the provider execution count is unchanged.
+- AC-010.5: GIVEN a trusted pin selecting a profile, WHEN `run` injects credentials, THEN the injected names and sources are exactly those of the selected profile's entries as defined in the user config — the project file contributes no injection target and no credential selection beyond the profile choice.
 
 Verification:
 
-- Automated: integration tests using a sentinel-laden project file fixture and `tests/fixtures/counting_provider.sh`; AC-010.3 via the `test-probe` target.
+- Automated: integration tests using sentinel-laden project file fixtures and `tests/fixtures/counting_provider.sh`; AC-010.5 via the `test-probe` target.
 
 ## Edge Cases
 
@@ -335,12 +349,12 @@ Verification:
 | AC-003.1..11 | SPEC-003 | Phase 1 | `cargo test` integration/unit | Draft |
 | AC-004.1..8 | SPEC-004 | Phase 1 | `cargo test` integration | Draft |
 | AC-005.1..7 | SPEC-005 | Phase 1 | `cargo test` integration | Draft |
-| AC-006.1..3, 6.6a, 6.7, 6.8 | SPEC-006 | Phase 1 | `cargo test` integration + snapshots | Draft |
+| AC-006.1..3, 6.6a, 6.7..12 | SPEC-006 | Phase 1 | `cargo test` integration + snapshots | Draft |
 | AC-006.4, 6.5, 6.6b | SPEC-006 | Phase 2 | `cargo test` integration + snapshot | Draft |
 | AC-007.1..6 | SPEC-007 | Phase 2 | `cargo test` integration | Draft |
 | AC-008.1..3 | SPEC-008 | Phase 3 | Manual doc walkthrough | Draft |
 | AC-009.1..2 | SPEC-009 | all | `cargo test` full suite | Draft |
-| AC-010.1..3 | SPEC-010 | Phase 1 (10.1, 10.2), Phase 1 (10.3) | `cargo test` integration | Draft |
+| AC-010.1..5 | SPEC-010 | Phase 1 | `cargo test` integration | Draft |
 
 ## Implementation Notes
 

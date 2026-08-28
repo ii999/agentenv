@@ -104,14 +104,26 @@ Consolidated (both lanes produced consistent matrices):
 | Startup-latency NFR discharged by manual measurement, not an automated gate | A regression could ship if the manual check is skipped | Orchestrator (recorded assumption SPEC-AS-007) | Measured cold-start comparison recorded in validation.md |
 | Trust-store concurrency is last-writer-wins per whole-store mutation | Simultaneous `allow` of two different files may require one re-run | Orchestrator (documented behavior) | Documented in SPEC-003 and README |
 
+## Round 2 — Targeted cross-provider re-check (Codex gpt-5.6-sol, xhigh, read-only; handoff `003-project-config--spec-review-r2-codex`)
+
+Verdict: Revise. Confirmed fully resolved: CRIT-001, IMP-001, IMP-004, IMP-006, IMP-008, IMP-011. Partial resolutions traced to five residual/new findings:
+
+| ID | Severity | Finding | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R2-001 | Critical (P1) | SPEC-010's blanket no-echo rule contradicts SPEC-006's required exposure of `profile_pin` and requirement `reason` — no implementation can satisfy both | No-echo scoped to diagnostics/notices; `project status` report defined as the bounded, enumerated exception; AC-010.1..3 rewritten (sentinels in forbidden/diagnostic positions vs. asserted intended exposure) | Fixed (REV-017) |
+| R2-002 | Important (P2) | `project status` exit semantics incomplete/inconsistent (uncheckable-with-no-requirements; missing status 2 rows; invalid-user-config and no-selectable-profile cases without ACs) | Exhaustive first-match exit matrix in SPEC-006; AC-006.9..12 added | Fixed (REV-018) |
+| R2-003 | Important (P2) | Unavailable state base unrepresentable in `status` (notice forbidden for project subcommands; frozen envelope had no such state) | `trust` value `unavailable` + `trust_reason` member added to the envelope; AC-006.11; SPEC-005 evaluation order names the per-command handling | Fixed (REV-019) |
+| R2-004 | Important (P2) | `TrustStore::status(path, content)` cannot classify trusted-unreadable; facade lacked structured violations and a declared composition order | Path-only `lookup` interface; composition order canonicalize → lookup → read → compare → parse; `UntrustedReason` enum carries structured violations | Fixed (REV-020) |
+| R2-005 | Important (P2) | Last-writer-wins contradicts the unconditional "never drop records" invariant | Preservation scoped to the mutation's input snapshot; concurrent-overwrite trade-off stated as documented behavior | Fixed (REV-021) |
+
 ## Approval Decision
 
-Decision: Revise (round 1) — all Critical and Important findings revised; targeted cross-provider re-check pending (round 2, Codex lane per the fanout rules, since the revision was produced on the Claude side).
+Decision: Revise (round 2 revisions applied) — third-cycle targeted cross-provider re-check pending on the five round-2 findings.
 
 Approval rationale:
 
-- Both lanes found the same load-bearing defects, which is strong signal the round-1 review converged; every Critical/Important finding has a concrete revision applied.
+- Round 2 confirmed six of fourteen round-1 findings fully resolved and reduced the open surface to five precisely-scoped contradictions, all revised above.
 
 Conditions:
 
-- Round-2 targeted re-check must confirm CRIT-001..003 and IMP-001..011 are resolved without new Critical/Important findings.
+- Cycle-3 targeted re-check must confirm R2-001..005 are resolved without new Critical/Important findings; per the review-loop cap, a persisting Critical/Important after this cycle escalates to one full two-lane round.
