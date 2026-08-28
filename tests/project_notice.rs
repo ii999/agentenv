@@ -185,5 +185,8 @@ fn trusted_files_and_unavailable_state_follow_their_notice_rules() {
     assert_exit(&unavailable, 0, "unavailable state leaves the file inert");
     assert_single_notice(&unavailable, &fixture.project);
     assert!(unavailable.stderr.contains(helpers::STATE_BASE_ENV));
+    // The Unix diagnostic also names the HOME fallback; the Windows one
+    // names only LOCALAPPDATA.
+    #[cfg(unix)]
     assert!(unavailable.stderr.contains("HOME"));
 }
