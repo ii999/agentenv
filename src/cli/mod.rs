@@ -15,6 +15,7 @@ use clap::{Args, Subcommand};
 use agentenv::config::Config;
 use agentenv::error::AppError;
 use agentenv::path::{single_entry_name, Segments};
+use agentenv::project::{model::ProjectPin, ProjectContext};
 use agentenv::query::{self, render};
 use agentenv::runner::InjectionPlan;
 
@@ -165,11 +166,23 @@ pub struct Invocation {
     pub profile: Option<String>,
     pub json: bool,
     pub command: Command,
+    pub project: ProjectContext,
 }
 
 pub struct Output {
     pub stdout: String,
     pub stderr: String,
+    pub status: i32,
+}
+
+impl Output {
+    pub fn success(stdout: String, stderr: String) -> Self {
+        Self {
+            stdout,
+            stderr,
+            status: 0,
+        }
+    }
 }
 
 pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
@@ -180,10 +193,8 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 "validate does not support --json".to_owned(),
             ));
         }
-        return validate::validate_config(&env).map(|()| Output {
-            stdout: "Configuration is valid.\n".to_owned(),
-            stderr: String::new(),
-        });
+        return validate::validate_config(&env)
+            .map(|()| Output::success("Configuration is valid.\n".to_owned(), String::new()));
     }
     if matches!(
         &invocation.command,
@@ -214,7 +225,12 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                         .to_owned(),
                 ));
             }
-            let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
+            let profile = select_profile(
+                &config,
+                invocation.profile.as_deref(),
+                &env,
+                &invocation.project,
+            )?;
             let plan = InjectionPlan::build(&config, profile, &args.entries)?;
             match plan.resolve_and_launch(args.command) {
                 Ok(never) => match never {},
@@ -236,10 +252,16 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             Ok(Output {
                 stdout,
                 stderr: String::new(),
+                status: 0,
             })
         }
         Command::List(args) => {
-            let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
+            let profile = select_profile(
+                &config,
+                invocation.profile.as_deref(),
+                &env,
+                &invocation.project,
+            )?;
             if let Some(entry_argument) = args.entry {
                 let entry_name = single_entry_name(&entry_argument)?;
                 let entry = query::entry(&config, profile, &entry_name, &env)?;
@@ -251,6 +273,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 Ok(Output {
                     stdout,
                     stderr: String::new(),
+                    status: 0,
                 })
             } else {
                 let listing = query::list(&config, profile, &env);
@@ -262,13 +285,19 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 Ok(Output {
                     stdout,
                     stderr: String::new(),
+                    status: 0,
                 })
             }
         }
         Command::Show {
             entry: entry_argument,
         } => {
-            let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
+            let profile = select_profile(
+                &config,
+                invocation.profile.as_deref(),
+                &env,
+                &invocation.project,
+            )?;
             let entry_name = single_entry_name(&entry_argument)?;
             let entry = query::entry(&config, profile, &entry_name, &env)?;
             let stdout = if invocation.json {
@@ -279,21 +308,29 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             Ok(Output {
                 stdout,
                 stderr: String::new(),
+                status: 0,
             })
         }
         Command::Get { path } => {
-            let profile = select_profile(&config, invocation.profile.as_deref(), &env)?;
+            let profile = select_profile(
+                &config,
+                invocation.profile.as_deref(),
+                &env,
+                &invocation.project,
+            )?;
             let path = Segments::parse(&path)?;
             let value = query::get(profile, &path)?;
             if invocation.json {
                 Ok(Output {
                     stdout: json_stdout(render::raw_get_json(value)),
                     stderr: String::new(),
+                    status: 0,
                 })
             } else if let Some(stdout) = render::get_text(value) {
                 Ok(Output {
                     stdout,
                     stderr: String::new(),
+                    status: 0,
                 })
             } else {
                 Err(AppError::Usage(format!(
@@ -321,6 +358,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                     &config,
                     invocation.profile.as_deref(),
                     &env,
+                    &invocation.project,
                 )?]
             };
             let matches = query::find(&config, selected, &args.needle, &env)?;
@@ -334,7 +372,11 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             } else {
                 render::find_text(&matches)
             };
-            Ok(Output { stdout, stderr })
+            Ok(Output {
+                stdout,
+                stderr,
+                status: 0,
+            })
         }
         Command::Credential(CredentialArgs {
             command: CredentialCommand::List,
@@ -348,6 +390,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             Ok(Output {
                 stdout,
                 stderr: String::new(),
+                status: 0,
             })
         }
         Command::Credential(CredentialArgs {
@@ -363,9 +406,17 @@ fn select_profile<'a>(
     config: &'a Config,
     flag: Option<&str>,
     env: &impl Fn(&str) -> Option<String>,
+    project: &ProjectContext,
 ) -> Result<&'a agentenv::config::Profile, AppError> {
     let env_profile = env("AGENTENV_PROFILE");
-    config.select_profile(flag, env_profile.as_deref())
+    config.select_profile(flag, env_profile.as_deref(), trusted_project_pin(project))
+}
+
+pub(super) fn trusted_project_pin(project: &ProjectContext) -> Option<&ProjectPin> {
+    match project {
+        ProjectContext::Trusted { meta, .. } => meta.pin.as_ref(),
+        ProjectContext::None | ProjectContext::Untrusted { .. } => None,
+    }
 }
 
 fn json_stdout(value: serde_json::Value) -> String {

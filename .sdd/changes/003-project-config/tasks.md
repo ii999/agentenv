@@ -137,7 +137,7 @@ Checkpoint: `src/project/` is complete and library-level tested: schema, discove
 
 ### Group 3: Phase 1 CLI integration
 
-- [ ] T007 [Phase 1] Thread the pin through selection and add the pre-dispatch prelude
+- [x] T007 [Phase 1] Thread the pin through selection and add the pre-dispatch prelude
   - Files: `src/config/model.rs` (`select_profile`), `src/config/write.rs` (two standard-chain call sites), `src/cli/mod.rs`, `src/main.rs`, `src/error.rs`, `tests/project_precedence.rs` (create), `tests/project_notice.rs` (create)
   - Depends on: T006
   - Spec refs: SPEC-004 (read in full — `--create-profile` exemption included), SPEC-005 (notice scope + evaluation order), SPEC-001 (bypass)

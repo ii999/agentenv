@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::process;
 
 use agentenv::error::AppError;
+use agentenv::project::{self, ProjectContext, UntrustedReason};
 use clap::{error::ErrorKind, CommandFactory, Parser};
 
 use crate::cli::{execute, Command, Invocation};
@@ -21,6 +22,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Skip project-file discovery for this invocation.
+    #[arg(long, global = true)]
+    no_project: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -30,15 +35,26 @@ fn main() {
     let Some(command) = cli.command else {
         print_help_and_exit();
     };
+    let project = match resolve_project_context(cli.no_project) {
+        Ok(project) => project,
+        Err(error) => {
+            let _ = write_error(&error);
+            process::exit(error.exit_code());
+        }
+    };
     match execute(Invocation {
         profile: cli.profile,
         json: cli.json,
         command,
+        project,
     }) {
         Ok(output) => {
             if let Err(error) = write_outputs(&output.stdout, &output.stderr) {
                 let _ = writeln!(io::stderr(), "failed to write command output: {error}");
                 process::exit(1);
+            }
+            if output.status != 0 {
+                process::exit(output.status);
             }
         }
         Err(error) => {
@@ -46,6 +62,50 @@ fn main() {
             process::exit(error.exit_code());
         }
     }
+}
+
+fn resolve_project_context(no_project: bool) -> Result<ProjectContext, AppError> {
+    if no_project || std::env::var_os("AGENTENV_NO_PROJECT").is_some_and(|value| !value.is_empty())
+    {
+        return Ok(ProjectContext::None);
+    }
+
+    let cwd = std::env::current_dir().map_err(|error| {
+        AppError::Config(vec![agentenv::error::Violation {
+            path: "working directory".to_owned(),
+            message: format!(
+                "could not determine the working directory ({error}); change to an accessible directory and retry"
+            ),
+        }])
+    })?;
+    let env = |name: &str| std::env::var(name).ok();
+    let project = project::resolve(&cwd, &env)?;
+    write_untrusted_project_notice(&project).map_err(|error| {
+        AppError::Usage(format!(
+            "could not write the project trust notice: {error}; retry in a terminal with writable standard error"
+        ))
+    })?;
+    Ok(project)
+}
+
+fn write_untrusted_project_notice(project: &ProjectContext) -> io::Result<()> {
+    let ProjectContext::Untrusted { path, reason, .. } = project else {
+        return Ok(());
+    };
+    let mut stderr = io::stderr();
+    match reason {
+        UntrustedReason::StateUnavailable(detail) => writeln!(
+            stderr,
+            "project file {} cannot use project trust state ({detail}); run `agentenv project status`, set the required state-location variables, and retry",
+            path.display()
+        )?,
+        _ => writeln!(
+            stderr,
+            "project file {} is untrusted; run `agentenv project status` to inspect it, then run `agentenv project allow` to approve it",
+            path.display()
+        )?,
+    }
+    stderr.flush()
 }
 
 fn parse_cli() -> Cli {

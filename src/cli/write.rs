@@ -6,8 +6,8 @@ use agentenv::config::write::{CredentialAddRequest, ProviderSpec, SetRequest, Va
 use agentenv::error::AppError;
 
 use super::{
-    Command, CredentialAddArgs, CredentialArgs, CredentialCommand, Invocation, Output,
-    ProviderKind, ValueType,
+    trusted_project_pin, Command, CredentialAddArgs, CredentialArgs, CredentialCommand, Invocation,
+    Output, ProviderKind, ValueType,
 };
 
 /// Runs a config-write command (`set`, `unset`, `init`, `credential add`).
@@ -17,6 +17,7 @@ pub(super) fn execute(
     invocation: Invocation,
     env: &impl Fn(&str) -> Option<String>,
 ) -> Result<Output, AppError> {
+    let project_pin = trusted_project_pin(&invocation.project).cloned();
     let command_name = match &invocation.command {
         Command::Set(_) => "set",
         Command::Unset { .. } => "unset",
@@ -45,8 +46,14 @@ pub(super) fn execute(
                 create_profile: args.create_profile,
             },
             env,
+            project_pin.as_ref(),
         )?,
-        Command::Unset { path } => config_write::unset(invocation.profile.as_deref(), &path, env)?,
+        Command::Unset { path } => config_write::unset(
+            invocation.profile.as_deref(),
+            &path,
+            env,
+            project_pin.as_ref(),
+        )?,
         Command::Init => config_write::init(env)?,
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Add(args),
@@ -56,6 +63,7 @@ pub(super) fn execute(
     Ok(Output {
         stdout,
         stderr: String::new(),
+        status: 0,
     })
 }
 

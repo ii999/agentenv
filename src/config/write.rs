@@ -23,6 +23,7 @@ use super::validate;
 use super::Config;
 use crate::error::{AppError, Violation};
 use crate::path::Segments;
+use crate::project::model::ProjectPin;
 
 /// A parsed `--type` selection with the raw value argument.
 #[derive(Debug, Clone)]
@@ -81,15 +82,32 @@ pub struct CredentialAddRequest {
 }
 
 /// Applies a `set` mutation and returns the success message.
-pub fn set(request: SetRequest, env: &impl Fn(&str) -> Option<String>) -> Result<String, AppError> {
+pub fn set(
+    request: SetRequest,
+    env: &impl Fn(&str) -> Option<String>,
+    project_pin: Option<&ProjectPin>,
+) -> Result<String, AppError> {
     let segments = Segments::parse(&request.path)?;
     let mut loaded = LoadedDocument::load(env)?;
-    let profile_name = resolve_write_profile(
-        &loaded.config,
-        request.profile_flag.as_deref(),
-        request.create_profile.as_deref(),
-        env,
-    )?;
+    let profile_name = if request.create_profile.is_some() {
+        resolve_write_profile(
+            &loaded.config,
+            request.profile_flag.as_deref(),
+            request.create_profile.as_deref(),
+            env,
+        )?
+    } else {
+        let env_profile = super::env_value(env, "AGENTENV_PROFILE");
+        loaded
+            .config
+            .select_profile(
+                request.profile_flag.as_deref(),
+                env_profile.as_deref(),
+                project_pin,
+            )?
+            .name
+            .clone()
+    };
     if request.description.is_some() && segments.len() == 1 {
         return Err(AppError::Usage(
             "--description writes an entry's description, so the target path needs at least \
@@ -155,6 +173,7 @@ pub fn unset(
     profile_flag: Option<&str>,
     path: &str,
     env: &impl Fn(&str) -> Option<String>,
+    project_pin: Option<&ProjectPin>,
 ) -> Result<String, AppError> {
     let segments = Segments::parse(path)?;
     let mut loaded = LoadedDocument::load(env)?;
@@ -162,7 +181,7 @@ pub fn unset(
         let env_profile = super::env_value(env, "AGENTENV_PROFILE");
         loaded
             .config
-            .select_profile(profile_flag, env_profile.as_deref())?
+            .select_profile(profile_flag, env_profile.as_deref(), project_pin)?
             .name
             .clone()
     };
@@ -443,7 +462,7 @@ fn resolve_write_profile(
     }
     let env_profile = super::env_value(env, "AGENTENV_PROFILE");
     Ok(config
-        .select_profile(profile_flag, env_profile.as_deref())?
+        .select_profile(profile_flag, env_profile.as_deref(), None)?
         .name
         .clone())
 }
@@ -868,6 +887,7 @@ mod tests {
                 ValueSpec::String("https://new.example.com/v1".to_owned()),
             ),
             &env,
+            None,
         )
         .expect("the set succeeds");
         let after = fs::read_to_string(&path).expect("the file reads");
@@ -888,6 +908,7 @@ mod tests {
         let error = set(
             set_request("newentry.field", ValueSpec::String("x".to_owned())),
             &env,
+            None,
         )
         .expect_err("the set is refused");
         match &error {
@@ -916,6 +937,7 @@ mod tests {
             set(
                 set_request("llm.model", ValueSpec::String("m2".to_owned())),
                 &env,
+                None,
             )
             .expect("the set succeeds");
             let bits = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
@@ -931,6 +953,7 @@ mod tests {
         let error = set(
             set_request("llm.endpoint", ValueSpec::String("x".to_owned())),
             &env,
+            None,
         )
         .expect_err("the pre-existing problem is refused");
         assert!(matches!(error, AppError::Config(_)), "{error:?}");
@@ -950,6 +973,7 @@ mod tests {
         let error = set(
             set_request("llm.endpoint", ValueSpec::String("x".to_owned())),
             &env,
+            None,
         )
         .expect_err("the missing file is refused");
         match &error {
@@ -978,6 +1002,7 @@ mod tests {
         set(
             set_request("llm.model", ValueSpec::String("m3".to_owned())),
             &env,
+            None,
         )
         .expect("the set succeeds through the symlink");
         assert!(
@@ -1010,6 +1035,7 @@ mod tests {
         let error = set(
             set_request("llm.model", ValueSpec::String("x".to_owned())),
             &env,
+            None,
         )
         .expect_err("the dangling symlink is refused");
         match &error {
@@ -1028,6 +1054,7 @@ mod tests {
         set(
             set_request("llm.model", ValueSpec::String("m4".to_owned())),
             &env,
+            None,
         )
         .expect("the set succeeds");
         let after = fs::read_to_string(&path).expect("the file reads");

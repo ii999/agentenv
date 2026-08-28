@@ -16,6 +16,7 @@ pub(super) fn check(config: &Config, name: &str, json: bool) -> Result<Output, A
     Ok(Output {
         stdout: format!("Credential '{name}' is available.\n"),
         stderr: String::new(),
+        status: 0,
     })
 }
 
@@ -35,6 +36,7 @@ pub(super) fn set(config: &Config, name: &str, json: bool) -> Result<Output, App
     Ok(Output {
         stdout: format!("Credential '{name}' stored.\n"),
         stderr: String::new(),
+        status: 0,
     })
 }
 
