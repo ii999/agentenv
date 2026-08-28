@@ -52,6 +52,8 @@ Edge cases: EDGE-001 (`unfindable_target_exits_127_and_absolute_targets_need_no_
 | --- | --- | --- |
 | DEF-001: AC-001.7 / EDGE-006 Windows execution | The Windows-marked test compiles only under `cfg(windows)`; this machine is macOS. The test establishes its own `Path`-spelling precondition (CR-01 fix) and asserts the surviving spelling and value exactly. | Confirm the Windows CI job passes on the next push of `main`. |
 
+Resolution (2026-08-28, post-archive): DEF-001 is resolved. CI run 33169616459 on `main` passed the full matrix, including `Test (windows-latest)` executing `windows_carries_the_parent_path_spelling_and_value_once`. AC-001.7 and EDGE-006 therefore stand fully accepted (23/23). Getting the matrix green surfaced test-only Windows portability defects — none in this change's product code: two seam unit tests and two integration assertions in this change's suites asserted Unix-only base names (fixed by platform-selecting the asserted names and scoping the locale test to Unix per AC-001.2), and the change-003 test fixtures hardcoded `XDG_STATE_HOME` where Windows derives the trust store from `LOCALAPPDATA` (fixed via a shared `STATE_BASE_ENV` helper constant, canonical-path notice assertions, and Unix-scoping of platform-specific diagnostic wording and the unavailable-state snapshot).
+
 ## Final Decision
 
 Decision: Accepted
