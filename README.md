@@ -97,8 +97,13 @@ creating or changing the file.
 Profile selection uses this precedence:
 
 1. `--profile <NAME>`
-2. `AGENTENV_PROFILE`
-3. `default_profile` in the file
+2. A non-empty `AGENTENV_PROFILE`
+3. The `profile` pin in a trusted project file
+4. `default_profile` in the file
+
+The same order applies to reads, `run`, `set`, and `unset`. Creating a profile
+is deliberately separate: `--create-profile` still requires an explicit
+`--profile <NAME>` and does not use a project pin.
 
 The schema is open for fields under profile entries. Each profile and each
 entry needs a non-empty `description`. The reserved `inject` table maps target
@@ -171,6 +176,54 @@ Entry paths use dot-separated segments, with double quotes for a segment that
 contains punctuation or spaces. A profile name is selected with `--profile`
 and is not part of the path. Arrays are read as whole values with `get --json`.
 
+### Project-scoped configuration
+
+`agentenv` can discover one checked-in `.agentenv.toml`: it starts in the
+working directory and walks toward the filesystem root, using the nearest
+regular file. The file is selection-only; it cannot define values, credentials,
+or injection mappings.
+
+```toml
+version = 1
+profile = "work"
+
+[requires.llm]
+reason = "Run the application with its configured LLM."
+fields = ["model"]
+```
+
+The file must use `version = 1`. It may include a non-empty `profile` and
+`[requires.<entry>]` tables. Each requirement has a non-empty `reason`; when
+present, `fields` lists one or more non-empty entry-relative paths. The file is
+limited to 64 KiB and may not contain `credential://` references.
+
+Project files are inert until approved for their exact contents. Approval is
+stored in your user state directory, outside the repository; any edit makes the
+file untrusted again. Review and manage the discovered file with:
+
+```bash
+agentenv project status
+agentenv project status --json
+agentenv project allow
+agentenv project revoke
+```
+
+`status` reports discovery, trust, the profile pin, and declared requirements.
+`allow` validates and approves the current file; `revoke` removes its approval.
+An untrusted file produces one stderr notice for ordinary commands and has no
+effect on profile selection.
+
+Most failing JSON commands leave stdout empty. `agentenv project status --json`
+is the exception: it writes its JSON report to stdout for status `5`
+(untrusted, invalid, or unavailable project trust) and status `6`
+(requirements are unsatisfied or cannot be checked). A status `2`
+infrastructure failure still leaves stdout empty.
+
+Use `--no-project`, or set `AGENTENV_NO_PROJECT` to a non-empty value, to skip
+discovery for an ordinary invocation. The bypass does not apply to `agentenv
+project status`, `agentenv project allow`, or `agentenv project revoke`; those
+commands always discover the nearest project file.
+
 ## Agent usage protocol
 
 A full agent skill ships in `skills/agentenv/` and in every release archive;
@@ -188,7 +241,19 @@ For runtimes without skill support, projects can place this block in
 ```md
 User environment information is available through `agentenv`.
 
-- Run `agentenv list --json` to discover available configuration.
+- Run `agentenv project status --json` first to discover project state. Its
+  report may be written to stdout with exit status `5` or `6`.
+- A project file is the nearest regular `.agentenv.toml`; it contains only
+  `version = 1`, an optional profile pin, and optional requirements. Approve
+  its exact contents with `agentenv project allow` and remove approval with
+  `agentenv project revoke`.
+- Profile selection is `--profile`, non-empty `AGENTENV_PROFILE`, a trusted
+  project pin, then `default_profile`. This applies to reads, `run`, `set`,
+  and `unset`; `--create-profile` still needs an explicit `--profile`.
+- Use `--no-project` or non-empty `AGENTENV_NO_PROJECT` to bypass ordinary
+  discovery. The bypass does not apply to `agentenv project` subcommands.
+- Run `agentenv list --json` to discover available configuration after checking
+  project state.
 - Run `agentenv show <name> --json` before using an unfamiliar entry.
 - Use `agentenv get <path>` to retrieve ordinary values.
 - Use `agentenv run --with <entry> -- <command>` when credentials are required.
@@ -196,16 +261,24 @@ User environment information is available through `agentenv`.
   to save; define credentials with `agentenv credential add <name> ...` before
   referencing them, and never write a secret value into the file.
 - Never print, log, persist, or summarize resolved credentials.
+- Status `2` also covers project-file validation errors; status `5` reports
+  project trust-state failures and status `6` reports unchecked or unsatisfied
+  project requirements.
+- Keep non-secret settings in `.env`; for Docker Compose, inject credentials
+  with `agentenv run --with llm -- docker compose up`, never an `env_file:`
+  containing secrets.
 - Report missing configuration or credentials explicitly.
 ```
 
 Use the commands in this order:
 
-1. Discover available profiles and entries with `agentenv list --json`.
-2. Inspect an unfamiliar entry with `agentenv show <name> --json`.
-3. Read an ordinary scalar with `agentenv get <path>`; use `--json` for
+1. Discover project state with `agentenv project status --json`. Read its
+   stdout report even when it exits `5` or `6`; an exit `2` leaves stdout empty.
+2. Discover available profiles and entries with `agentenv list --json`.
+3. Inspect an unfamiliar entry with `agentenv show <name> --json`.
+4. Read an ordinary scalar with `agentenv get <path>`; use `--json` for
    an array or table.
-4. When a target needs credentials, use
+5. When a target needs credentials, use
    `agentenv run --with <entry> -- <command> [args...]`.
 
 If the requested profile, entry, field, or credential is missing, report that
@@ -238,6 +311,10 @@ agentenv get <path> --json
 agentenv find <needle> --json
 agentenv find <needle> --all-profiles
 agentenv validate
+agentenv project status
+agentenv project status --json
+agentenv project allow
+agentenv project revoke
 ```
 
 `list`, `show`, `get`, and `find` support `--profile <NAME>` and `--json`.
@@ -264,8 +341,8 @@ as inline tables). `--description` also writes the description of the entry
 named by the first path segment, which is how a new entry is created in one
 command. An unknown profile is an error from every selection source;
 `--create-profile <text>` together with an explicit `--profile <name>`
-creates the profile with that description. `unset` removes one field or
-table. Write commands have no `--json` output mode.
+creates the profile with that description and never uses a project pin. `unset`
+removes one field or table. Write commands have no `--json` output mode.
 
 Every write is validated as a whole file before anything touches disk: a
 mutation whose result would not pass `agentenv validate`'s schema rules is
@@ -351,6 +428,28 @@ The target receives its normal standard input, output, and error streams.
 is returned to the caller. A target that cannot be executed returns exit code
 `127`.
 
+### Docker Compose pairing
+
+Keep non-secret defaults, such as ports and image tags, in `.env`. Supply
+credentials only through `agentenv run`, then let Compose pass through the
+already-injected variable:
+
+```bash
+agentenv run --with llm -- docker compose up
+```
+
+```yaml
+services:
+  app:
+    image: alpine:3.20
+    environment:
+      - OPENAI_API_KEY
+```
+
+Compose can also use `${OPENAI_API_KEY}` interpolation. Do not put secrets in
+an `env_file:`; that pattern copies credentials into a file and is the
+anti-pattern this workflow avoids.
+
 ## Safety and threat model
 
 `agentenv` itself never prints a resolved credential to standard output or
@@ -403,9 +502,11 @@ Commands use these statuses:
 | ---: | --- |
 | `0` | Success |
 | `1` | Usage or argument error |
-| `2` | Configuration-file error, including validation or Unix permission failure |
+| `2` | Configuration-file error, including validation, project-file validation, corrupt project trust state, or Unix permission failure |
 | `3` | Unknown profile, entry, field path, or credential name |
 | `4` | Credential resolution/store failure or injection conflict |
+| `5` | Project trust-state failure: `status` found an untrusted, invalid, or unavailable project file, or `allow`/`revoke` found no project file |
+| `6` | Project requirements are unsatisfied or cannot be checked by `status` |
 | `127` | `run` target could not be executed |
 
 ## License

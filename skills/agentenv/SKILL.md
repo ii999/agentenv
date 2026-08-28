@@ -43,16 +43,20 @@ reading the config file directly.
 
 Work top-down; skip steps you have already done in this session.
 
-1. `agentenv list --json` — discover profiles and entries.
+1. `agentenv project status --json` — discover the nearest project file and
+   its trust state before reading profile-dependent configuration. Its report
+   is written to stdout even when it exits `5` or `6`; an exit `2` leaves
+   stdout empty.
+2. `agentenv list --json` — discover profiles and entries.
    `agentenv list --profiles` lists profile names without selecting one.
-2. `agentenv show <entry> --json` — inspect an unfamiliar entry before
+3. `agentenv show <entry> --json` — inspect an unfamiliar entry before
    using it. Credential fields appear as a `reference` member
    (`credential://<name>` or `credential://<name>?as=<ENV>`), never as a
    value.
-3. `agentenv get <path>` — read one ordinary scalar. Use `--json` for an
+4. `agentenv get <path>` — read one ordinary scalar. Use `--json` for an
    array or table. Reading a credential field returns the reference
    string, not the secret.
-4. `agentenv find <needle> --json` — search entry names, field names,
+5. `agentenv find <needle> --json` — search entry names, field names,
    descriptions, and string values when you do not know where something
    lives. Add `--all-profiles` to search every profile.
 
@@ -60,7 +64,38 @@ Paths are dot-separated field segments within the selected profile, for
 example `llm.model`. Quote a segment containing punctuation or spaces:
 `servers."my host".port`. The profile is not part of the path; select it
 with `--profile <NAME>` (precedence: `--profile`, then `AGENTENV_PROFILE`,
-then `default_profile` in the file).
+then the trusted project-file pin, then `default_profile` in the file). This
+applies to reads, `run`, `set`, and `unset`. `--create-profile` requires an
+explicit `--profile` and never uses the pin.
+
+## Project-scoped configuration
+
+`agentenv` discovers the nearest regular `.agentenv.toml` while walking from
+the working directory toward the filesystem root. The file has a closed,
+selection-only schema: `version = 1`, an optional non-empty `profile`, and
+optional `[requires.<entry>]` tables with a non-empty `reason` and optional
+entry-relative `fields` that, when present, are non-empty. It is limited to
+64 KiB and cannot contain
+values, credential definitions, `inject` tables, or `credential://` strings.
+
+Project files are inert until their exact contents are approved. Use
+`agentenv project status`, `agentenv project allow`, and `agentenv project
+revoke` to inspect, approve, and remove approval. Approval is kept in the user
+state directory, outside the repository; editing the file makes it untrusted
+again. An untrusted file affects no ordinary command except for one stderr
+notice.
+
+Use `--no-project`, or a non-empty `AGENTENV_NO_PROJECT`, to bypass discovery
+for a command outside the `project` group. The bypass never applies to
+`project status`, `project allow`, or `project revoke`, which always discover
+the nearest file.
+
+`project status --json` deliberately writes its report to stdout with exit
+status `5` for an unavailable, invalid, or untrusted project state and with
+exit status `6` when requirements are unsatisfied or cannot be checked. This
+is the exception to the usual empty-stdout-on-failing-JSON rule. Exit `2`
+covers configuration errors, including project-file validation errors, and
+leaves stdout empty for this command.
 
 ## Running a command that needs credentials
 
@@ -138,15 +173,37 @@ history.
 Prefer `keychain` or `command` providers for local use; `env` exposes the
 value to every process inheriting the environment and suits CI.
 
+## Docker Compose pairing
+
+Keep non-secret settings in `.env`. Inject credentials only for the process
+that needs them, then let Compose receive the injected variable:
+
+```bash
+agentenv run --with llm -- docker compose up
+```
+
+```yaml
+services:
+  app:
+    image: alpine:3.20
+    environment:
+      - OPENAI_API_KEY
+```
+
+`${OPENAI_API_KEY}` interpolation is also supported by Compose. Do not use an
+`env_file:` containing secrets; it persists credentials in a file.
+
 ## Exit codes and errors
 
 | Code | Meaning | Typical response |
 | ---: | --- | --- |
 | 0 | Success | — |
 | 1 | Usage or argument error | Fix the invocation |
-| 2 | Config-file error (validation, Unix permission bits not ⊆ 0600) | Run `agentenv validate`; report the diagnostic |
+| 2 | Config-file error, including project-file validation, corrupt trust state, or Unix permission bits not ⊆ 0600 | Run `agentenv validate`; report the diagnostic |
 | 3 | Unknown profile, entry, field path, or credential | Re-check with `list`/`find`; report what is missing |
 | 4 | Credential resolution failure or injection conflict | `credential check <name>`; report, do not substitute |
+| 5 | Project trust-state failure | Run `agentenv project status`; use `allow` or `revoke` as indicated |
+| 6 | Project requirements unsatisfied or uncheckable (`project status` only) | Read the status report and repair the reported requirement or profile selection |
 | 127 | `run` target could not be executed | The target command is missing, not agentenv |
 
 Diagnostics never echo secret values, so it is safe to relay them to the

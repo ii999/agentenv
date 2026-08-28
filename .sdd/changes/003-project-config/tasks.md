@@ -188,7 +188,7 @@ Checkpoint: all Phase 1 acceptance criteria (SPEC-001 through SPEC-007, SPEC-009
 
 ### Group 4: Phase 2 — Docs and protocol
 
-- [ ] T010 [Phase 2] Update README, agent skill, and pairing documentation
+- [x] T010 [Phase 2] Update README, agent skill, and pairing documentation
   - Files: `README.md`, `skills/agentenv/SKILL.md`
   - Depends on: T009
   - Spec refs: SPEC-008 (read in full — it enumerates every required topic)
