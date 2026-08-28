@@ -105,7 +105,8 @@ pub fn entry(
     Ok(entry_view(config, profile, name, table, env))
 }
 
-pub(crate) fn entry_table<'a>(profile: &'a Profile, name: &str) -> Result<&'a Table, AppError> {
+/// Returns a validated entry table by name.
+pub fn entry_table<'a>(profile: &'a Profile, name: &str) -> Result<&'a Table, AppError> {
     let Some(value) = profile.entries.get(name) else {
         let names = profile
             .entries

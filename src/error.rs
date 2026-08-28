@@ -31,6 +31,9 @@ pub enum AppError {
     #[error("injection conflict: {0}")]
     Injection(String),
 
+    #[error("project trust error: {0}")]
+    ProjectTrust(String),
+
     #[error("target is not executable: {0}")]
     TargetNotExecutable(String),
 }
@@ -43,6 +46,7 @@ impl AppError {
             Self::NotFound(_) => 3,
             Self::Credential(_) => 4,
             Self::Injection(_) => 4,
+            Self::ProjectTrust(_) => 5,
             Self::TargetNotExecutable(_) => 127,
         }
     }

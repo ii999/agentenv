@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "project": {
+    "discovered": true,
+    "path": "<project>",
+    "trust": "trusted",
+    "trust_reason": null,
+    "violations": [],
+    "profile_pin": "work",
+    "requirements": {
+      "checked": true,
+      "reason": null,
+      "profile": "work",
+      "entries": [
+        {
+          "entry": "llm",
+          "reason": "LLM access is required",
+          "satisfied": true,
+          "missing": []
+        },
+        {
+          "entry": "table_value",
+          "reason": "Table values are accepted",
+          "satisfied": true,
+          "missing": []
+        }
+      ]
+    }
+  }
+}

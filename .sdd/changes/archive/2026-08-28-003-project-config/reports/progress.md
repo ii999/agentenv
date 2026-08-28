@@ -1,0 +1,22 @@
+- 2026-08-28 T001: DONE (report: task-T001-report.md)
+- 2026-08-28 T001: impact delta: The required seed re-scan matched the impact map's original 157 `run_ac` occurrences and found no `Command::new` calls in the scoped test files. The two mapped `CommandBuilder` occurrences remain in `tests/credential_p2.rs`; no additional invocation call sites were found. The post-change search has one extra `run_ac` documentation reference introduced by the new constructor documentation, not an additional invocation.
+- 2026-08-28 T004: DONE (report: task-T004-report.md)
+- 2026-08-28 T004: impact delta: The impact map predicted no existing call sites. Re-verification with `git grep -n -F -e TrustStore -e StoreFs -e project::trust -e fingerprint -- ':(exclude).sdd/'` found no hits outside the two files this task authored, other than the explanatory comment added beside the new `sha2` entry in `Cargo.toml`. No coupling was discovered and the map needs no correction.
+- 2026-08-28 T002: DONE (report: task-T002-report.md)
+- 2026-08-28 T002: impact delta: The existing mapped call sites were unchanged. This task adds the expected `Segments::parse` and `Violation` uses in `src/project/model.rs`.
+- 2026-08-28 T003: DONE (report: task-T003-report.md)
+- 2026-08-28 T003: impact delta: None. The impact map reported no call sites, and the required seed search found
+- 2026-08-28 T005: DONE (report: task-T005-report.md)
+- 2026-08-28 T005: impact delta: None. The re-verified tracked call sites match the Impact Map; only `src/project/trust.rs` was modified.
+- 2026-08-28 T006: DONE (report: task-T006-report.md)
+- 2026-08-28 T006: impact delta: The required seed search found the expected `ProjectContext` location in `src/project/mod.rs`; broad lexical `resolve`, `allow`, and `revoke` matches are unrelated existing APIs. No existing facade call sites were introduced or required updates.
+- 2026-08-28 T007: DONE (report: task-T007-report.md)
+- 2026-08-28 T007: impact delta: The tracked call-site searches for `select_profile`, `resolve_write_profile`, `run_ac`, and `AppError` matched the handoff impact map. No mapped call sites were deliberately skipped, and no additional tracked call sites required changes.
+- 2026-08-28 T008: DONE (report: task-T008-report.md)
+- 2026-08-28 T008: impact delta: The handoff map reported zero `Command` call sites, but the worker found the existing clap enum and dispatch in `src/cli/mod.rs` plus its parsed-command use in `src/main.rs`. The `resolve_in_entry` and `entry_table` locations matched the map; their visibility changed only to support the new CLI module.
+- 2026-08-28 T009: DONE (report: task-T009-report.md)
+- 2026-08-28 T009: impact delta: None. The task adds a new integration test file and does not alter existing call sites.
+- 2026-08-28 T010: DONE_WITH_CONCERNS (report: task-T010-report.md)
+- 2026-08-28 T010: impact delta: The tracked-tree search found Phase 1 implementation call sites for the project feature but no documentation coupling beyond the files in this task. `src/` and `tests/` were deliberately left untouched.
+- 2026-08-28 T900: DONE (report: task-T900-report.md)
+- 2026-08-28 T900: impact delta: None. This task produced only workflow artifacts.

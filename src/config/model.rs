@@ -9,6 +9,7 @@
 use toml::{Table, Value};
 
 use crate::error::AppError;
+use crate::project::model::ProjectPin;
 
 /// The prefix that marks a string value as a credential reference.
 pub const REFERENCE_PREFIX: &str = "credential://";
@@ -145,14 +146,15 @@ impl Config {
     }
 
     /// Resolves the active profile (SPEC-004): the `--profile` flag, else
-    /// the `AGENTENV_PROFILE` environment value, else the file's
-    /// `default_profile`. An empty flag value is a usage error; an empty
-    /// environment value counts as unset (SPEC-AS-028), so callers may pass
-    /// raw environment values.
+    /// the `AGENTENV_PROFILE` environment value, else a trusted project
+    /// profile pin, else the file's `default_profile`. An empty flag value is
+    /// a usage error; an empty environment value counts as unset
+    /// (SPEC-AS-028), so callers may pass raw environment values.
     pub fn select_profile(
         &self,
         flag: Option<&str>,
         env_val: Option<&str>,
+        project_pin: Option<&ProjectPin>,
     ) -> Result<&Profile, AppError> {
         if let Some(flag) = flag {
             if flag.is_empty() {
@@ -166,6 +168,9 @@ impl Config {
         if let Some(env_val) = env_val.filter(|value| !value.is_empty()) {
             return self.resolve_profile_name(env_val);
         }
+        if let Some(pin) = project_pin {
+            return self.resolve_pinned_profile(pin);
+        }
         match &self.default_profile {
             Some(name) => self.resolve_profile_name(name),
             None => Err(no_selection_error(&self.profiles)),
@@ -173,17 +178,32 @@ impl Config {
     }
 
     fn resolve_profile_name(&self, name: &str) -> Result<&Profile, AppError> {
+        self.resolve_profile_name_from(name, None)
+    }
+
+    fn resolve_pinned_profile(&self, pin: &ProjectPin) -> Result<&Profile, AppError> {
+        self.resolve_profile_name_from(&pin.name, Some(&pin.file))
+    }
+
+    fn resolve_profile_name_from(
+        &self,
+        name: &str,
+        project_file: Option<&std::path::Path>,
+    ) -> Result<&Profile, AppError> {
         if let Some(profile) = self.profile(name) {
             return Ok(profile);
         }
         let names: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
+        let source = project_file.map_or_else(String::new, |path| {
+            format!(" from project file {}", path.display())
+        });
         if names.is_empty() {
             Err(AppError::NotFound(format!(
-                "profile '{name}' is not defined; the config file defines no profiles; add a [profiles.<name>] table or run 'agentenv list --profiles'"
+                "profile '{name}'{source} is not defined; the config file defines no profiles; add a [profiles.<name>] table or run 'agentenv list --profiles'"
             )))
         } else {
             Err(AppError::NotFound(format!(
-                "profile '{name}' is not defined; available profiles: {}; run 'agentenv list --profiles'",
+                "profile '{name}'{source} is not defined; available profiles: {}; run 'agentenv list --profiles'",
                 names.join(", ")
             )))
         }
@@ -431,7 +451,7 @@ mod tests {
         // AC-004.1 / AC-004.2 (logic level).
         let config = config_with_profiles(&["work", "personal"], Some("work"));
         let selected = config
-            .select_profile(Some("work"), Some("personal"))
+            .select_profile(Some("work"), Some("personal"), None)
             .expect("the flag must win");
         assert_eq!(selected.name, "work");
     }
@@ -441,16 +461,38 @@ mod tests {
         // AC-004.1: AGENTENV_PROFILE beats default_profile.
         let config = config_with_profiles(&["work", "personal"], Some("work"));
         let selected = config
-            .select_profile(None, Some("personal"))
+            .select_profile(None, Some("personal"), None)
             .expect("the environment value must beat default_profile");
         assert_eq!(selected.name, "personal");
+    }
+
+    #[test]
+    fn select_profile_pin_beats_default_and_names_its_origin_when_missing() {
+        let config = config_with_profiles(&["work", "personal"], Some("personal"));
+        let pin = ProjectPin {
+            name: "work".to_owned(),
+            file: std::path::PathBuf::from("/workspace/.agentenv.toml"),
+        };
+        let selected = config
+            .select_profile(None, None, Some(&pin))
+            .expect("a trusted pin beats the default profile");
+        assert_eq!(selected.name, "work");
+
+        let missing = ProjectPin {
+            name: "missing".to_owned(),
+            file: std::path::PathBuf::from("/workspace/.agentenv.toml"),
+        };
+        let error = config
+            .select_profile(None, None, Some(&missing))
+            .expect_err("missing pinned profile is rejected");
+        assert!(error.to_string().contains("/workspace/.agentenv.toml"));
     }
 
     #[test]
     fn select_profile_falls_back_to_default() {
         let config = config_with_profiles(&["work", "personal"], Some("work"));
         let selected = config
-            .select_profile(None, None)
+            .select_profile(None, None, None)
             .expect("default_profile must be used");
         assert_eq!(selected.name, "work");
     }
@@ -460,7 +502,7 @@ mod tests {
         // SPEC-AS-028.
         let config = config_with_profiles(&["work"], Some("work"));
         let selected = config
-            .select_profile(None, Some(""))
+            .select_profile(None, Some(""), None)
             .expect("an empty environment value is unset");
         assert_eq!(selected.name, "work");
     }
@@ -469,7 +511,7 @@ mod tests {
     fn select_profile_empty_flag_is_a_usage_error() {
         // SPEC-001: `--profile ""` is a usage error (exit 1).
         let config = config_with_profiles(&["work"], Some("work"));
-        match config.select_profile(Some(""), None) {
+        match config.select_profile(Some(""), None, None) {
             Err(AppError::Usage(message)) => {
                 assert!(message.contains("--profile"), "{message}");
             }
@@ -481,7 +523,7 @@ mod tests {
     fn select_profile_unknown_name_lists_profiles() {
         // AC-004.3 (logic level).
         let config = config_with_profiles(&["work", "personal"], Some("work"));
-        match config.select_profile(None, Some("nope")) {
+        match config.select_profile(None, Some("nope"), None) {
             Err(AppError::NotFound(message)) => {
                 assert!(message.contains("nope"), "{message}");
                 assert!(message.contains("work"), "{message}");
@@ -495,7 +537,7 @@ mod tests {
     #[test]
     fn select_profile_without_any_selection_is_not_found() {
         let config = config_with_profiles(&["work", "personal"], None);
-        match config.select_profile(None, None) {
+        match config.select_profile(None, None, None) {
             Err(AppError::NotFound(message)) => {
                 assert!(message.contains("work"), "{message}");
                 assert!(message.contains("no profile is selected"), "{message}");
@@ -508,7 +550,7 @@ mod tests {
     fn select_profile_with_zero_profiles() {
         let config = config_with_profiles(&[], None);
         let error = config
-            .select_profile(None, Some("anything"))
+            .select_profile(None, Some("anything"), None)
             .expect_err("nothing can be selected");
         assert!(matches!(error, AppError::NotFound(_)));
     }

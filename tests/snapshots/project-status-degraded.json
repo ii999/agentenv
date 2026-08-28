@@ -1,0 +1,17 @@
+{
+  "version": null,
+  "project": {
+    "discovered": true,
+    "path": "<project>",
+    "trust": "trusted",
+    "trust_reason": null,
+    "violations": [],
+    "profile_pin": "work",
+    "requirements": {
+      "checked": false,
+      "reason": "the user configuration is unavailable; create or repair it, then run `agentenv project status`",
+      "profile": null,
+      "entries": []
+    }
+  }
+}
