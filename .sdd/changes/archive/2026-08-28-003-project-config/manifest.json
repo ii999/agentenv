@@ -5,7 +5,7 @@
   "entrypoint": "idea",
   "tier": "full",
   "created": "2026-08-28T06:21:39.478205+00:00",
-  "status": "active",
+  "status": "archived",
   "artifactOrder": [
     "prd",
     "architecture",
@@ -22,6 +22,8 @@
     "baseCommit": "3cd129ba3763284b76f81cc36d8db1c7c81c4037",
     "policy": "ask",
     "merged": false,
-    "dirtyBaseline": null
-  }
+    "dirtyBaseline": null,
+    "branchRetained": true
+  },
+  "archived": "2026-08-28T09:32:05.341891+00:00"
 }
