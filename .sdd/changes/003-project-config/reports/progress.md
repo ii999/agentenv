@@ -6,3 +6,5 @@
 - 2026-08-28 T002: impact delta: The existing mapped call sites were unchanged. This task adds the expected `Segments::parse` and `Violation` uses in `src/project/model.rs`.
 - 2026-08-28 T003: DONE (report: task-T003-report.md)
 - 2026-08-28 T003: impact delta: None. The impact map reported no call sites, and the required seed search found
+- 2026-08-28 T005: DONE (report: task-T005-report.md)
+- 2026-08-28 T005: impact delta: None. The re-verified tracked call sites match the Impact Map; only `src/project/trust.rs` was modified.

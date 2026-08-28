@@ -97,7 +97,7 @@ Checkpoint: `cargo test` green with the suite fully hermetic; a `.agentenv.toml`
   - Verification: `cargo test --test project_trust` — expected: compiles; every test FAILS via `todo!()` panic (no compilation errors); `cargo build` — expected: exit 0.
   - Report: `.sdd/changes/003-project-config/reports/task-T004-report.md`
 
-- [ ] T005 [Phase 1] Implement the trust store against the T004 contract
+- [x] T005 [Phase 1] Implement the trust store against the T004 contract
   - Files: `src/project/trust.rs` (fill in the `todo!()` bodies; add private helpers as needed)
   - Depends on: T004 (its tests and signatures are a read-only contract — do not modify `tests/project_trust.rs` or any T004-pinned signature)
   - Spec refs: SPEC-003, SPEC-AS-008; EDGE-004b

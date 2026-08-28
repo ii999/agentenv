@@ -21,11 +21,23 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
 use crate::config::env_value;
 use crate::error::{AppError, Violation};
 
 const STORE_DIR: &str = "agentenv";
 const STORE_FILE: &str = "trust.toml";
+
+/// The on-disk TOML document. Keeping this private lets the store validate
+/// every loaded approval before exposing it to the trust decision.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoreDocument {
+    #[serde(default)]
+    records: BTreeMap<String, String>,
+}
 
 /// The filesystem operations the trust store needs, as one narrow seam.
 ///
@@ -171,12 +183,9 @@ pub struct TrustStore {
     /// bytes. Ordered so a saved store is stable across mutations.
     // The serialized representation is internal; only the behavior of the
     // methods below is contractual.
-    #[allow(dead_code)] // Read once the bodies below land (T005).
     records: BTreeMap<String, String>,
 }
 
-// The bodies land in T005; the parameter names below are the pinned contract.
-#[allow(unused_variables)]
 impl TrustStore {
     /// Loads the store at `path` through `fs`.
     ///
@@ -186,7 +195,24 @@ impl TrustStore {
     /// is never treated as empty (AC-003.8); an unreadable store fails the
     /// same way.
     pub fn load(path: &Path, fs: &dyn StoreFs) -> Result<TrustStore, AppError> {
-        todo!("T005: read the store, parse it, and reject a corrupt store explicitly")
+        let bytes = match fs.read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    records: BTreeMap::new(),
+                });
+            }
+            Err(_) => return Err(store_error(path, "could not read the trust store")),
+        };
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|_| store_error(path, "the trust store contains invalid UTF-8"))?;
+        let document: StoreDocument = toml::from_str(content)
+            .map_err(|_| store_error(path, "the trust store is not valid TOML"))?;
+        validate_records(&document.records).map_err(|reason| store_error(path, reason))?;
+
+        Ok(Self {
+            records: document.records,
+        })
     }
 
     /// The fingerprint approved for `canonical`, if any.
@@ -195,7 +221,9 @@ impl TrustStore {
     /// identity is that path alone, never the spelling a command reached it
     /// through (AC-003.7).
     pub fn lookup(&self, canonical: &Path) -> Option<&str> {
-        todo!("T005: look up the approval record for the canonical path")
+        self.records
+            .get(&canonical.to_string_lossy().into_owned())
+            .map(String::as_str)
     }
 
     /// Records approval of `content` for `canonical`, replacing any earlier
@@ -205,7 +233,10 @@ impl TrustStore {
     /// snapshot it validated, so a file changed afterwards resolves as
     /// untrusted (AC-003.12).
     pub fn allow(&mut self, canonical: &Path, content: &[u8]) {
-        todo!("T005: fingerprint the snapshot and record it under the canonical path")
+        self.records.insert(
+            canonical.to_string_lossy().into_owned(),
+            fingerprint(content),
+        );
     }
 
     /// Removes the approval for `canonical`, reporting whether one existed.
@@ -214,7 +245,9 @@ impl TrustStore {
     /// a changed, invalid, or unreadable file can always be revoked
     /// (AC-003.13).
     pub fn revoke(&mut self, canonical: &Path) -> bool {
-        todo!("T005: drop the record for the canonical path and report whether it existed")
+        self.records
+            .remove(&canonical.to_string_lossy().into_owned())
+            .is_some()
     }
 
     /// Writes the store to `path` through `fs`, atomically.
@@ -225,7 +258,22 @@ impl TrustStore {
     /// [`AppError::Config`] (exit 2) naming the store path and a next action
     /// (AC-003.11).
     pub fn save(&self, path: &Path, fs: &dyn StoreFs) -> Result<(), AppError> {
-        todo!("T005: serialize, write to a temporary file, and rename it over the store")
+        validate_records(&self.records).map_err(|reason| store_error(path, reason))?;
+        let document = StoreDocument {
+            records: self.records.clone(),
+        };
+        let bytes = toml::to_string_pretty(&document)
+            .map_err(|_| store_error(path, "could not serialize the trust store"))?
+            .into_bytes();
+        let directory = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| store_error(path, "the trust store path has no parent directory"))?;
+        let temporary = fs.write_temp(directory, &bytes).map_err(|_| {
+            store_error(path, "could not prepare an updated copy of the trust store")
+        })?;
+        fs.rename(&temporary, path)
+            .map_err(|_| store_error(path, "could not atomically replace the trust store"))
     }
 }
 
@@ -233,9 +281,39 @@ impl TrustStore {
 ///
 /// Byte-exact: any difference in the content, whitespace included, produces a
 /// different fingerprint (AC-003.3).
-#[allow(unused_variables)] // The body lands in T005.
 pub fn fingerprint(content: &[u8]) -> String {
-    todo!("T005: hex-encode the SHA-256 digest of the content")
+    format!("{:x}", Sha256::digest(content))
+}
+
+/// Produces the one safe diagnostic shape for trust-store failures. Store
+/// contents are deliberately not included: they can contain user paths and
+/// must not be echoed back through an error report.
+fn store_error(path: &Path, message: &str) -> AppError {
+    AppError::Config(vec![Violation {
+        path: path.display().to_string(),
+        message: format!(
+            "{message}; repair or delete the store, then re-run `agentenv project allow`"
+        ),
+    }])
+}
+
+/// Rejects documents that parse as TOML yet cannot express a real trust
+/// record. Treating malformed records as absent would silently change trust
+/// state, so every loaded value must have the expected shape.
+fn validate_records(records: &BTreeMap<String, String>) -> Result<(), &'static str> {
+    for (path, approved_fingerprint) in records {
+        if !Path::new(path).is_absolute() {
+            return Err("the trust store contains a non-absolute record path");
+        }
+        if approved_fingerprint.len() != 64
+            || !approved_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err("the trust store contains an invalid record fingerprint");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
