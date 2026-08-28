@@ -1,0 +1,9 @@
+version = 1
+profile = "work"
+
+[requires.llm]
+reason = "Use the approved language model endpoint."
+fields = ["endpoint", "auth.token"]
+
+[requires.database]
+reason = "Use the team database."

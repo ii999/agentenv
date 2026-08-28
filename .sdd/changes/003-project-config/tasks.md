@@ -45,7 +45,7 @@ Checkpoint: `cargo test` green with the suite fully hermetic; a `.agentenv.toml`
 
 ### Group 2: Phase 1 leaf modules
 
-- [ ] T002 [P] [Phase 1] Implement the closed project-file schema (`project::model`)
+- [x] T002 [P] [Phase 1] Implement the closed project-file schema (`project::model`)
   - Files: `src/project/mod.rs` (create, module declarations only for now), `src/project/model.rs` (create), `src/lib.rs` (add `pub mod project;`), `tests/project_schema.rs` (create), `tests/fixtures/project/` (create fixture `.toml` files per violation class)
   - Depends on: none
   - Spec refs: SPEC-002; SPEC-010 (no-echo diagnostics)

@@ -1,0 +1,4 @@
+version = 1
+
+[requires.""]
+reason = "An empty entry key is invalid."

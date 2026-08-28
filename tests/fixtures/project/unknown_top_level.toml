@@ -1,0 +1,2 @@
+version = 1
+inject = "project-secret-sentinel"

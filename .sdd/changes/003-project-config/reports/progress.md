@@ -2,3 +2,5 @@
 - 2026-08-28 T001: impact delta: The required seed re-scan matched the impact map's original 157 `run_ac` occurrences and found no `Command::new` calls in the scoped test files. The two mapped `CommandBuilder` occurrences remain in `tests/credential_p2.rs`; no additional invocation call sites were found. The post-change search has one extra `run_ac` documentation reference introduced by the new constructor documentation, not an additional invocation.
 - 2026-08-28 T004: DONE (report: task-T004-report.md)
 - 2026-08-28 T004: impact delta: The impact map predicted no existing call sites. Re-verification with `git grep -n -F -e TrustStore -e StoreFs -e project::trust -e fingerprint -- ':(exclude).sdd/'` found no hits outside the two files this task authored, other than the explanatory comment added beside the new `sha2` entry in `Cargo.toml`. No coupling was discovered and the map needs no correction.
+- 2026-08-28 T002: DONE (report: task-T002-report.md)
+- 2026-08-28 T002: impact delta: The existing mapped call sites were unchanged. This task adds the expected `Segments::parse` and `Violation` uses in `src/project/model.rs`.

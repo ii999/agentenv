@@ -1,0 +1,5 @@
+version = 1
+
+[requires.llm]
+reason = "The endpoint is needed."
+fields = []
