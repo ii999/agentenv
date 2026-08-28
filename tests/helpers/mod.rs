@@ -48,6 +48,17 @@ pub const STATE_BASE_ENV: &str = "XDG_STATE_HOME";
 #[cfg(windows)]
 pub const STATE_BASE_ENV: &str = "LOCALAPPDATA";
 
+/// A path as project notices and diagnostics render it: canonicalized, which
+/// adds the verbatim prefix and expands short names on Windows and resolves
+/// symlinked temp roots on macOS. Raw fixture paths are not substrings of
+/// that rendering on Windows, so assertions must compare in this form.
+pub fn canonical_display(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|error| panic!("cannot canonicalize {}: {error}", path.display()))
+        .display()
+        .to_string()
+}
+
 /// What one agentenv invocation produced.
 pub struct Run {
     pub stdout: String,

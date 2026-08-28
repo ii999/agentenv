@@ -109,7 +109,9 @@ fn dangling_trusted_pin_names_its_project_file() {
         "an undefined trusted pin is a name-resolution error",
     );
     assert!(run.stderr.contains("missing"));
-    assert!(run.stderr.contains(&fixture.project.display().to_string()));
+    assert!(run
+        .stderr
+        .contains(&helpers::canonical_display(&fixture.project)));
 }
 
 #[test]

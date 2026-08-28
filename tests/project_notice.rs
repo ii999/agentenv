@@ -99,7 +99,7 @@ fn assert_single_notice(run: &helpers::Run, project: &Path) {
         "stderr contains exactly one notice: {}",
         run.stderr
     );
-    assert!(run.stderr.contains(&project.display().to_string()));
+    assert!(run.stderr.contains(&helpers::canonical_display(project)));
     assert!(run.stderr.contains("agentenv project status"));
 }
 

@@ -10,7 +10,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use helpers::{
-    assert_exit, command_with_project_discovery, staged_config, Run, SENTINELS, STATE_BASE_ENV,
+    assert_exit, canonical_display, command_with_project_discovery, staged_config, Run, SENTINELS,
+    STATE_BASE_ENV,
 };
 use tempfile::TempDir;
 
@@ -87,9 +88,7 @@ fn ac_010_1_invalid_project_values_never_reach_allow_status_or_notices() {
 
     let notice = fixture.run(&["get", "llm.model"], &[]);
     assert_exit(&notice, 0, "an invalid untrusted project remains inert");
-    assert!(notice
-        .stderr
-        .contains(&fixture.project.display().to_string()));
+    assert!(notice.stderr.contains(&canonical_display(&fixture.project)));
     assert!(notice.stderr.contains("agentenv project status"));
 }
 
@@ -109,7 +108,7 @@ fn ac_010_2_untrusted_profile_and_reason_values_never_reach_regular_commands() {
     let run = fixture.run(&["get", "llm.model"], &[]);
     assert_exit(&run, 0, "an untrusted valid project remains inert");
     assert_eq!(run.stdout, "default-model\n");
-    assert!(run.stderr.contains(&fixture.project.display().to_string()));
+    assert!(run.stderr.contains(&canonical_display(&fixture.project)));
     assert!(run.stderr.contains("agentenv project status"));
 }
 
@@ -231,7 +230,7 @@ fn ac_005_3_unreadable_approved_project_file_fails_loudly_with_exit_2() {
         run.stdout
     );
     assert!(
-        run.stderr.contains(&fixture.project.display().to_string()),
+        run.stderr.contains(&canonical_display(&fixture.project)),
         "the diagnostic names the project file: {}",
         run.stderr
     );
