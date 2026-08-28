@@ -35,11 +35,15 @@ fn main() {
     let Some(command) = cli.command else {
         print_help_and_exit();
     };
-    let project = match resolve_project_context(cli.no_project) {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = write_error(&error);
-            process::exit(error.exit_code());
+    let project = if matches!(&command, Command::Project(_)) {
+        ProjectContext::None
+    } else {
+        match resolve_project_context(cli.no_project) {
+            Ok(project) => project,
+            Err(error) => {
+                let _ = write_error(&error);
+                process::exit(error.exit_code());
+            }
         }
     };
     match execute(Invocation {

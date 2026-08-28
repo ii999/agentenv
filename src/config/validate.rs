@@ -288,10 +288,10 @@ fn validate_inject_table(
     }
 }
 
-pub(crate) fn resolve_in_entry<'a>(
-    entry_table: &'a Table,
-    segments: &Segments,
-) -> Option<&'a Value> {
+/// Resolves an entry-relative path without applying query or injection
+/// restrictions. Callers can use this for structural checks that accept every
+/// TOML value kind.
+pub fn resolve_in_entry<'a>(entry_table: &'a Table, segments: &Segments) -> Option<&'a Value> {
     let parts = segments.as_slice();
     let mut current = entry_table.get(parts.first()?)?;
     for segment in &parts[1..] {

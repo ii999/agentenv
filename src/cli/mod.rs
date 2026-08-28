@@ -7,6 +7,7 @@
 //! [`validate`].
 
 mod credential;
+mod project;
 mod validate;
 mod write;
 
@@ -35,6 +36,8 @@ pub enum Command {
     Validate,
     /// Inspect configured credential definitions.
     Credential(CredentialArgs),
+    /// Inspect and manage the discovered project configuration file.
+    Project(ProjectArgs),
     /// Write one value at a profile-scoped path.
     Set(SetArgs),
     /// Remove a field or table at a profile-scoped path.
@@ -113,6 +116,22 @@ pub struct CredentialArgs {
     pub command: CredentialCommand,
 }
 
+#[derive(Debug, Args)]
+pub struct ProjectArgs {
+    #[command(subcommand)]
+    pub command: ProjectCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    /// Report the discovered project's trust state and requirements.
+    Status,
+    /// Approve the discovered project's current contents.
+    Allow,
+    /// Remove approval for the discovered project.
+    Revoke,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum CredentialCommand {
     /// List credential definitions without resolving them.
@@ -187,6 +206,9 @@ impl Output {
 
 pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     let env = |name: &str| std::env::var(name).ok();
+    if let Command::Project(args) = &invocation.command {
+        return project::execute(args, invocation.profile.as_deref(), invocation.json, &env);
+    }
     if matches!(&invocation.command, Command::Validate) {
         if invocation.json {
             return Err(AppError::Usage(
@@ -399,6 +421,9 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Set { name },
         }) => credential::set(&config, &name, invocation.json),
+        Command::Project(_) => {
+            unreachable!("project commands return before loading the configuration")
+        }
     }
 }
 

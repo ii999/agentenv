@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "project": {
+    "discovered": true,
+    "path": "<project>",
+    "trust": "unavailable",
+    "trust_reason": "configuration error: [Violation { path: \"XDG_STATE_HOME\", message: \"cannot locate the trust store: neither XDG_STATE_HOME nor HOME is set; set XDG_STATE_HOME to an absolute path or set HOME, then re-run `agentenv project allow`\" }]",
+    "violations": [],
+    "profile_pin": null,
+    "requirements": {
+      "checked": false,
+      "reason": "project trust could not be determined; set the required state-location variables, then run `agentenv project status`",
+      "profile": null,
+      "entries": []
+    }
+  }
+}

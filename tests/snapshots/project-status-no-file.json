@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "project": {
+    "discovered": false,
+    "path": null,
+    "trust": null,
+    "trust_reason": null,
+    "violations": [],
+    "profile_pin": null,
+    "requirements": {
+      "checked": false,
+      "reason": "no project file discovered; create .agentenv.toml in the working directory or an ancestor, then run `agentenv project status`",
+      "profile": null,
+      "entries": []
+    }
+  }
+}

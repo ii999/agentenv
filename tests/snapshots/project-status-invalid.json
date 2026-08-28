@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "project": {
+    "discovered": true,
+    "path": "<project>",
+    "trust": "invalid",
+    "trust_reason": null,
+    "violations": [
+      {
+        "path": "<project>",
+        "message": "version must be the integer 1; set 'version = 1'"
+      }
+    ],
+    "profile_pin": null,
+    "requirements": {
+      "checked": false,
+      "reason": "the project file is invalid; fix the listed paths, then run `agentenv project allow`",
+      "profile": null,
+      "entries": []
+    }
+  }
+}

@@ -155,7 +155,7 @@ Checkpoint: `src/project/` is complete and library-level tested: schema, discove
   - Verification: `cargo test --test project_precedence --test project_notice` — expected: all pass, covering AC-004.1, AC-004.2, AC-004.3, AC-004.4, AC-004.5, AC-004.6, AC-004.7, AC-004.8 (incl. probe-based AC-004.7 via `test-probe` and the `set` write path), AC-005.1, AC-005.2, AC-005.3, AC-005.4, AC-005.5, AC-005.6, AC-005.7, AC-005.8, AC-005.9 (stdout byte-identity, single notice, run-notice-order, parse-failure no-notice, trusted-no-notice), AC-010.2 sentinel; `cargo test` — expected: full suite green (pre-existing assertions unmodified).
   - Report: `.sdd/changes/003-project-config/reports/task-T007-report.md`
 
-- [ ] T008 [Phase 1] Implement `agentenv project status|allow|revoke` with the frozen JSON envelope and requirement checking
+- [x] T008 [Phase 1] Implement `agentenv project status|allow|revoke` with the frozen JSON envelope and requirement checking
   - Files: `src/cli/project.rs` (create), `src/cli/mod.rs` (subcommand wiring), `src/query/render.rs` (only if shared JSON helpers are needed), `tests/project_status.rs` (create), `tests/snapshots/project-status-*.json` (create, one per member-state-table row)
   - Depends on: T007
   - Spec refs: SPEC-006 (read in full — exit matrix, deviation note, member state table), SPEC-007, SPEC-AS-006

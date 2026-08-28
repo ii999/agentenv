@@ -15,6 +15,7 @@ pub(crate) mod validate;
 pub mod write;
 
 pub use model::{Config, CredentialDef, CredentialRef, Profile, Provider, REFERENCE_PREFIX};
+pub use validate::resolve_in_entry;
 
 use std::ffi::OsStr;
 use std::path::Path;

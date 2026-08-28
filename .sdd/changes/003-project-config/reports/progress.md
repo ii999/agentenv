@@ -12,3 +12,5 @@
 - 2026-08-28 T006: impact delta: The required seed search found the expected `ProjectContext` location in `src/project/mod.rs`; broad lexical `resolve`, `allow`, and `revoke` matches are unrelated existing APIs. No existing facade call sites were introduced or required updates.
 - 2026-08-28 T007: DONE (report: task-T007-report.md)
 - 2026-08-28 T007: impact delta: The tracked call-site searches for `select_profile`, `resolve_write_profile`, `run_ac`, and `AppError` matched the handoff impact map. No mapped call sites were deliberately skipped, and no additional tracked call sites required changes.
+- 2026-08-28 T008: DONE (report: task-T008-report.md)
+- 2026-08-28 T008: impact delta: The handoff map reported zero `Command` call sites, but the worker found the existing clap enum and dispatch in `src/cli/mod.rs` plus its parsed-command use in `src/main.rs`. The `resolve_in_entry` and `entry_table` locations matched the map; their visibility changed only to support the new CLI module.
