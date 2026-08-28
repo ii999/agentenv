@@ -202,6 +202,111 @@ fn ac_010_5_trusted_pin_selects_exactly_the_pinned_profiles_injection_plan() {
     assert_probe_absent(&report, "PERSONAL_PROJECT_MARKER");
 }
 
+#[cfg(unix)]
+#[test]
+fn ac_005_3_unreadable_approved_project_file_fails_loudly_with_exit_2() {
+    // A trusted file that becomes unreadable while its approval record
+    // remains must fail profile resolution with exit 2, naming the file and
+    // a next action — never degrade silently to no-project behavior.
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = ProjectFixture::new(basic_config(), "version = 1\nprofile = \"default\"\n");
+    let allow = fixture.allow();
+    assert_exit(&allow, 0, "the project file is approved while readable");
+
+    fs::set_permissions(&fixture.project, fs::Permissions::from_mode(0o000))
+        .expect("project file permissions are restricted");
+
+    let run = fixture.run(&["get", "llm.model"], &[]);
+    assert_exit(
+        &run,
+        2,
+        "an unreadable approved project file is a hard error",
+    );
+    assert!(
+        run.stdout.is_empty(),
+        "no value is produced: {}",
+        run.stdout
+    );
+    assert!(
+        run.stderr.contains(&fixture.project.display().to_string()),
+        "the diagnostic names the project file: {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("agentenv project revoke"),
+        "the diagnostic names a next action: {}",
+        run.stderr
+    );
+
+    fs::set_permissions(&fixture.project, fs::Permissions::from_mode(0o644))
+        .expect("project file permissions are restored for cleanup");
+}
+
+#[test]
+fn ac_010_3_status_renders_the_full_envelope_without_config_values() {
+    // Sentinels sit in every user-config position a secret could occupy:
+    // open-schema field values, nested values, profile and entry
+    // descriptions, and credential definition members. The full status
+    // report must render every envelope member and leak none of them.
+    let config = format!(
+        "version = 1\n\
+         default_profile = \"default\"\n\
+         \n\
+         [profiles.default]\n\
+         description = \"Profile description {}\"\n\
+         \n\
+         [profiles.default.llm]\n\
+         description = \"Entry description {}\"\n\
+         model = \"{}\"\n\
+         \n\
+         [profiles.default.llm.limits]\n\
+         budget = \"{}\"\n\
+         \n\
+         [credentials.tool]\n\
+         description = \"Credential description {}\"\n\
+         provider = \"command\"\n\
+         argv = [\"/bin/echo\", \"{}\"]\n\
+         inject_as = \"TOOL_TOKEN\"\n",
+        SENTINELS[0], SENTINELS[1], SENTINELS[2], SENTINELS[3], SENTINELS[4], SENTINELS[0]
+    );
+    let fixture = ProjectFixture::new(
+        &config,
+        "version = 1\n\
+         profile = \"default\"\n\
+         [requires.llm]\n\
+         reason = \"Model access is required for runs\"\n\
+         fields = [\"model\"]\n",
+    );
+    let allow = fixture.allow();
+    assert_exit(&allow, 0, "the pinned project file is approved");
+
+    // fixture.run asserts no sentinel reaches stdout or stderr on every
+    // invocation; the assertions below pin the envelope's presence.
+    let json = fixture.run(&["project", "status", "--json"], &[]);
+    assert_exit(&json, 0, "a satisfied requirement reports status 0");
+    for member in [
+        "\"version\"",
+        "\"default\"",
+        "\"llm\"",
+        "Model access is required for runs",
+    ] {
+        assert!(
+            json.stdout.contains(member),
+            "the JSON report renders {member}: {}",
+            json.stdout
+        );
+    }
+
+    let text = fixture.run(&["project", "status"], &[]);
+    assert_exit(&text, 0, "the text report also succeeds");
+    assert!(
+        text.stdout.contains("Model access is required for runs"),
+        "the text report renders requirement reasons: {}",
+        text.stdout
+    );
+}
+
 fn basic_config() -> &'static str {
     r#"
 version = 1
