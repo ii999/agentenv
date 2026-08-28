@@ -7,6 +7,9 @@ use agentenv::error::AppError;
 use agentenv::project::{allow, resolve, revoke, ProjectContext, UntrustedReason};
 use tempfile::TempDir;
 
+mod helpers;
+use helpers::STATE_BASE_ENV;
+
 const VALID: &[u8] = b"version = 1\nprofile = \"work\"\n";
 
 fn tree() -> TempDir {
@@ -15,7 +18,7 @@ fn tree() -> TempDir {
 
 fn environment(state: &Path) -> impl Fn(&str) -> Option<String> + '_ {
     move |name| match name {
-        "XDG_STATE_HOME" => Some(state.display().to_string()),
+        name if name == STATE_BASE_ENV => Some(state.display().to_string()),
         _ => None,
     }
 }
@@ -132,7 +135,7 @@ fn missing_state_base_is_unavailable_for_reads_and_an_error_for_mutations() {
             reason: UntrustedReason::StateUnavailable(message),
             ..
         } => {
-            assert!(message.contains("XDG_STATE_HOME"));
+            assert!(message.contains(STATE_BASE_ENV));
             assert!(message.contains("HOME"));
         }
         other => panic!("expected unavailable state, got {other:?}"),

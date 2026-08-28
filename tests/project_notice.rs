@@ -54,7 +54,7 @@ impl ProjectFixture {
 
     fn approve(&self) {
         let env = |name: &str| match name {
-            "XDG_STATE_HOME" => Some(self.state.display().to_string()),
+            name if name == helpers::STATE_BASE_ENV => Some(self.state.display().to_string()),
             _ => None,
         };
         agentenv::project::allow(&self.cwd, &env).expect("project file is approved");
@@ -63,7 +63,7 @@ impl ProjectFixture {
     fn run(&self, args: &[&str], envs: &[(&str, &str)]) -> helpers::Run {
         let mut command = command_with_project_discovery(&self.config);
         command.current_dir(&self.cwd);
-        command.env("XDG_STATE_HOME", &self.state);
+        command.env(helpers::STATE_BASE_ENV, &self.state);
         for (name, value) in envs {
             command.env(name, value);
         }
@@ -181,9 +181,9 @@ fn trusted_files_and_unavailable_state_follow_their_notice_rules() {
     assert_exit(&trusted, 0, "trusted file succeeds");
     assert!(trusted.stderr.is_empty(), "trusted file emits no notice");
 
-    let unavailable = fixture.run(&["get", "llm.model"], &[("XDG_STATE_HOME", "")]);
+    let unavailable = fixture.run(&["get", "llm.model"], &[(helpers::STATE_BASE_ENV, "")]);
     assert_exit(&unavailable, 0, "unavailable state leaves the file inert");
     assert_single_notice(&unavailable, &fixture.project);
-    assert!(unavailable.stderr.contains("XDG_STATE_HOME"));
+    assert!(unavailable.stderr.contains(helpers::STATE_BASE_ENV));
     assert!(unavailable.stderr.contains("HOME"));
 }

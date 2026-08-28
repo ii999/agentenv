@@ -72,7 +72,7 @@ impl Fixture {
     fn run(&self, args: &[&str]) -> helpers::Run {
         let mut command = command_with_project_discovery(&self.config);
         command.current_dir(&self.cwd);
-        command.env("XDG_STATE_HOME", &self.state);
+        command.env(helpers::STATE_BASE_ENV, &self.state);
         command.args(args);
         into_run(command.output().expect("agentenv runs"))
     }
@@ -171,15 +171,6 @@ fn status_json_matches_the_frozen_member_state_table() {
     );
     assert_snapshot("invalid", status_json(&invalid_run));
 
-    let unavailable = Fixture::new(Some("version = 1\n"));
-    let unavailable_run = unavailable.run_without_state_base(&["project", "status", "--json"]);
-    assert_exit(
-        &unavailable_run,
-        5,
-        "unavailable trust state exits with trust-state failure",
-    );
-    assert_snapshot("unavailable", status_json(&unavailable_run));
-
     let degraded = Fixture::new(Some("version = 1\nprofile = \"work\"\n"));
     degraded.approve();
     fs::write(&degraded.config, "not TOML = [\n").expect("config becomes invalid");
@@ -196,6 +187,22 @@ fn status_json_matches_the_frozen_member_state_table() {
     let checked_run = checked.run(&["project", "status", "--json"]);
     assert_exit(&checked_run, 0, "satisfied requirements exit successfully");
     assert_snapshot("checked", status_json(&checked_run));
+}
+
+#[cfg(unix)]
+#[test]
+fn status_json_matches_the_frozen_unavailable_state() {
+    // The unavailable envelope's trust_reason embeds the platform's
+    // state-location diagnostic (XDG_STATE_HOME/HOME here, LOCALAPPDATA on
+    // Windows), so the frozen snapshot is Unix-specific.
+    let unavailable = Fixture::new(Some("version = 1\n"));
+    let unavailable_run = unavailable.run_without_state_base(&["project", "status", "--json"]);
+    assert_exit(
+        &unavailable_run,
+        5,
+        "unavailable trust state exits with trust-state failure",
+    );
+    assert_snapshot("unavailable", status_json(&unavailable_run));
 }
 
 #[test]
@@ -217,7 +224,7 @@ reason = "Needs an entry that is absent"
     let counter = fixture.cwd.join("provider-count");
     let mut command = command_with_project_discovery(&fixture.config);
     command.current_dir(&fixture.cwd);
-    command.env("XDG_STATE_HOME", &fixture.state);
+    command.env(helpers::STATE_BASE_ENV, &fixture.state);
     command.env("PROJECT_STATUS_COUNTER", &counter);
     command.args(["project", "status", "--json"]);
     let run = into_run(command.output().expect("agentenv runs"));

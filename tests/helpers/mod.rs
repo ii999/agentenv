@@ -39,6 +39,15 @@ const PASSTHROUGH_ENV: &[&str] = &["PATH"];
 #[cfg(windows)]
 const PASSTHROUGH_ENV: &[&str] = &["PATH", "SYSTEMROOT"];
 
+/// The environment variable the project trust store's base directory is
+/// derived from on this platform (`$XDG_STATE_HOME/agentenv/trust.toml` on
+/// Unix-like systems, `%LOCALAPPDATA%\agentenv\trust.toml` on Windows).
+/// Project fixtures set it so trust state lands inside the test tree.
+#[cfg(unix)]
+pub const STATE_BASE_ENV: &str = "XDG_STATE_HOME";
+#[cfg(windows)]
+pub const STATE_BASE_ENV: &str = "LOCALAPPDATA";
+
 /// What one agentenv invocation produced.
 pub struct Run {
     pub stdout: String,

@@ -9,7 +9,9 @@ mod helpers;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use helpers::{assert_exit, command_with_project_discovery, staged_config, Run, SENTINELS};
+use helpers::{
+    assert_exit, command_with_project_discovery, staged_config, Run, SENTINELS, STATE_BASE_ENV,
+};
 use tempfile::TempDir;
 
 struct ProjectFixture {
@@ -41,7 +43,7 @@ impl ProjectFixture {
     fn run(&self, args: &[&str], envs: &[(&str, &str)]) -> Run {
         let mut command = command_with_project_discovery(&self.config);
         command.current_dir(&self.cwd);
-        command.env("XDG_STATE_HOME", &self.state);
+        command.env(STATE_BASE_ENV, &self.state);
         for (name, value) in envs {
             command.env(name, value);
         }
