@@ -206,7 +206,7 @@ Checkpoint: Documentation matches shipped behavior; AC-008.1, AC-008.2, AC-008.3
 
 ### Group 5: Validation
 
-- [ ] T900 [Validation] Run acceptance validation and update validation report
+- [x] T900 [Validation] Run acceptance validation and update validation report
   - Files: `.sdd/changes/003-project-config/validation.md`
   - Depends on: all implementation tasks
   - Spec refs: all
