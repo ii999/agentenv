@@ -16,8 +16,10 @@ use std::sync::mpsc;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-use assert_cmd::Command;
-use helpers::{assert_exit, assert_mentions, assert_omits, run_ac, Run, SENTINELS};
+use helpers::{
+    assert_exit, assert_mentions, assert_omits, command_with_project_discovery, run_ac, Run,
+    SENTINELS,
+};
 #[cfg(unix)]
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tempfile::TempDir;
@@ -259,8 +261,15 @@ fn interactive_set_does_not_echo_the_typed_secret() {
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
+    command.cwd(
+        config
+            .path()
+            .parent()
+            .expect("the credential config has a parent directory"),
+    );
     command.env("AGENTENV_FILE", config.path());
     command.env("AGENTENV_TEST_KEYCHAIN", config.store_path());
+    command.env("AGENTENV_NO_PROJECT", "1");
     command.args(["credential", "set", "openai_personal"]);
 
     let mut child = pty
@@ -431,18 +440,8 @@ impl ConfigFile {
 }
 
 fn run_with_input(config: &Path, envs: &[(&str, &str)], args: &[&str], input: &[u8]) -> Run {
-    let mut command = Command::cargo_bin("agentenv").expect("the agentenv binary is built");
-    command.env_clear();
-    #[cfg(unix)]
-    const PASSTHROUGH_ENV: &[&str] = &["PATH"];
-    #[cfg(windows)]
-    const PASSTHROUGH_ENV: &[&str] = &["PATH", "SYSTEMROOT"];
-    for name in PASSTHROUGH_ENV {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command.env("AGENTENV_FILE", config);
+    let mut command = command_with_project_discovery(config);
+    command.env("AGENTENV_NO_PROJECT", "1");
     for (key, value) in envs {
         command.env(key, value);
     }

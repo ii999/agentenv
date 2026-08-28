@@ -1,0 +1,2 @@
+- 2026-08-28 T001: DONE (report: task-T001-report.md)
+- 2026-08-28 T001: impact delta: The required seed re-scan matched the impact map's original 157 `run_ac` occurrences and found no `Command::new` calls in the scoped test files. The two mapped `CommandBuilder` occurrences remain in `tests/credential_p2.rs`; no additional invocation call sites were found. The post-change search has one extra `run_ac` documentation reference introduced by the new constructor documentation, not an additional invocation.

@@ -105,6 +105,8 @@ fn run_preserves_a_target_termination_signal() {
     let output = std::process::Command::cargo_bin("agentenv")
         .expect("agentenv is built")
         .env_clear()
+        .current_dir(workspace.directory.path())
+        .env("AGENTENV_NO_PROJECT", "1")
         .env("AGENTENV_FILE", config)
         .env("SOURCE_TOKEN", SENTINEL_PLAIN)
         .args([

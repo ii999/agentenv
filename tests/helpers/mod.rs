@@ -54,14 +54,13 @@ impl Run {
     }
 }
 
-/// Runs agentenv against `config` with a scrubbed environment.
+/// Constructs an agentenv command with a scrubbed environment and a
+/// test-controlled working directory.
 ///
-/// The child starts from an empty environment plus PATH, then receives
-/// `AGENTENV_FILE` and whatever `envs` supplies, so config resolution
-/// depends only on what a test states. Before returning, every captured
-/// invocation is checked for planted secrets: a leak fails the test that
-/// caused it, whatever that test was asserting.
-pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
+/// This is the project-aware variant for tests that need discovery to run. It
+/// intentionally leaves `AGENTENV_NO_PROJECT` unset; ordinary tests should use
+/// [`run_ac`], which adds the bypass before executing the command.
+pub fn command_with_project_discovery(config: &Path) -> Command {
     let mut command = Command::cargo_bin("agentenv")
         .expect("the agentenv binary is built before integration tests run");
 
@@ -71,10 +70,24 @@ pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
             command.env(name, value);
         }
     }
+    command.current_dir(test_working_dir(config));
     command.env("AGENTENV_FILE", config);
+    command
+}
+
+/// Runs agentenv against `config` with a scrubbed environment.
+///
+/// The child starts from an empty environment plus PATH, then receives
+/// `AGENTENV_FILE`, the project-discovery bypass, and whatever `envs` supplies,
+/// so config resolution depends only on what a test states. Before returning,
+/// every captured invocation is checked for planted secrets: a leak fails the
+/// test that caused it, whatever that test was asserting.
+pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
+    let mut command = command_with_project_discovery(config);
     for (key, value) in envs {
         command.env(key, value);
     }
+    command.env("AGENTENV_NO_PROJECT", "1");
     command.args(args);
 
     let output = command
@@ -88,6 +101,23 @@ pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
     };
     assert_no_sentinels(&run, args);
     run
+}
+
+/// Finds the nearest existing directory in the path controlled by the test.
+///
+/// Most tests pass a file already staged in a `TempDir`; the ancestor walk also
+/// handles tests that pass a not-yet-created nested config path or a directory
+/// path itself.
+fn test_working_dir(config: &Path) -> &Path {
+    config
+        .ancestors()
+        .find(|candidate| candidate.is_dir())
+        .unwrap_or_else(|| {
+            panic!(
+                "test config path has no existing directory: {}",
+                config.display()
+            )
+        })
 }
 
 /// Reports a leak by position in [`SENTINELS`] rather than by value, so the

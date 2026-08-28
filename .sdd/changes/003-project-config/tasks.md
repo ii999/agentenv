@@ -27,7 +27,7 @@ Full tier: `Dispatch: agent` is the default. Reviews run at Checkpoint granulari
 
 ### Group 1: Foundation
 
-- [ ] T001 [Foundation] Make every test invocation hermetic to project discovery
+- [x] T001 [Foundation] Make every test invocation hermetic to project discovery
   - Files: `tests/helpers/mod.rs`, `tests/run_p3.rs`, `tests/credential_p2.rs`
   - Depends on: none
   - Spec refs: SPEC-009
