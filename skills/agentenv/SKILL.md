@@ -119,6 +119,16 @@ status is returned. Conflicting injections (two sources targeting one
 environment name) abort with exit code 4 before anything resolves or
 launches.
 
+Add `--pure` to launch the target with a curated minimal environment: a
+fixed platform base (PATH, HOME, locale, `AGENTENV_*`, and similar
+process-critical names), plus variables carried explicitly with repeatable
+`--keep <NAME>`, plus the injections — nothing else from the calling shell.
+A kept name unset in the parent is reported on stderr and the run
+continues. `--pure` filters the target's environment only; it is not a
+sandbox, and nested `agentenv` calls inside the target still resolve the
+same configuration. Credential resolution is unchanged by `--pure`: a
+`command` provider's subprocess keeps the full parent environment.
+
 ## Writing configuration
 
 Use these when the user asks to record configuration:

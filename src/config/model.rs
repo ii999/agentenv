@@ -343,7 +343,7 @@ fn no_selection_error(profiles: &[Profile]) -> AppError {
 
 /// Valid environment variable name: `[A-Za-z_][A-Za-z0-9_]*`
 /// (SPEC-AS-005, POSIX portable set).
-pub(crate) fn is_valid_env_name(name: &str) -> bool {
+pub fn is_valid_env_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
