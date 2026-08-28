@@ -116,14 +116,24 @@ Verdict: Revise. Confirmed fully resolved: CRIT-001, IMP-001, IMP-004, IMP-006, 
 | R2-004 | Important (P2) | `TrustStore::status(path, content)` cannot classify trusted-unreadable; facade lacked structured violations and a declared composition order | Path-only `lookup` interface; composition order canonicalize → lookup → read → compare → parse; `UntrustedReason` enum carries structured violations | Fixed (REV-020) |
 | R2-005 | Important (P2) | Last-writer-wins contradicts the unconditional "never drop records" invariant | Preservation scoped to the mutation's input snapshot; concurrent-overwrite trade-off stated as documented behavior | Fixed (REV-021) |
 
+## Round 3 — Targeted re-check, cycle 2 (Codex gpt-5.6-sol, xhigh, read-only; handoff `003-project-config--spec-review-r3-codex`)
+
+Verdict: Revise. R2-002, R2-003, R2-005 confirmed resolved. Residual/new findings:
+
+| ID | Severity | Finding | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R3-001 | Critical (P1, residual of R2-001) | SPEC-010's exception list omitted envelope members SPEC-006 requires (`version`, `requirements.profile`); AC-010.3 forbade the required non-null `version` | Exception defined by reference to the complete frozen envelope including the structural context members; AC-010.3 rewritten to plant sentinels in open-schema user-config values and assert the full envelope | Fixed (REV-022) |
+| R3-002 | Important (P2, residual of R2-004) | `ProjectContext::Untrusted` could not carry the pin/requirements metadata and violations `project status` must render; no variant for unapproved-unreadable | Facade carries `ProjectFileMeta` (inert pin + requires) for parseable untrusted files; `Invalid(Vec<Violation>)` covers schema violations, unparseable TOML, and unapproved-unreadable; behavioral consumers restricted to `Trusted` | Fixed (REV-023) |
+| R3-003 | Important (P2, new) | SPEC-005 specified two content reads (fingerprint-time and use-time), creating a time-of-check/time-of-use window violating exact-content trust | Single immutable byte snapshot: lookup → one read → classify → fingerprint → parse the same bytes; exit-matrix reference updated; architecture composition matches | Fixed (REV-024) |
+
 ## Approval Decision
 
-Decision: Revise (round 2 revisions applied) — third-cycle targeted cross-provider re-check pending on the five round-2 findings.
+Decision: Revise (round 3 revisions applied) — cycle-3 targeted cross-provider re-check pending on R3-001..003. Per the review-loop cap, this is the final targeted cycle; a persisting Critical/Important escalates to one full two-lane round.
 
 Approval rationale:
 
-- Round 2 confirmed six of fourteen round-1 findings fully resolved and reduced the open surface to five precisely-scoped contradictions, all revised above.
+- The open surface narrowed each cycle (14 → 5 → 3 findings); all three round-3 findings were bounded wording/interface fixes applied above.
 
 Conditions:
 
-- Cycle-3 targeted re-check must confirm R2-001..005 are resolved without new Critical/Important findings; per the review-loop cap, a persisting Critical/Important after this cycle escalates to one full two-lane round.
+- Cycle-3 re-check must confirm R3-001..003 resolved with no new Critical/Important findings.
