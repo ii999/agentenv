@@ -126,14 +126,22 @@ Verdict: Revise. R2-002, R2-003, R2-005 confirmed resolved. Residual/new finding
 | R3-002 | Important (P2, residual of R2-004) | `ProjectContext::Untrusted` could not carry the pin/requirements metadata and violations `project status` must render; no variant for unapproved-unreadable | Facade carries `ProjectFileMeta` (inert pin + requires) for parseable untrusted files; `Invalid(Vec<Violation>)` covers schema violations, unparseable TOML, and unapproved-unreadable; behavioral consumers restricted to `Trusted` | Fixed (REV-023) |
 | R3-003 | Important (P2, new) | SPEC-005 specified two content reads (fingerprint-time and use-time), creating a time-of-check/time-of-use window violating exact-content trust | Single immutable byte snapshot: lookup → one read → classify → fingerprint → parse the same bytes; exit-matrix reference updated; architecture composition matches | Fixed (REV-024) |
 
+## Round 4 — Targeted re-check, cycle 3 / final (Codex gpt-5.6-sol, xhigh, read-only; handoff `003-project-config--spec-review-r4-codex`)
+
+Verdict: Revise. R3-001 and R3-002 confirmed resolved. One residual:
+
+| ID | Severity | Finding | Required revision | Status |
+| --- | --- | --- | --- | --- |
+| R4-001 | Important (P2, residual of R3-003) | The facade offered no path for `project allow` to approve the exact bytes it validated — the caller would have to re-read the file, reintroducing the time-of-check/time-of-use window | Facade-owned `project::allow`/`revoke` operations performing discovery, single read, validation, fingerprinting, and store mutation over one snapshot; SPEC-003 binds approval to the validated bytes; AC-003.12 (fault-injection) added | Fixed (REV-025) |
+
 ## Approval Decision
 
-Decision: Revise (round 3 revisions applied) — cycle-3 targeted cross-provider re-check pending on R3-001..003. Per the review-loop cap, this is the final targeted cycle; a persisting Critical/Important escalates to one full two-lane round.
+Decision: Revise (round 4 revision applied) — escalated to one full two-lane round per the review-loop cap (an Important finding persisted through three targeted cycles). The full round reviews the completely revised spec and architecture with fresh clean-context Codex-provider and Claude-provider lanes.
 
 Approval rationale:
 
-- The open surface narrowed each cycle (14 → 5 → 3 findings); all three round-3 findings were bounded wording/interface fixes applied above.
+- Convergence across cycles was monotonic (14 → 5 → 3 → 1 findings), and every finding has an applied revision; the escalation round validates the whole revised artifact rather than a diff.
 
 Conditions:
 
-- Cycle-3 re-check must confirm R3-001..003 resolved with no new Critical/Important findings.
+- The full round must report no unresolved Critical/Important findings for approval.

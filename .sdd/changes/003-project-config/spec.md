@@ -83,7 +83,7 @@ Verification:
 
 ### SPEC-003: Trust lifecycle and store durability
 
-A project file MUST have no effect until the user approves its exact content. Approval state MUST be stored outside the repository in a user-owned store keyed by the file's canonical absolute path with a fingerprint of its exact bytes, so that any content change or path change returns the file to the untrusted state. `agentenv project allow` MUST validate then record approval; `agentenv project revoke` MUST remove it. Every store mutation MUST be atomic: the store is replaced via a temporary file (created with `0600` permissions on Unix before content is written) and rename, so an interrupted mutation leaves the previous store intact. Concurrent mutations serialize as last-writer-wins per whole-store mutation: a mutation MUST preserve every record present in the store snapshot it read, and a concurrent update committed after that snapshot was read may be overwritten (the loser re-runs its operation) — this trade-off is documented behavior.
+A project file MUST have no effect until the user approves its exact content. Approval state MUST be stored outside the repository in a user-owned store keyed by the file's canonical absolute path with a fingerprint of its exact bytes, so that any content change or path change returns the file to the untrusted state. `agentenv project allow` MUST validate then record approval, and MUST bind the approval to the exact bytes it validated: `allow` performs one content read, and the bytes it validates are the bytes it fingerprints and records — a file modified concurrently with `allow` is approved as the validated snapshot, so the on-disk content resolves as untrusted-changed afterward. `agentenv project revoke` MUST remove the approval. Every store mutation MUST be atomic: the store is replaced via a temporary file (created with `0600` permissions on Unix before content is written) and rename, so an interrupted mutation leaves the previous store intact. Concurrent mutations serialize as last-writer-wins per whole-store mutation: a mutation MUST preserve every record present in the store snapshot it read, and a concurrent update committed after that snapshot was read may be overwritten (the loser re-runs its operation) — this trade-off is documented behavior.
 
 Source trace:
 
@@ -103,6 +103,7 @@ Acceptance criteria:
 - AC-003.9: On Unix systems, WHEN the trust store file is created, THEN its permission bits are `0600`.
 - AC-003.10: GIVEN two different project files approved in sequence, WHEN the second `allow` completes, THEN both approval records are present and the store parses.
 - AC-003.11: GIVEN a store mutation whose final rename is made to fail (unit-level fault injection), WHEN the mutation aborts, THEN the previous store content is byte-intact and an explicit error names the store path.
+- AC-003.12: GIVEN the project file is replaced with different content between `allow`'s single content read and its trust-store record (unit-level fault injection), WHEN `allow` completes and a subsequent command resolves the file, THEN the recorded approval matches the validated snapshot's fingerprint and the on-disk file resolves as untrusted-changed.
 
 Verification:
 
@@ -346,7 +347,7 @@ Verification:
 | --- | --- | --- | --- | --- |
 | AC-001.1..4 | SPEC-001 | Phase 1 | `cargo test` integration | Draft |
 | AC-002.1..6 | SPEC-002 | Phase 1 | `cargo test` integration | Draft |
-| AC-003.1..11 | SPEC-003 | Phase 1 | `cargo test` integration/unit | Draft |
+| AC-003.1..12 | SPEC-003 | Phase 1 | `cargo test` integration/unit | Draft |
 | AC-004.1..8 | SPEC-004 | Phase 1 | `cargo test` integration | Draft |
 | AC-005.1..7 | SPEC-005 | Phase 1 | `cargo test` integration | Draft |
 | AC-006.1..3, 6.6a, 6.7..12 | SPEC-006 | Phase 1 | `cargo test` integration + snapshots | Draft |
