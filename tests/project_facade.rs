@@ -186,7 +186,11 @@ fn corrupt_trust_store_is_propagated_as_a_configuration_error() {
     let error = resolve(&cwd(&tree), &env).expect_err("corrupt state never degrades to empty");
     assert_eq!(error.exit_code(), 2);
     assert!(matches!(error, AppError::Config(_)));
-    assert!(error.to_string().contains(&store.display().to_string()));
+    // AppError::Config renders violations with Debug formatting, which
+    // escapes Windows path separators; compare in the same rendering.
+    assert!(error
+        .to_string()
+        .contains(&format!("{:?}", store.display().to_string())));
 }
 
 #[cfg(unix)]
