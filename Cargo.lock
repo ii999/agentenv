@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "agentenv"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
