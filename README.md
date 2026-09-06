@@ -82,6 +82,34 @@ With a Rust toolchain installed:
 cargo install --path .
 ```
 
+### Update
+
+An installed binary updates itself:
+
+```bash
+agentenv update
+```
+
+`update` resolves the latest release from its `SHA256SUMS` file, downloads
+the archive for the running binary's platform, verifies the checksum, runs
+the downloaded binary once to confirm it reports the release version, and
+then replaces the binary in place. Every installed copy of the agent skill
+(`~/.agents/skills/agentenv` and `~/.claude/skills/agentenv`) is refreshed
+from the same release; a copy that was never installed stays absent.
+
+- `agentenv update --check` reports the installed and latest versions
+  without changing anything; `--json` renders the report as JSON.
+- `--version <tag>` installs a specific release, including an older one.
+  Without it, `update` refuses to move to a release older than the
+  installed version.
+- `--force` reinstalls the current version, which repairs a damaged skill
+  directory.
+- `--no-skill` updates the binary only.
+
+`update` refuses binaries installed by cargo or Homebrew and names the
+matching upgrade command instead. `AGENTENV_RELEASE_BASE_URL` points it at
+a release mirror.
+
 ## Configuration
 
 By default, the configuration file is:
@@ -365,6 +393,20 @@ agentenv credential add <name> --description "<text>" --provider command \
     --argv <arg> [--argv <arg> ...] --inject-as <ENV>
 ```
 
+Maintenance commands are:
+
+```bash
+agentenv update
+agentenv update --check
+agentenv update --check --json
+agentenv update --version <tag>
+agentenv update --force
+agentenv update --no-skill
+```
+
+`update` installs the latest GitHub release over the running binary and
+refreshes installed agent skills; see [Update](#update).
+
 `credential list` performs only a shallow status check and does not read a
 secret store or execute a provider command. `credential check` resolves one
 credential and reports availability without printing its value. `credential
@@ -573,6 +615,7 @@ Commands use these statuses:
 | `4` | Credential resolution/store failure or injection conflict |
 | `5` | Project trust-state failure: `status` found an untrusted, invalid, or unavailable project file, or `allow`/`revoke` found no project file |
 | `6` | Project requirements are unsatisfied or cannot be checked by `status` |
+| `7` | `update` could not resolve, download, verify, or install a release, or replaced the binary but could not refresh an agent skill |
 | `127` | `run` target could not be executed |
 
 ## License

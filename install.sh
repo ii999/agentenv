@@ -121,3 +121,4 @@ case ":$PATH:" in
     *":$install_dir:"*) ;;
     *) echo "Add $install_dir to PATH to run 'agentenv' from any directory." ;;
 esac
+echo "Later releases install with 'agentenv update'."

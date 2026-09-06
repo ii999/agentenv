@@ -214,6 +214,7 @@ services:
 | 4 | Credential resolution failure or injection conflict | `credential check <name>`; report, do not substitute |
 | 5 | Project trust-state failure | Run `agentenv project status`; use `allow` or `revoke` as indicated |
 | 6 | Project requirements unsatisfied or uncheckable (`project status` only) | Read the status report and repair the reported requirement or profile selection |
+| 7 | `update` failed, or replaced the binary but left an agent skill unrefreshed | Relay the diagnostic; rerun `agentenv update --force` once the cause is fixed |
 | 127 | `run` target could not be executed | The target command is missing, not agentenv |
 
 Diagnostics never echo secret values, so it is safe to relay them to the

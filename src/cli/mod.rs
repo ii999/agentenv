@@ -4,10 +4,11 @@
 //! [`execute`]. Read commands are thin glue over `query` and `query::render`
 //! and stay inline; the config-write flow lives in [`write`], the credential
 //! runtime commands in [`credential`], and whole-file validation in
-//! [`validate`].
+//! [`validate`], and self-update in [`update`].
 
 mod credential;
 mod project;
+mod update;
 mod validate;
 mod write;
 
@@ -44,6 +45,8 @@ pub enum Command {
     Unset { path: String },
     /// Create the config file at the resolved path.
     Init,
+    /// Install the latest release over this binary and its agent skills.
+    Update(update::UpdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -246,6 +249,9 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     let env = |name: &str| std::env::var(name).ok();
     if let Command::Project(args) = &invocation.command {
         return project::execute(args, invocation.profile.as_deref(), invocation.json, &env);
+    }
+    if let Command::Update(args) = invocation.command {
+        return update::execute(args, invocation.json, &env);
     }
     if matches!(&invocation.command, Command::Validate) {
         if invocation.json {
@@ -468,8 +474,8 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Set { name },
         }) => credential::set(&config, &name, invocation.json),
-        Command::Project(_) => {
-            unreachable!("project commands return before loading the configuration")
+        Command::Project(_) | Command::Update(_) => {
+            unreachable!("project and update commands return before loading the configuration")
         }
     }
 }

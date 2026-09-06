@@ -36,6 +36,9 @@ pub enum AppError {
 
     #[error("target is not executable: {0}")]
     TargetNotExecutable(String),
+
+    #[error("update error: {0}")]
+    Update(String),
 }
 
 impl AppError {
@@ -47,6 +50,7 @@ impl AppError {
             Self::Credential(_) => 4,
             Self::Injection(_) => 4,
             Self::ProjectTrust(_) => 5,
+            Self::Update(_) => 7,
             Self::TargetNotExecutable(_) => 127,
         }
     }

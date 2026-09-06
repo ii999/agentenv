@@ -113,6 +113,7 @@ try {
     if (-not $onPath) {
         Write-Host "Add $InstallDir to PATH to run 'agentenv' from any directory."
     }
+    Write-Host "Later releases install with 'agentenv update'."
 }
 finally {
     Remove-Item $workDir -Recurse -Force -ErrorAction SilentlyContinue

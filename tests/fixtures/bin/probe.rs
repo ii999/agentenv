@@ -22,6 +22,10 @@
 //! the no-secret boundary — so the injected values it contains are expected
 //! there and nowhere else.
 //!
+//! With `TEST_PROBE_VERSION` set and `--version` as the only argument, the
+//! probe instead prints `agentenv <TEST_PROBE_VERSION>` and exits 0, which
+//! lets the `update` suite package it as a stand-in release binary.
+//!
 //! The binary depends on `std` only, so it builds in every profile the crate
 //! builds in.
 
@@ -31,6 +35,12 @@ use std::io::{self, Write};
 use std::process;
 
 fn main() {
+    if let Some(version) = env::var_os("TEST_PROBE_VERSION") {
+        if env::args_os().nth(1).is_some_and(|arg| arg == "--version") {
+            println!("agentenv {}", version.to_string_lossy());
+            process::exit(0);
+        }
+    }
     if let Some(destination) = env::var_os("TEST_PROBE_OUT") {
         let mut report = String::new();
         for argument in env::args_os() {

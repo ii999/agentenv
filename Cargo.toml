@@ -8,6 +8,11 @@ license = "MIT"
 clap = { version = "4", features = ["derive"] }
 keyring = "4"
 rpassword = "7"
+# `update` replaces the running executable in place (self-replace), compares
+# release tags (semver), downloads over HTTPS with bundled roots (ureq), and
+# unpacks the platform archive (flate2 + tar on Unix, zip on Windows).
+self-replace = "1"
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 # arbitrary_precision keeps JSON number literals as strings so config::write
 # can refuse out-of-range integer literals instead of lossy floats. It makes
@@ -17,9 +22,11 @@ serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision
 # Fingerprints the exact bytes of a project file for the trust store
 # (project::trust); a content change is what returns a file to untrusted.
 sha2 = "0.10"
+tempfile = "3"
 thiserror = "2"
 toml = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.25"
+ureq = "3"
 
 # The target process for the `run` integration tests. It reports the child
 # environment the injection runner builds, which no library API can expose:
@@ -40,5 +47,13 @@ assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
 
+[target.'cfg(unix)'.dependencies]
+flate2 = "1"
+tar = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
 [target.'cfg(unix)'.dev-dependencies]
 portable-pty = "0.8"
+

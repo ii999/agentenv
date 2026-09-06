@@ -41,7 +41,7 @@ fn main() {
             process::exit(error.exit_code());
         }
     }
-    let project = if matches!(&command, Command::Project(_)) {
+    let project = if matches!(&command, Command::Project(_) | Command::Update(_)) {
         ProjectContext::None
     } else {
         match resolve_project_context(cli.no_project) {
