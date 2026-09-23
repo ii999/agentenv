@@ -1,6 +1,7 @@
 use std::fmt;
 
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// Bytes captured from an external credential source before validation.
 ///
@@ -21,7 +22,7 @@ use thiserror::Error;
 ///     requires_serialize(value);
 /// }
 /// ```
-pub struct CapturedSecret(Vec<u8>);
+pub struct CapturedSecret(Zeroizing<Vec<u8>>);
 
 /// A validated credential value. Its contents cannot be formatted or
 /// serialized by callers.
@@ -43,7 +44,7 @@ pub struct CapturedSecret(Vec<u8>);
 ///     requires_serialize(value);
 /// }
 /// ```
-pub struct Secret(String);
+pub struct Secret(Zeroizing<String>);
 
 /// A validation failure that intentionally carries no candidate bytes.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -54,19 +55,22 @@ pub enum SecretDomainError {
     ContainsNul,
     #[error("the value is not valid UTF-8")]
     InvalidUtf8,
+    #[error("the value is not supported for authentication")]
+    InvalidAuthentication,
 }
 
 impl CapturedSecret {
     pub fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+        Self(Zeroizing::new(bytes))
     }
 
     /// Removes one conventional line ending from a line-oriented capture.
     pub fn strip_one_trailing_newline(mut self) -> Self {
+        let length = self.0.len();
         if self.0.ends_with(b"\r\n") {
-            self.0.truncate(self.0.len() - 2);
+            self.0.truncate(length - 2);
         } else if self.0.ends_with(b"\n") {
-            self.0.truncate(self.0.len() - 1);
+            self.0.truncate(length - 1);
         }
         self
     }
@@ -76,15 +80,31 @@ impl CapturedSecret {
         if self.0.contains(&0) {
             return Err(SecretDomainError::ContainsNul);
         }
-        let value = String::from_utf8(self.0).map_err(|_| SecretDomainError::InvalidUtf8)?;
+        let value = std::str::from_utf8(&self.0).map_err(|_| SecretDomainError::InvalidUtf8)?;
         if value.is_empty() {
             return Err(SecretDomainError::Empty);
         }
-        Ok(Secret(value))
+        Ok(Secret(Zeroizing::new(value.to_owned())))
     }
 }
 
 impl Secret {
+    /// Checks the full UTF-8 value at each authentication response boundary.
+    /// The caller supplies its independently verified transport byte limit.
+    pub fn validate_authentication(&self, limit: usize) -> Result<(), SecretDomainError> {
+        if limit == 0
+            || self.0.len() > limit.min(255)
+            || self
+                .0
+                .as_bytes()
+                .iter()
+                .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
+        {
+            return Err(SecretDomainError::InvalidAuthentication);
+        }
+        Ok(())
+    }
+
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }

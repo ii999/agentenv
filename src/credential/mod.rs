@@ -3,6 +3,7 @@
 mod command;
 mod env;
 mod keychain;
+pub mod resolver;
 mod secret;
 mod shallow;
 #[cfg(all(feature = "test-keychain", debug_assertions))]
@@ -24,8 +25,20 @@ pub trait Provider {
     fn store(&self, value: Secret) -> Result<(), AppError>;
 }
 
+/// Resolution I/O is consumer-specific; ordinary commands retain their
+/// historical terminal and line-oriented provider behavior.
+#[derive(Clone, Copy)]
+pub enum ResolutionIo {
+    Ordinary,
+    Confidential { max_bytes: usize },
+}
+
 /// Selects the provider adapter for a validated credential definition.
 pub fn provider_for(definition: &CredentialDef) -> Box<dyn Provider> {
+    provider_for_with_io(definition, ResolutionIo::Ordinary)
+}
+
+pub fn provider_for_with_io(definition: &CredentialDef, io: ResolutionIo) -> Box<dyn Provider> {
     match &definition.provider {
         ProviderDef::Env { name } => {
             Box::new(env::EnvProvider::new(definition.name.clone(), name.clone()))
@@ -38,6 +51,7 @@ pub fn provider_for(definition: &CredentialDef) -> Box<dyn Provider> {
         ProviderDef::Command { argv } => Box::new(command::CommandProvider::new(
             definition.name.clone(),
             argv.clone(),
+            io,
         )),
     }
 }
