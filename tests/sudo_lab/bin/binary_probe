@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+import hashlib
+import os
+import sys
+
+payload = sys.stdin.buffer.read()
+sys.stdout.buffer.write(b"stdout:" + hashlib.sha256(payload).hexdigest().encode() + b"\x00")
+sys.stderr.buffer.write(b"stderr:" + str(len(payload)).encode() + b"\xff")
+sys.exit(int(os.environ.get("LAB_TARGET_EXIT", "0")))
