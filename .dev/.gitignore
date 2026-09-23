@@ -1,4 +1,4 @@
 /artifacts/
 /work/*/state.json
-/work/*/runtime/
+/work/
 !/work/*/rounds/*/evidence/*.log
