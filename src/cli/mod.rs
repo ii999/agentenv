@@ -8,6 +8,7 @@
 
 mod credential;
 mod project;
+mod sudo;
 mod update;
 mod validate;
 mod write;
@@ -23,6 +24,8 @@ use agentenv::runner::{EnvironmentMode, InjectionPlan};
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Execute a command using a configured local or SSH sudo target.
+    Sudo(sudo::SudoArgs),
     /// Run a command with the selected entries' injected environment.
     Run(RunArgs),
     /// List entries in the active profile.
@@ -298,6 +301,15 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     }
     let config = Config::load(None, &env)?;
     match invocation.command {
+        Command::Sudo(args) => {
+            let profile = select_profile(
+                &config,
+                invocation.profile.as_deref(),
+                &env,
+                &invocation.project,
+            )?;
+            sudo::execute(&config, profile, args, invocation.json)
+        }
         Command::Validate => unreachable!("validate returns before loading the configuration"),
         Command::Set(_)
         | Command::Unset { .. }

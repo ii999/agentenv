@@ -39,6 +39,12 @@ pub enum AppError {
 
     #[error("update error: {0}")]
     Update(String),
+
+    #[error("sudo-execution: {0}")]
+    SudoExecution(String),
+
+    #[error("sudo-execution: completion-unconfirmed: {0}")]
+    SudoCompletionUnconfirmed(String),
 }
 
 impl AppError {
@@ -51,6 +57,8 @@ impl AppError {
             Self::Injection(_) => 4,
             Self::ProjectTrust(_) => 5,
             Self::Update(_) => 7,
+            Self::SudoExecution(_) => 9,
+            Self::SudoCompletionUnconfirmed(_) => 10,
             Self::TargetNotExecutable(_) => 127,
         }
     }

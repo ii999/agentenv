@@ -5,4 +5,5 @@ pub mod path;
 pub mod project;
 pub mod query;
 pub mod runner;
+pub mod sudo;
 pub mod update;
