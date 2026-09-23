@@ -183,6 +183,19 @@ pub enum CredentialCommand {
     Set { name: String },
     /// Add a credential definition to the config file.
     Add(CredentialAddArgs),
+    /// Replace a credential definition's permitted usages without reading its value.
+    Update(CredentialUpdateArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CredentialUpdateArgs {
+    pub name: String,
+    /// Permitted credential consumer; repeat to permit both authentication stages.
+    #[arg(long = "usage", value_enum, required = true, num_args = 1)]
+    pub usages: Vec<CredentialUsageArg>,
+    /// Required when selecting environment usage; forbidden otherwise.
+    #[arg(long = "inject-as", value_name = "ENV")]
+    pub inject_as: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -197,7 +210,10 @@ pub struct CredentialAddArgs {
     pub provider: ProviderKind,
     /// The environment variable this credential injects by default.
     #[arg(long = "inject-as", value_name = "ENV")]
-    pub inject_as: String,
+    pub inject_as: Option<String>,
+    /// Permitted credential consumer; omitted defaults to environment.
+    #[arg(long = "usage", value_enum, num_args = 1)]
+    pub usages: Vec<CredentialUsageArg>,
     /// env provider: the environment variable holding the value.
     #[arg(long = "env-var", value_name = "NAME")]
     pub env_var: Option<String>,
@@ -220,6 +236,13 @@ pub enum ProviderKind {
     Keychain,
     /// Run an external command; its stdout supplies the value.
     Command,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum CredentialUsageArg {
+    Environment,
+    Sudo,
+    SshPassword,
 }
 
 pub struct Invocation {
@@ -268,7 +291,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             | Command::Unset { .. }
             | Command::Init
             | Command::Credential(CredentialArgs {
-                command: CredentialCommand::Add(_),
+                command: CredentialCommand::Add(_) | CredentialCommand::Update(_),
             })
     ) {
         return write::execute(invocation, &env);
@@ -280,7 +303,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         | Command::Unset { .. }
         | Command::Init
         | Command::Credential(CredentialArgs {
-            command: CredentialCommand::Add(_),
+            command: CredentialCommand::Add(_) | CredentialCommand::Update(_),
         }) => {
             unreachable!("write commands return before loading the configuration")
         }

@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
-use super::model::{is_valid_credential_name, is_valid_env_name};
+use super::model::{is_valid_credential_name, is_valid_env_name, CredentialUsage};
 use super::validate;
 use super::Config;
 use crate::error::{AppError, Violation};
@@ -78,7 +78,18 @@ pub struct CredentialAddRequest {
     /// The provider and its fields.
     pub provider: ProviderSpec,
     /// The required injection target.
-    pub inject_as: String,
+    pub inject_as: Option<String>,
+    pub usages: Vec<CredentialUsage>,
+    /// Whether the invocation selected at least one `--usage`; omitted usage
+    /// retains the compact legacy definition while meaning environment-only.
+    pub explicit_usages: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CredentialUpdateRequest {
+    pub name: String,
+    pub usages: Vec<CredentialUsage>,
+    pub inject_as: Option<String>,
 }
 
 /// Applies a `set` mutation and returns the success message.
@@ -271,13 +282,11 @@ pub fn credential_add(
             request.name
         )));
     }
-    if !is_valid_env_name(&request.inject_as) {
-        return Err(AppError::Usage(format!(
-            "--inject-as '{}' is not a valid environment variable name (expected \
-             [A-Za-z_][A-Za-z0-9_]*)",
-            request.inject_as
-        )));
-    }
+    validate_usage_selection(
+        &request.usages,
+        request.inject_as.as_deref(),
+        &request.provider,
+    )?;
     let mut loaded = LoadedDocument::load(env)?;
     if loaded.config.credential(&request.name).is_some() {
         return Err(AppError::Usage(format!(
@@ -308,7 +317,12 @@ pub fn credential_add(
             definition.insert("argv", Item::Value(Value::Array(array)));
         }
     }
-    definition.insert("inject_as", string_item(&request.inject_as));
+    if request.explicit_usages {
+        insert_usages(&mut definition, &request.usages);
+    }
+    if let Some(inject_as) = &request.inject_as {
+        definition.insert("inject_as", string_item(inject_as));
+    }
 
     let credentials = ensure_table(loaded.document.as_table_mut(), "credentials", "credentials")?;
     credentials.insert(&request.name, Item::Table(definition));
@@ -324,6 +338,126 @@ pub fn credential_add(
     }
     message.push('\n');
     Ok(message)
+}
+
+/// Replaces only usage metadata, preserving the provider definition and its
+/// separately stored value. Validation completes before atomic replacement.
+pub fn credential_update(
+    request: CredentialUpdateRequest,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<String, AppError> {
+    let mut loaded = LoadedDocument::load(env)?;
+    let definition = loaded.config.credential(&request.name).ok_or_else(|| AppError::NotFound(format!("credential '{}' is not defined; run 'agentenv credential list' to see defined credentials", request.name)))?;
+    let provider = match &definition.provider {
+        super::Provider::Env { name } => ProviderSpec::Env { var: name.clone() },
+        super::Provider::Keychain { service, account } => ProviderSpec::Keychain {
+            service: service.clone(),
+            account: account.clone(),
+        },
+        super::Provider::Command { argv } => ProviderSpec::Command { argv: argv.clone() },
+    };
+    validate_usage_selection(&request.usages, request.inject_as.as_deref(), &provider)?;
+    if definition.permits(CredentialUsage::Environment)
+        && !request.usages.contains(&CredentialUsage::Environment)
+    {
+        reject_environment_references(&loaded.config, &request.name)?;
+    }
+    let keys = ["credentials".to_owned(), request.name.clone()];
+    let table = existing_table_like_mut(loaded.document.as_table_mut(), &keys)
+        .expect("validated credential exists as a table");
+    table.remove("usages");
+    let mut usages = toml_edit::Array::new();
+    for usage in &request.usages {
+        usages.push(usage.token());
+    }
+    table.insert("usages", Item::Value(Value::Array(usages)));
+    table.remove("inject_as");
+    if let Some(inject_as) = &request.inject_as {
+        table.insert("inject_as", string_item(inject_as));
+    }
+    loaded.validate_and_persist()?;
+    Ok(format!(
+        "Credential '{}' usages updated to {} (inject as: {}).\n",
+        request.name,
+        request
+            .usages
+            .iter()
+            .map(|usage| usage.token())
+            .collect::<Vec<_>>()
+            .join(", "),
+        request.inject_as.as_deref().unwrap_or("none")
+    ))
+}
+
+fn validate_usage_selection(
+    usages: &[CredentialUsage],
+    inject_as: Option<&str>,
+    provider: &ProviderSpec,
+) -> Result<(), AppError> {
+    if usages.is_empty() {
+        return Err(AppError::Usage(
+            "at least one --usage is required".to_owned(),
+        ));
+    }
+    for (index, usage) in usages.iter().enumerate() {
+        if usages[..index].contains(usage) {
+            return Err(AppError::Usage(format!(
+                "--usage {} was specified more than once",
+                usage.token()
+            )));
+        }
+    }
+    let environment = usages.contains(&CredentialUsage::Environment);
+    if environment && usages.len() != 1 {
+        return Err(AppError::Usage(
+            "--usage environment cannot be combined with authentication usages".to_owned(),
+        ));
+    }
+    match (environment, inject_as) {
+        (true, Some(name)) if !is_valid_env_name(name) => return Err(AppError::Usage("--inject-as is not a valid environment variable name (expected [A-Za-z_][A-Za-z0-9_]*)".to_owned())),
+        (true, None) => return Err(AppError::Usage("--usage environment requires --inject-as <ENV>".to_owned())),
+        (false, Some(_)) => return Err(AppError::Usage("--inject-as is available only with --usage environment".to_owned())),
+        _ => {}
+    }
+    if !environment && matches!(provider, ProviderSpec::Env { .. }) {
+        return Err(AppError::Usage(
+            "the env provider cannot be used for sudo or SSH password authentication".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn insert_usages(definition: &mut Table, usages: &[CredentialUsage]) {
+    // Preserve legacy output for the implicit default; explicit CLI usage is
+    // normalized by the request and emitted for every new definition.
+    let mut values = toml_edit::Array::new();
+    for usage in usages {
+        values.push(usage.token());
+    }
+    definition.insert("usages", Item::Value(Value::Array(values)));
+}
+
+fn reject_environment_references(config: &Config, credential_name: &str) -> Result<(), AppError> {
+    for profile in &config.profiles {
+        for (entry_name, value) in &profile.entries {
+            let Some(entry) = value.as_table() else {
+                continue;
+            };
+            if entry.get("kind").and_then(toml::Value::as_str) == Some("sudo-target") {
+                continue;
+            }
+            let mut found = false;
+            super::validate::walk_entry_references(entry, &mut |_, reference| {
+                if reference.is_ok_and(|reference| reference.name == credential_name) {
+                    found = true;
+                }
+            });
+            if found {
+                return Err(AppError::Usage(format!("credential '{credential_name}' is referenced by profiles.{profile_name}.{entry_name} for environment injection; remove that reference before changing its usage", profile_name = profile.name)));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A loaded, pre-validated config file ready for one mutation.

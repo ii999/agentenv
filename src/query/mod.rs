@@ -154,6 +154,11 @@ pub fn credentials(config: &Config, env: &impl Fn(&str) -> Option<String>) -> Ve
             summary: credential_summary(credential, env),
             description: credential.description.clone(),
             inject_as: credential.inject_as.clone(),
+            usages: credential
+                .usages
+                .iter()
+                .map(|usage| usage.token())
+                .collect(),
         })
         .collect()
 }
@@ -162,7 +167,8 @@ pub fn credentials(config: &Config, env: &impl Fn(&str) -> Option<String>) -> Ve
 pub struct CredentialView {
     pub summary: CredentialSummary,
     pub description: String,
-    pub inject_as: String,
+    pub inject_as: Option<String>,
+    pub usages: Vec<&'static str>,
 }
 
 pub fn find<'a>(
