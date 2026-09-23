@@ -34,6 +34,14 @@ const ARCHIVE_EXTENSION: &str = "tar.gz";
 const BINARY_NAME: &str = "agentenv.exe";
 #[cfg(not(windows))]
 const BINARY_NAME: &str = "agentenv";
+#[cfg(windows)]
+const SUDO_HELPER_NAME: &str = "agentenv-sudo-helper.exe";
+#[cfg(not(windows))]
+const SUDO_HELPER_NAME: &str = "agentenv-sudo-helper";
+#[cfg(windows)]
+const SSH_ASKPASS_NAME: &str = "agentenv-ssh-askpass.exe";
+#[cfg(not(windows))]
+const SSH_ASKPASS_NAME: &str = "agentenv-ssh-askpass";
 
 /// The archive for this platform inside one release.
 #[derive(Debug, Clone)]
@@ -55,6 +63,8 @@ pub struct Release {
 #[derive(Debug)]
 pub struct Extracted {
     pub binary: PathBuf,
+    pub sudo_helper: PathBuf,
+    pub ssh_askpass: PathBuf,
     /// The packaged skill directory, when the release ships one.
     pub skill: Option<PathBuf>,
 }
@@ -224,16 +234,30 @@ pub fn extract(archive: &Path, release: &Release, dir: &Path) -> Result<Extracte
     unpack(archive, dir)?;
     let root = dir.join(format!("agentenv-{}-{TARGET}", release.tag));
     let binary = root.join(BINARY_NAME);
-    if !binary.is_file() {
+    let sudo_helper = root.join(SUDO_HELPER_NAME);
+    let ssh_askpass = root.join(SSH_ASKPASS_NAME);
+    for (path, name) in [
+        (&binary, BINARY_NAME),
+        (&sudo_helper, SUDO_HELPER_NAME),
+        (&ssh_askpass, SSH_ASKPASS_NAME),
+    ] {
+        if path.is_file() {
+            continue;
+        }
         return Err(AppError::Update(format!(
-            "{} does not contain {}/{BINARY_NAME}",
+            "{} does not contain {}/{name}; install a complete release bundle",
             release.asset.name,
             root.file_name().unwrap_or_default().to_string_lossy()
         )));
     }
     let skill = root.join("skills").join("agentenv");
     let skill = skill.join("SKILL.md").is_file().then_some(skill);
-    Ok(Extracted { binary, skill })
+    Ok(Extracted {
+        binary,
+        sudo_helper,
+        ssh_askpass,
+        skill,
+    })
 }
 
 #[cfg(not(windows))]
@@ -274,6 +298,39 @@ pub fn verify_binary(binary: &Path, version: &Version) -> Result<(), AppError> {
         return Err(AppError::Update(format!(
             "the downloaded binary reports '{}' instead of 'agentenv {version}'",
             stdout.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Confirms that every executable in the archive belongs to the same build.
+pub fn verify_bundle(extracted: &Extracted, version: &Version) -> Result<(), AppError> {
+    verify_binary(&extracted.binary, version)?;
+    verify_identity(
+        &extracted.sudo_helper,
+        &format!("agentenv-sudo-helper 1 {version}\n"),
+    )?;
+    verify_identity(
+        &extracted.ssh_askpass,
+        &format!("agentenv-ssh-askpass 1 {version}\n"),
+    )
+}
+
+fn verify_identity(binary: &Path, expected: &str) -> Result<(), AppError> {
+    let output = Command::new(binary)
+        .arg("--identity")
+        .output()
+        .map_err(|error| {
+            AppError::Update(format!(
+                "cannot run downloaded companion {}: {error}",
+                binary.display()
+            ))
+        })?;
+    if !output.status.success() || output.stdout != expected.as_bytes() || !output.stderr.is_empty()
+    {
+        return Err(AppError::Update(format!(
+            "downloaded companion {} has a missing or mismatched identity; install a complete matching release bundle",
+            binary.file_name().unwrap_or_default().to_string_lossy()
         )));
     }
     Ok(())

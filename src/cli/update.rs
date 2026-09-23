@@ -1,5 +1,5 @@
 //! The `update` command: report or install a newer release over the
-//! running binary and its installed agent-skill copies.
+//! running executable bundle and its installed agent-skill copies.
 
 use std::io;
 
@@ -22,7 +22,7 @@ pub struct UpdateArgs {
     /// Reinstall even when the installed version already matches.
     #[arg(long)]
     pub force: bool,
-    /// Update the binary only; leave installed agent skills as they are.
+    /// Update the executable bundle; leave installed agent skills unchanged.
     #[arg(long)]
     pub no_skill: bool,
 }

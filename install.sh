@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs an agentenv release binary from GitHub Releases on macOS or Linux,
-# together with the agentenv agent skill.
+# Installs a matching agentenv executable bundle from GitHub Releases on macOS
+# or Linux, together with the agentenv agent skill.
 #
 # Usage:
 #   ./install.sh [--version <tag>] [--dir <install-dir>] [--claude-skills] [--no-skill]
@@ -12,7 +12,7 @@
 #                     AGENTENV_INSTALL_DIR works the same way.
 #   --claude-skills   Also install the agent skill to ~/.claude/skills for
 #                     Claude Code, in addition to the ~/.agents/skills default.
-#   --no-skill        Install the binary only.
+#   --no-skill        Install the executable bundle only.
 #
 # Downloads use plain HTTPS from GitHub Releases.
 
@@ -88,9 +88,55 @@ fi
 
 tar -xzf "$workdir/$asset" -C "$workdir"
 readonly extracted="$workdir/agentenv-${version}-${target}"
+readonly release_version="${version#v}"
+readonly binaries=(agentenv agentenv-sudo-helper agentenv-ssh-askpass)
+
+for binary in "${binaries[@]}"; do
+    [[ -f "$extracted/$binary" ]] \
+        || fail "$asset is incomplete: missing $binary; install a complete release bundle"
+done
+[[ "$($extracted/agentenv --version)" == "agentenv $release_version" ]] \
+    || fail "$asset contains a mismatched agentenv executable"
+[[ "$($extracted/agentenv-sudo-helper --identity)" == "agentenv-sudo-helper 1 $release_version" ]] \
+    || fail "$asset contains a mismatched sudo helper"
+[[ "$($extracted/agentenv-ssh-askpass --identity)" == "agentenv-ssh-askpass 1 $release_version" ]] \
+    || fail "$asset contains a mismatched SSH askpass helper"
 
 mkdir -p "$install_dir"
-install -m 755 "$extracted/agentenv" "$install_dir/agentenv"
+
+rollback_bundle() {
+    local binary
+    local failed=false
+    for binary in "${swapped[@]}"; do
+        rm -f "$install_dir/$binary" || failed=true
+        if [[ -e "$install_dir/.$binary.agentenv-old" ]]; then
+            mv "$install_dir/.$binary.agentenv-old" "$install_dir/$binary" || failed=true
+        fi
+    done
+    for binary in "${binaries[@]}"; do
+        rm -f "$install_dir/.$binary.agentenv-new" || failed=true
+    done
+    [[ "$failed" == false ]]
+}
+
+swapped=()
+for binary in "${binaries[@]}"; do
+    rm -f "$install_dir/.$binary.agentenv-new" "$install_dir/.$binary.agentenv-old"
+    install -m 755 "$extracted/$binary" "$install_dir/.$binary.agentenv-new" \
+        || { rollback_bundle || fail "cannot stage or restore the executable bundle in $install_dir; repair the complete bundle"; fail "cannot stage the executable bundle in $install_dir"; }
+done
+for binary in agentenv-sudo-helper agentenv-ssh-askpass agentenv; do
+    if [[ -e "$install_dir/$binary" ]]; then
+        mv "$install_dir/$binary" "$install_dir/.$binary.agentenv-old" \
+            || { rollback_bundle || fail "cannot retire or restore $install_dir/$binary; repair the complete bundle"; fail "cannot retire $install_dir/$binary"; }
+    fi
+    swapped+=("$binary")
+    mv "$install_dir/.$binary.agentenv-new" "$install_dir/$binary" \
+        || { rollback_bundle || fail "cannot install or restore $install_dir/$binary; repair the complete bundle"; fail "cannot install $install_dir/$binary; the previous bundle was restored"; }
+done
+for binary in "${binaries[@]}"; do
+    rm -f "$install_dir/.$binary.agentenv-old"
+done
 echo "Installed $("$install_dir/agentenv" --version) to $install_dir/agentenv"
 
 # Replaces one skill directory under a skills root with the packaged copy.

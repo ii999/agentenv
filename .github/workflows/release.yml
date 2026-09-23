@@ -51,22 +51,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --bin agentenv --target ${{ matrix.target }}
+        run: cargo build --release --locked --bin agentenv --bin agentenv-sudo-helper --bin agentenv-ssh-askpass --target ${{ matrix.target }}
       - name: Package
         shell: bash
         run: |
           staging="agentenv-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir "$staging"
-          bin=agentenv
+          suffix=
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            bin=agentenv.exe
+            suffix=.exe
           fi
-          cp "target/${{ matrix.target }}/release/${bin}" README.md "$staging/"
+          for bin in agentenv agentenv-sudo-helper agentenv-ssh-askpass; do
+            cp "target/${{ matrix.target }}/release/${bin}${suffix}" "$staging/"
+          done
+          cp README.md "$staging/"
           cp -R skills "$staging/"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
             7z a "${staging}.zip" "$staging"
           else
             tar czf "${staging}.tar.gz" "$staging"
+            cp "target/${{ matrix.target }}/release/agentenv-sudo-helper" \
+              "agentenv-sudo-helper-${GITHUB_REF_NAME}-${{ matrix.target }}"
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -74,6 +79,7 @@ jobs:
           path: |
             agentenv-*.tar.gz
             agentenv-*.zip
+            agentenv-sudo-helper-v*
           if-no-files-found: error
 
   release:
