@@ -1,0 +1,57 @@
+name: Windows port workspace
+
+on:
+  push:
+    branches: [windows-sudo-credential-fill]
+    paths: [.github/workflows/port-workspace.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-gnu
+      - name: Package public source and offline build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PORT_DIR="$RUNNER_TEMP/agentenv-port"
+          mkdir -p "$PORT_DIR/checkout" "$PORT_DIR/artifacts"
+          python3 - <<'PY'
+          import os, pathlib, shutil, subprocess, zipfile
+          out = pathlib.Path(os.environ['PORT_DIR'])
+          paths = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          with zipfile.ZipFile(out / 'artifacts' / 'source.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for name in filter(None, paths):
+                  path = pathlib.Path(name)
+                  archive.write(path, name)
+                  dest = out / 'checkout' / path
+                  dest.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copyfile(path, dest)
+          manifest = out / 'checkout' / 'Cargo.toml'
+          text = manifest.read_text()
+          marker = "[target.'cfg(windows)'.dependencies]\n"
+          assert text.count(marker) == 1
+          deps = '''windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console"] }
+          windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+          '''
+          manifest.write_text(text.replace(marker, marker + deps))
+          PY
+          cargo vendor --manifest-path "$PORT_DIR/checkout/Cargo.toml" --versioned-dirs "$PORT_DIR/vendor" > "$PORT_DIR/artifacts/cargo-config.toml"
+          cp "$PORT_DIR/checkout/Cargo.toml" "$PORT_DIR/artifacts/port-Cargo.toml"
+          cp "$PORT_DIR/checkout/Cargo.lock" "$PORT_DIR/artifacts/port-Cargo.lock"
+          tar -czf "$PORT_DIR/artifacts/vendor.tar.gz" -C "$PORT_DIR" vendor
+          tar -czf "$PORT_DIR/artifacts/toolchain.tar.gz" -C "$(rustc --print sysroot)" bin lib
+          rustc --version > "$PORT_DIR/artifacts/toolchain-version.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agentenv-port-workspace
+          path: ${{ runner.temp }}/agentenv-port/artifacts
+          retention-days: 1
