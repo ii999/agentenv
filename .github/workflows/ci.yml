@@ -46,6 +46,7 @@ jobs:
       # Most credential cases use the test-only store. The native Windows case
       # creates and removes one uniquely named synthetic Credential Manager entry.
       - name: Run tests
+        id: native_tests
         run: cargo test --features test-keychain
       - name: Windows lint (both provider configurations)
         if: runner.os == 'Windows'
@@ -58,7 +59,7 @@ jobs:
           python -m pip install paramiko==4.0.0
           python tests/windows_lab/ssh.py
       - name: Native Windows focused-input fixture
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !cancelled() && steps.native_tests.outcome == 'success'
         run: pwsh -NoProfile -STA -File tests/windows_lab/desktop.ps1
 
   sudo-integration:
