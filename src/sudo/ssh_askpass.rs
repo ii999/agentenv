@@ -4,6 +4,10 @@ const IDENTITY: &str = concat!("agentenv-ssh-askpass 1 ", env!("CARGO_PKG_VERSIO
 
 #[cfg(unix)]
 pub use unix::Session;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::Session;
 
 #[cfg(unix)]
 mod unix {
@@ -319,6 +323,8 @@ pub fn helper_main() -> i32 {
     };
     #[cfg(unix)]
     return if unix::reply(first).is_ok() { 0 } else { 1 };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    return if windows::reply(first).is_ok() { 0 } else { 1 };
+    #[cfg(not(any(unix, windows)))]
     9
 }

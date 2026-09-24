@@ -17,6 +17,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use super::{Secret, SecretDomainError, FILL_VALUE_LIMIT};
+
+#[cfg(windows)]
+mod windows;
 use crate::config::{CredentialDef, CredentialUsage};
 use crate::error::AppError;
 
@@ -136,7 +139,16 @@ pub async fn resolve_detailed(
         .await
         .map_err(|_| ResolveError::Timeout)?
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        tokio::time::timeout(
+            deadline,
+            windows::resolve(executable, definition, stage, limit),
+        )
+        .await
+        .map_err(|_| ResolveError::Timeout)?
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (executable, definition, deadline);
         Err(ResolveError::Unavailable)
@@ -155,8 +167,152 @@ pub fn internal_entry() -> Option<i32> {
     }
     #[cfg(unix)]
     return Some(if unix::serve().is_ok() { 0 } else { 9 });
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    return Some(if windows::serve().is_ok() { 0 } else { 9 });
+    #[cfg(not(any(unix, windows)))]
     Some(9)
+}
+
+use crate::config::Provider;
+const MAGIC: &[u8; 5] = b"AGER\x02";
+const MAX_REQUEST: usize = 65536;
+const STATUS_OK: u8 = 0;
+const STATUS_PROVIDER: u8 = 1;
+const STATUS_VALUE: u8 = 2;
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Request {
+    provider: ProviderRequest,
+    stage: ResolutionStage,
+    limit: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+enum ProviderRequest {
+    Keychain { service: String, account: String },
+    Command { argv: Vec<String> },
+}
+
+fn encode_request(
+    definition: &CredentialDef,
+    stage: ResolutionStage,
+    limit: usize,
+) -> Result<Vec<u8>, ResolveError> {
+    let provider = match &definition.provider {
+        Provider::Keychain { service, account } => ProviderRequest::Keychain {
+            service: service.clone(),
+            account: account.clone(),
+        },
+        Provider::Command { argv } => ProviderRequest::Command { argv: argv.clone() },
+        Provider::Env { .. } => return Err(ResolveError::NotPermitted),
+    };
+    let request = serde_json::to_vec(&Request {
+        provider,
+        stage,
+        limit,
+    })
+    .map_err(|_| ResolveError::Provider)?;
+    if request.len() > MAX_REQUEST {
+        return Err(ResolveError::NotPermitted);
+    }
+    Ok(request)
+}
+
+async fn exchange<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    channel: &mut S,
+    request: &[u8],
+    stage: ResolutionStage,
+    limit: usize,
+) -> Result<Secret, ResolveError> {
+    use crate::credential::CapturedSecret;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use zeroize::Zeroizing;
+    channel
+        .write_all(MAGIC)
+        .await
+        .map_err(|_| ResolveError::Provider)?;
+    channel
+        .write_u32(request.len() as u32)
+        .await
+        .map_err(|_| ResolveError::Provider)?;
+    channel
+        .write_all(request)
+        .await
+        .map_err(|_| ResolveError::Provider)?;
+    let mut response = [0u8; 5];
+    channel
+        .read_exact(&mut response)
+        .await
+        .map_err(|_| ResolveError::Provider)?;
+    if &response != MAGIC {
+        return Err(ResolveError::Provider);
+    }
+    match channel
+        .read_u8()
+        .await
+        .map_err(|_| ResolveError::Provider)?
+    {
+        STATUS_OK => {}
+        STATUS_VALUE => return Err(ResolveError::Value),
+        _ => return Err(ResolveError::Provider),
+    }
+    let size = channel
+        .read_u16()
+        .await
+        .map_err(|_| ResolveError::Provider)? as usize;
+    if size == 0 || size > limit {
+        return Err(ResolveError::Provider);
+    }
+    let mut bytes = Zeroizing::new(vec![0; size]);
+    channel
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| ResolveError::Provider)?;
+    // The resolver validated the bytes; a value that no longer parses is
+    // a resolver failure, not a rejected value.
+    let secret = CapturedSecret::new(std::mem::take(&mut *bytes))
+        .into_secret()
+        .map_err(|_| ResolveError::Provider)?;
+    stage
+        .validate(&secret, limit)
+        .map_err(|_| ResolveError::Value)?;
+    Ok(secret)
+}
+
+fn resolve_request(metadata: &[u8]) -> Result<Secret, u8> {
+    use crate::credential::{provider_for, ConfidentialError};
+    let request: Request = serde_json::from_slice(metadata).map_err(|_| STATUS_PROVIDER)?;
+    let stage = request.stage;
+    if !(1..=stage.max_limit()).contains(&request.limit) {
+        return Err(STATUS_PROVIDER);
+    }
+    let provider = match request.provider {
+        ProviderRequest::Keychain { service, account } => Provider::Keychain { service, account },
+        ProviderRequest::Command { argv } if !argv.is_empty() => Provider::Command { argv },
+        _ => return Err(STATUS_PROVIDER),
+    };
+    let definition = CredentialDef {
+        name: "resolution".to_owned(),
+        description: String::new(),
+        provider,
+        inject_as: None,
+        usages: vec![stage.usage()],
+    };
+    // The fill stage keeps the line-oriented value semantics environment
+    // credentials have under ordinary resolution; authentication stages
+    // keep raw bytes and reject line endings through their validation.
+    let line_oriented = stage == ResolutionStage::Fill;
+    let secret = match provider_for(&definition).resolve_confidential(line_oriented) {
+        Ok(secret) => secret,
+        Err(ConfidentialError::Execution) => return Err(STATUS_PROVIDER),
+        Err(ConfidentialError::Value) => return Err(STATUS_VALUE),
+    };
+    if stage.validate(&secret, request.limit).is_err() {
+        return Err(STATUS_VALUE);
+    }
+    Ok(secret)
 }
 
 #[cfg(unix)]
@@ -167,34 +323,7 @@ mod unix {
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
 
-    use serde::{Deserialize, Serialize};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use zeroize::Zeroizing;
-
     use super::*;
-    use crate::config::Provider;
-    use crate::credential::{provider_for, CapturedSecret, ConfidentialError};
-
-    const MAGIC: &[u8; 5] = b"AGER\x02";
-    const MAX_REQUEST: usize = 65536;
-    const STATUS_OK: u8 = 0;
-    const STATUS_PROVIDER: u8 = 1;
-    const STATUS_VALUE: u8 = 2;
-
-    #[derive(Serialize, Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Request {
-        provider: ProviderRequest,
-        stage: ResolutionStage,
-        limit: usize,
-    }
-
-    #[derive(Serialize, Deserialize)]
-    #[serde(tag = "kind", deny_unknown_fields)]
-    enum ProviderRequest {
-        Keychain { service: String, account: String },
-        Command { argv: Vec<String> },
-    }
 
     struct Resolver(Child);
 
@@ -215,23 +344,7 @@ mod unix {
         stage: ResolutionStage,
         limit: usize,
     ) -> Result<Secret, ResolveError> {
-        let provider = match &definition.provider {
-            Provider::Keychain { service, account } => ProviderRequest::Keychain {
-                service: service.clone(),
-                account: account.clone(),
-            },
-            Provider::Command { argv } => ProviderRequest::Command { argv: argv.clone() },
-            Provider::Env { .. } => return Err(ResolveError::NotPermitted),
-        };
-        let request = serde_json::to_vec(&Request {
-            provider,
-            stage,
-            limit,
-        })
-        .map_err(|_| ResolveError::Provider)?;
-        if request.len() > MAX_REQUEST {
-            return Err(ResolveError::NotPermitted);
-        }
+        let request = encode_request(definition, stage, limit)?;
         let (parent, child) = UnixStream::pair().map_err(|_| ResolveError::Provider)?;
         let child_fd = child.as_raw_fd();
         let mut command = Command::new(executable);
@@ -271,56 +384,7 @@ mod unix {
             .map_err(|_| ResolveError::Provider)?;
         let mut channel =
             tokio::net::UnixStream::from_std(parent).map_err(|_| ResolveError::Provider)?;
-        channel
-            .write_all(MAGIC)
-            .await
-            .map_err(|_| ResolveError::Provider)?;
-        channel
-            .write_u32(request.len() as u32)
-            .await
-            .map_err(|_| ResolveError::Provider)?;
-        channel
-            .write_all(&request)
-            .await
-            .map_err(|_| ResolveError::Provider)?;
-        let mut response = [0u8; 5];
-        channel
-            .read_exact(&mut response)
-            .await
-            .map_err(|_| ResolveError::Provider)?;
-        if &response != MAGIC {
-            return Err(ResolveError::Provider);
-        }
-        match channel
-            .read_u8()
-            .await
-            .map_err(|_| ResolveError::Provider)?
-        {
-            STATUS_OK => {}
-            STATUS_VALUE => return Err(ResolveError::Value),
-            _ => return Err(ResolveError::Provider),
-        }
-        let size = channel
-            .read_u16()
-            .await
-            .map_err(|_| ResolveError::Provider)? as usize;
-        if size == 0 || size > limit {
-            return Err(ResolveError::Provider);
-        }
-        let mut bytes = Zeroizing::new(vec![0; size]);
-        channel
-            .read_exact(&mut bytes)
-            .await
-            .map_err(|_| ResolveError::Provider)?;
-        // The resolver validated the bytes; a value that no longer parses is
-        // a resolver failure, not a rejected value.
-        let secret = CapturedSecret::new(std::mem::take(&mut *bytes))
-            .into_secret()
-            .map_err(|_| ResolveError::Provider)?;
-        stage
-            .validate(&secret, limit)
-            .map_err(|_| ResolveError::Value)?;
-        Ok(secret)
+        exchange(&mut channel, &request, stage, limit).await
     }
 
     fn private_channel() -> Result<UnixStream, AppError> {
@@ -395,39 +459,10 @@ mod unix {
         }
         let mut metadata = vec![0; length];
         channel.read_exact(&mut metadata).map_err(|_| failure())?;
-        let request: Request = serde_json::from_slice(&metadata).map_err(|_| failure())?;
-        let stage = request.stage;
-        if !(1..=stage.max_limit()).contains(&request.limit) {
-            return Err(failure());
-        }
-        let provider = match request.provider {
-            ProviderRequest::Keychain { service, account } => {
-                Provider::Keychain { service, account }
-            }
-            ProviderRequest::Command { argv } if !argv.is_empty() => Provider::Command { argv },
-            _ => return Err(failure()),
-        };
-        let definition = CredentialDef {
-            name: "resolution".to_owned(),
-            description: String::new(),
-            provider,
-            inject_as: None,
-            usages: vec![stage.usage()],
-        };
-        // The fill stage keeps the line-oriented value semantics environment
-        // credentials have under ordinary resolution; authentication stages
-        // keep raw bytes and reject line endings through their validation.
-        let line_oriented = stage == ResolutionStage::Fill;
-        let secret = match provider_for(&definition).resolve_confidential(line_oriented) {
+        let secret = match resolve_request(&metadata) {
             Ok(secret) => secret,
-            Err(ConfidentialError::Execution) => {
-                return reply_status(&mut channel, STATUS_PROVIDER)
-            }
-            Err(ConfidentialError::Value) => return reply_status(&mut channel, STATUS_VALUE),
+            Err(status) => return reply_status(&mut channel, status),
         };
-        if stage.validate(&secret, request.limit).is_err() {
-            return reply_status(&mut channel, STATUS_VALUE);
-        }
         channel.write_all(MAGIC).map_err(|_| failure())?;
         channel.write_all(&[STATUS_OK]).map_err(|_| failure())?;
         channel

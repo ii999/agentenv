@@ -77,6 +77,7 @@ impl Fixture {
         into_run(command.output().expect("agentenv runs"))
     }
 
+    #[cfg(unix)]
     fn run_without_state_base(&self, args: &[&str]) -> helpers::Run {
         let mut command = command_with_project_discovery(&self.config);
         command.current_dir(&self.cwd);

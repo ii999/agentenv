@@ -3,7 +3,9 @@
 Status: CDP browser filling is implemented. Phase A (CDP feasibility) is
 recorded in [ADR 0001](adr/0001-native-rust-cdp-client.md); Phases B and C
 ship `agentenv credential fill --backend cdp` with the native Rust client.
-Desktop and Playwright filling (Phases D–G) are not implemented.
+Windows focused desktop input and the Windows confidential resolver are now
+implemented; see [Windows port](windows-port.md) for the boundary and validation
+commands. Playwright and the other desktop adapters remain unimplemented.
 
 ## Outcome and scope
 
@@ -74,10 +76,11 @@ code rather than the pre-sudo state.
     resolves env credentials in-process, since reading an environment
     variable cannot block; only keychain and command credentials use the
     subprocess.
-  - The resolver is Unix-only. Windows filling of keychain and command
-    credentials depends on a Windows resolver, which the sudo plan defers.
-    Windows desktop filling is advertised only after that dependency lands,
-    or with env credentials only, stated explicitly in capabilities.
+  - The resolver now supports Windows using a current-user-only local named
+    pipe and a kill-on-close Job Object. Keychain and command filling share
+    the same stage validation and wire protocol as Unix. Windows desktop
+    capability is compiled but its runtime availability remains target- and
+    permission-dependent; capabilities reports that availability as unknown.
 - `src/runner.rs` intentionally forwards child output. Leave `run` semantics
   intact; a filling operation owns and normalizes its transport output.
 - `src/cli/mod.rs`, `src/cli/credential.rs`, and `src/error.rs` own the CLI
@@ -177,8 +180,8 @@ control and later setting accessible controls.
 
 ## Proposed CLI and result contract
 
-The CDP form below is implemented; the Playwright and desktop forms are the
-planned contract for later phases.
+The CDP and Windows desktop forms below are implemented. Playwright and
+non-Windows desktop forms remain planned contracts for later phases.
 
 ```text
 agentenv credential fill portal_password --backend cdp \

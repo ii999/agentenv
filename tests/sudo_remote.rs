@@ -2,9 +2,11 @@ use std::time::Duration;
 
 use agentenv::credential::CapturedSecret;
 use agentenv::sudo::protocol::{
-    read_frame, write_frame, Cancel, ExecutionResult, Failure, FailureReason, Frame, Hello,
-    MessageKind, Mode, PasswordRequest, Ready, Start, Stream, MAX_STREAM_CHUNK_SIZE,
+    read_frame, write_frame, Cancel, ExecutionResult, Failure, FailureReason, Frame, MessageKind,
+    PasswordRequest, Start, Stream, MAX_STREAM_CHUNK_SIZE,
 };
+#[cfg(unix)]
+use agentenv::sudo::protocol::{Hello, Mode, Ready};
 use agentenv::sudo::transport::{self, Side, StreamEvent, TransportError};
 use tokio::io::AsyncWriteExt;
 

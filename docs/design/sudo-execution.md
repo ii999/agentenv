@@ -1,5 +1,13 @@
 # Local and SSH sudo execution
 
+Windows implementation update: the native OpenSSH client, confidential
+resolver, and one-shot askpass channel are implemented. Windows local UAC
+elevation and Windows ProxyJump remain unsupported. Windows execution uses
+the same remote Unix helper protocol and failure semantics; this is not a
+Windows remote helper. See `docs/design/windows-port.md` for the current
+validation scope. Historical phase descriptions below remain design context.
+
+
 Status: implemented for macOS and Linux clients and Linux destinations, covering
 local sudo, SSH execution, and publickey and saved-password login. The Windows
 SSH client (confidential resolver and named-pipe login askpass) is deferred to a

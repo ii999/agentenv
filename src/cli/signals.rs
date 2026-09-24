@@ -33,7 +33,7 @@ pub(super) fn install_signal_forwarder(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(super) fn install_signal_forwarder(
     runtime: &tokio::runtime::Runtime,
     cancel: tokio::sync::watch::Sender<i32>,
@@ -45,4 +45,26 @@ pub(super) fn install_signal_forwarder(
         }
     });
     Ok(())
+}
+
+/// Install both handlers before starting any operation. Signal numbers belong
+/// to the remote POSIX protocol, not Windows console-event enum values.
+#[cfg(windows)]
+pub(super) fn install_signal_forwarder(
+    runtime: &tokio::runtime::Runtime,
+    cancel: tokio::sync::watch::Sender<i32>,
+    error: impl Fn() -> AppError,
+) -> Result<(), AppError> {
+    runtime.block_on(async move {
+        let mut interrupt = tokio::signal::windows::ctrl_c().map_err(|_| error())?;
+        let mut stop = tokio::signal::windows::ctrl_break().map_err(|_| error())?;
+        tokio::spawn(async move {
+            let signal = tokio::select! {
+                _ = interrupt.recv() => 2,
+                _ = stop.recv() => 15,
+            };
+            let _ = cancel.send(signal);
+        });
+        Ok(())
+    })
 }

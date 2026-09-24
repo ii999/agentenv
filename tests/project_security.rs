@@ -7,7 +7,9 @@
 mod helpers;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use helpers::{
     assert_exit, canonical_display, command_with_project_discovery, staged_config, Run, SENTINELS,

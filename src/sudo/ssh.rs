@@ -80,6 +80,25 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
     let executable = find_ssh_executable()?;
     let environment = curated_environment();
     let deadline = Instant::now() + timeout;
+    #[cfg(windows)]
+    {
+        // MSYS/Cygwin process ids, paths and askpass launch conventions are
+        // different. This adapter targets native Win32 OpenSSH only.
+        let version = run_bounded(
+            &executable,
+            &environment,
+            &[OsString::from("-V")],
+            deadline,
+            1024,
+        )
+        .await?;
+        if !String::from_utf8_lossy(&version.stderr).starts_with("OpenSSH_for_Windows_") {
+            return Err(owned(
+                "ssh-client-unsupported",
+                "Windows execution requires native Win32 OpenSSH, not an MSYS/Cygwin client",
+            ));
+        }
+    }
 
     let (destination, initial) = match &ssh.connection {
         SshConnection::Config {
@@ -1189,7 +1208,7 @@ fn find_ssh_executable() -> Result<PathBuf, AppError> {
 
 #[cfg(windows)]
 fn ssh_names() -> &'static [&'static str] {
-    &["ssh.exe", "ssh"]
+    &["ssh.exe"]
 }
 
 #[cfg(not(windows))]
@@ -1203,21 +1222,28 @@ fn curated_environment() -> Vec<(OsString, OsString)> {
             let Some(name) = name.to_str() else {
                 return false;
             };
+            #[cfg(windows)]
+            let normalized = name.to_ascii_uppercase();
+            #[cfg(windows)]
+            let name = normalized.as_str();
             matches!(
                 name,
-                "PATH"
-                    | "HOME"
-                    | "USER"
-                    | "LOGNAME"
-                    | "LANG"
-                    | "TZ"
-                    | "SSH_AUTH_SOCK"
-                    | "SystemRoot"
-                    | "USERPROFILE"
-                    | "HOMEDRIVE"
-                    | "HOMEPATH"
-                    | "APPDATA"
+                "PATH" | "HOME" | "USER" | "LOGNAME" | "LANG" | "TZ" | "SSH_AUTH_SOCK"
             ) || name.starts_with("LC_")
+                || cfg!(windows)
+                    && matches!(
+                        name,
+                        "SYSTEMROOT"
+                            | "WINDIR"
+                            | "USERPROFILE"
+                            | "HOMEDRIVE"
+                            | "HOMEPATH"
+                            | "APPDATA"
+                            | "LOCALAPPDATA"
+                            | "TEMP"
+                            | "TMP"
+                            | "PROGRAMDATA"
+                    )
         })
         .collect()
 }

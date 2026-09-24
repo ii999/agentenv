@@ -16,6 +16,8 @@
 
 pub mod cdp;
 mod delivery;
+#[cfg(windows)]
+pub mod desktop;
 #[cfg(all(feature = "test-keychain", debug_assertions))]
 pub mod test_backend;
 
@@ -265,7 +267,7 @@ pub fn check_fillable(definition: &CredentialDef) -> Result<(), AppError> {
 /// Whether this platform can resolve keychain and command credentials for
 /// filling. Env credentials are always resolvable in-process.
 pub fn resolver_available(definition: &CredentialDef) -> bool {
-    matches!(definition.provider, Provider::Env { .. }) || cfg!(unix)
+    matches!(definition.provider, Provider::Env { .. }) || cfg!(any(unix, windows))
 }
 
 /// Runs one filling operation end to end.

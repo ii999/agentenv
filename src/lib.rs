@@ -8,3 +8,6 @@ pub mod query;
 pub mod runner;
 pub mod sudo;
 pub mod update;
+
+#[cfg(windows)]
+mod windows;

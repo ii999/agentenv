@@ -35,6 +35,9 @@ use std::io::{self, Write};
 use std::process;
 
 fn main() {
+    if fixture_mode() {
+        return;
+    }
     if let Some(version) = env::var_os("TEST_PROBE_VERSION") {
         if env::args_os().nth(1).is_some_and(|arg| arg == "--version") {
             println!("agentenv {}", version.to_string_lossy());
@@ -87,4 +90,58 @@ fn requested_exit_code() -> i32 {
     requested.parse().unwrap_or_else(|error| {
         panic!("TEST_PROBE_EXIT={requested:?} is not an exit code: {error}")
     })
+}
+
+// Synthetic provider/askpass subprocesses: no shell or platform-specific
+// scripting runtime is needed to exercise cancellation on Windows.
+fn fixture_mode() -> bool {
+    let args: Vec<String> = env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("--resolver-fixture") => {
+            match args.get(1).map(String::as_str) {
+                Some("value") => {
+                    print!("{}", args[2]);
+                }
+                Some("repeat") => {
+                    print!("{}", "x".repeat(args[2].parse().unwrap()));
+                }
+                Some("delayed") => {
+                    fs::write(&args[3], b"resolving").unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    print!("{}", args[2]);
+                }
+                Some("failure") => {
+                    eprint!("SYNTHETIC-PROVIDER-ERROR");
+                    process::exit(1);
+                }
+                Some("sleep") => {
+                    fs::write(&args[2], process::id().to_string()).unwrap();
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                }
+                Some("descendant") => {
+                    let mut child = process::Command::new(env::current_exe().unwrap())
+                        .args(["--resolver-fixture", "sleep", &args[2]])
+                        .stdin(process::Stdio::null())
+                        .stdout(process::Stdio::null())
+                        .stderr(process::Stdio::null())
+                        .spawn()
+                        .unwrap();
+                    let _ = child.wait();
+                }
+                _ => process::exit(2),
+            }
+            io::stdout().flush().unwrap();
+            true
+        }
+        Some("--askpass-fixture") => {
+            let output = process::Command::new(env::var_os("SSH_ASKPASS").unwrap())
+                .arg(&args[1])
+                .stdin(process::Stdio::null())
+                .output()
+                .unwrap();
+            io::stdout().write_all(&output.stdout).unwrap();
+            process::exit(output.status.code().unwrap_or(1));
+        }
+        _ => false,
+    }
 }
