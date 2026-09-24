@@ -1,3 +1,10 @@
+//! SSH policy preparation against the local OpenSSH client.
+//!
+//! Windows builds report SSH sudo execution as unsupported until the Windows
+//! client implementation lands (docs/design/sudo-execution.md), so these
+//! tests run on Unix only.
+#![cfg(unix)]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
