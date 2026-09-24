@@ -42,17 +42,44 @@ pub struct PreparedSsh {
     pub effective_port: u16,
     pub auth: PreparedAuth,
     pub ssh_executable: PathBuf,
+    /// The complete serve invocation; its last element is the remote command.
     pub arguments: Vec<OsString>,
+    /// The same route without a remote command.
+    route_arguments: Vec<OsString>,
+    helper_path: String,
     environment: Vec<(OsString, OsString)>,
 }
 
 impl PreparedSsh {
-    /// Rebuilds the exact owned SSH child. Callers may add invocation-scoped
-    /// askpass routing variables to the returned command before spawning it.
+    /// Rebuilds the exact owned SSH child that serves the helper protocol.
+    /// Callers may add invocation-scoped askpass routing variables to the
+    /// returned command before spawning it.
     pub fn command(&self) -> Command {
+        self.command_with_arguments(&self.arguments)
+    }
+
+    /// The same route, policy and authentication with `remote_command` in
+    /// place of the helper's serve command. Deployment uses it for the
+    /// preflight and install sessions; the route never changes between them.
+    pub fn command_for(&self, remote_command: &str) -> Command {
+        // ssh parses arguments after the destination as options, so a
+        // remote command must never start with '-'; every caller passes a
+        // fixed `sh -c` template.
+        debug_assert!(!remote_command.starts_with('-'));
+        let mut arguments = self.route_arguments.clone();
+        arguments.push(OsString::from(remote_command));
+        self.command_with_arguments(&arguments)
+    }
+
+    /// The configured remote helper path, already validated as UTF-8.
+    pub fn helper_path(&self) -> &str {
+        &self.helper_path
+    }
+
+    fn command_with_arguments(&self, arguments: &[OsString]) -> Command {
         let mut command = Command::new(&self.ssh_executable);
         command
-            .args(&self.arguments)
+            .args(arguments)
             .env_clear()
             .envs(self.environment.iter().cloned())
             .stdin(Stdio::piped())
@@ -198,8 +225,9 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
             "the configured remote helper path is not valid UTF-8",
         )
     })?;
-    let mut arguments = evaluation_arguments;
-    arguments.insert(arguments.len() - 1, OsString::from("-T"));
+    let mut route_arguments = evaluation_arguments;
+    route_arguments.insert(route_arguments.len() - 1, OsString::from("-T"));
+    let mut arguments = route_arguments.clone();
     arguments.push(OsString::from(format!("{helper}{REMOTE_SWITCH}")));
 
     let auth = match &ssh.auth {
@@ -216,6 +244,8 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
         auth,
         ssh_executable: executable,
         arguments,
+        route_arguments,
+        helper_path: helper.to_owned(),
         environment,
     })
 }

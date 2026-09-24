@@ -542,3 +542,47 @@ pub(super) fn trusted_project_pin(project: &ProjectContext) -> Option<&ProjectPi
 fn json_stdout(value: serde_json::Value) -> String {
     serde_json::to_string(&value).expect("query JSON views are serializable") + "\n"
 }
+
+/// Renders an entry name as the `--with` argument the path grammar accepts
+/// (`agentenv::path`): a name containing `.` or whitespace must be a quoted
+/// segment, and the result is then quoted for the shell.
+pub(crate) fn entry_word(entry: &str) -> String {
+    if entry.contains('.') || entry.chars().any(char::is_whitespace) {
+        shell_word(&format!("\"{entry}\""))
+    } else {
+        shell_word(entry)
+    }
+}
+
+/// Quotes `text` for a command line shown to the user, leaving plain words
+/// as they are so the usual case stays readable.
+pub(crate) fn shell_word(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'_' | b'.' | b'/' | b':' | b'@' | b'%' | b'+' | b'=' | b'-'
+                )
+        });
+    if plain {
+        text.to_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod printed_command_tests {
+    use super::{entry_word, shell_word};
+
+    #[test]
+    fn printed_names_survive_the_shell_and_the_path_grammar() {
+        assert_eq!(shell_word("work"), "work");
+        assert_eq!(shell_word("two words"), "'two words'");
+        assert_eq!(shell_word("it's"), "'it'\\''s'");
+        assert_eq!(entry_word("prod_admin"), "prod_admin");
+        assert_eq!(entry_word("prod.admin"), "'\"prod.admin\"'");
+        assert_eq!(entry_word("two words"), "'\"two words\"'");
+    }
+}

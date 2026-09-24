@@ -11,13 +11,14 @@ release gap. It is not supported by inference from a related passing case.
 | --- | --- | --- |
 | `tests/sudo_lab/run.sh` | S0 measurements of real sudo and OpenSSH behavior | Disposable Debian 13 container, `--network none`; see `sudo-compatibility.md` |
 | `tests/sudo_execution_lab/run.py` | Built `agentenv` local sudo matrix (18 cases) | Same container family; sudo 1.9.16p2, default `use_pty` |
-| `tests/sudo_execution_lab/run.py --ssh` | Built client, helper, and askpass companion over real sshd (37 cases) | Loopback-only sshd inside the container; OpenSSH 10.0p2 client and server |
+| `tests/sudo_execution_lab/run.py --ssh` | Built client, helper, and askpass companion over real sshd, including explicit helper deployment (46 cases) | Loopback-only sshd inside the container; OpenSSH 10.0p2 client and server; glibc 2.41 destination |
 | `tests/sudo_execution_lab/run.py --release` | sudoers policy variations, SSH refusal cases, and passwordless remote cancellation (16 cases) | Same container; release-specific sudoers and additional loopback sshd instances |
 | `tests/sudo_macos_lab/run.py` | Native macOS client against the Linux destination (8 cases) | macOS 27.0 arm64, OpenSSH_10.3p1 (LibreSSL 3.3.6); destination published only on 127.0.0.1 |
 | `cargo test --features test-keychain` | Protocol, transport, client, resolver, config, askpass, and local-engine contracts | Fake sudo, SSH, and provider processes; no real authentication |
 
 The Linux and macOS lab runs recorded here used Docker 29.5.2 on arm64 and
-debug builds with the `test-keychain` feature, not release artifacts. All
+debug builds (stripped, without debuginfo, since 2026-09-24) with the
+`test-keychain` feature, not release artifacts. All
 accounts, passwords, keys, host keys, and sudoers rules are synthetic and belong
 to disposable containers or temporary directories. The CI `sudo-integration`
 job is configured to run the three Linux lab entry points on `ubuntu-latest`
@@ -41,6 +42,7 @@ job is configured to run the three Linux lab entry points on `ubuntu-latest`
 | Lifecycle | SIGTERM forwarding locally and over SSH, with the target confirmed gone whenever a signal status is reported; SIGINT delivered to the whole process group, as a terminal or harness would, still reaches the remote target as Cancel and reports 130; cancelling a passwordless remote target reports its observed signal; SSH disconnect after start reports completion unknown (10) | Cancellation before and during helper setup; sudo that survives the forwarded signal reports completion unknown; Cancel after exit bounds output held open by a descendant; a queued Result survives a failed Cancel write; post-Start local failures report completion unknown; resolver and login-askpass cancellation during lookup; Cancel delivered while target stdin or output is blocked | Cancellation during a slow real keychain lookup; no lab assertion that a disconnected command was started only once; remote cancellation during SSH connect or login or while a sudo password request is pending, and disconnect after a password reply or after output, have no targeted test |
 | IPC isolation | Four concurrent local and four concurrent remote invocations each succeed; a login-time banner on protocol stdout fails before any sudo lookup for a password-requiring command | Mismatched session identifiers and malformed, truncated, oversized, duplicate, and out-of-order frames; a helper stream closing right after Start reports completion unknown | Per-invocation output and credential separation under concurrency; wrong local broker peer and symlink or socket substitution are enforced in code without a targeted test; a helper crash before Ready or after a password reply |
 | Resource limits | Output over 2 MiB per stream | Bounded credit over more than 1 MiB; thousands of one-byte frames within the byte window; control not starved by blocked streams; resolver child reaped on timeout; a broken local stdout reports completion unknown | A stalled invocation blocking another is not tested; broken pipes in a real lab |
+| Helper deployment (`helper-deployment.md`) | First installation from the bundle into an absent directory (`0755`, user-owned, no temporary file, no credential lookup); execution through the deployed helper; `up-to-date` rerun with unchanged mtime; `--force` reinstall; upgrade over an older helper with `--from`; a wrong source refused by the destination identity check; an occupied path refused; a login-shell banner refused before any write; saved-password login uses three sessions and no sudo lookup | Path grammar and file-name rule; remote command templates executed under every installed login shell (fresh install, wrong identity, truncated upload, non-program, stale temporary file, forged `absent`, symlink and directory occupation); strict preflight parsing; decision table; install status classification; `--from` bounds; bundle identity gate; named release asset lookup, checksum, malformed and duplicate refusal against a loopback release server; cancellation of a pending source; route reuse; CLI flow through a fake `ssh` including `ssh-connect-failed` without remediation and install failures that precede the upload; the `agentenv update` reminder | Release-asset source against a real destination (the lab has no network); x86_64 and macOS destinations; a `--serve` session that outlives an upgrade; a connection cut during upload; Windows client |
 | Compatibility and packaging | sudo 1.9.16p2 with and without `use_pty`; locally, `requiretty` rejected without a PTY fallback; native macOS OpenSSH client | Update installs both companions with the main binary and refuses missing or mismatched companions without replacing it | Native macOS sudo; other Linux distributions and sudo versions; Windows OpenSSH client and named-pipe askpass; `requiretty` over SSH (no PTY is requested, enforced in code without a targeted test) |
 
 Under `!env_reset`, the lab observed the local askpass routing variables in
@@ -77,3 +79,9 @@ above.
    helper destination) and the x86_64 macOS client have no recorded run. A
    passing amd64 `sudo-integration` CI run must be recorded here before Linux
    support is advertised; x86_64 macOS remains unmeasured.
+7. **Helper deployment from a release.** Deployment has installed the helper
+   from the local bundle and from a file on the arm64 Linux destination only.
+   The release-asset source is verified against a loopback release server, not
+   against GitHub Releases, and no x86_64 or macOS destination has received a
+   deployment. Record a real release-sourced deployment per destination
+   target before advertising `--deploy-helper` for it.

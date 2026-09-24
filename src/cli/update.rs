@@ -6,6 +6,7 @@ use std::io;
 use clap::Args;
 use serde_json::{json, Value};
 
+use agentenv::config::{Config, SudoTransport};
 use agentenv::error::AppError;
 use agentenv::update::{self, Options, Outcome, Report, Status};
 
@@ -68,10 +69,11 @@ pub(super) fn execute(
             Ok(Output::success(stdout, String::new()))
         }
         Outcome::Updated(report) => {
+            let redeployments = helper_redeployments(env);
             let stdout = if json {
-                json_line(report_json(&report))
+                json_line(report_json(&report, &redeployments))
             } else {
-                report_text(&report)
+                report_text(&report, &redeployments)
             };
             let status = if report.skill_failures.is_empty() {
                 0
@@ -117,7 +119,47 @@ fn status_json(status: &Status) -> Value {
     })
 }
 
-fn report_text(report: &Report) -> String {
+/// One SSH sudo target whose remote helper must match the new build again.
+struct HelperRedeployment {
+    profile: String,
+    entry: String,
+}
+
+impl HelperRedeployment {
+    fn command(&self) -> String {
+        format!(
+            "agentenv --profile={} sudo --with={} --deploy-helper",
+            super::shell_word(&self.profile),
+            super::entry_word(&self.entry)
+        )
+    }
+}
+
+/// The SSH sudo targets of the configuration this executable would load.
+/// The update never touches a remote host; this only names the explicit
+/// commands that bring the remote helpers back to this build. A missing or
+/// invalid configuration is `agentenv validate`'s business and yields none.
+fn helper_redeployments(env: &impl Fn(&str) -> Option<String>) -> Vec<HelperRedeployment> {
+    let Ok(config) = Config::load(None, env) else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    for profile in &config.profiles {
+        for entry in profile.entries.keys() {
+            if let Some(target) = config.sudo_target(profile, entry) {
+                if matches!(target.transport, SudoTransport::Ssh(_)) {
+                    targets.push(HelperRedeployment {
+                        profile: profile.name.clone(),
+                        entry: entry.clone(),
+                    });
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn report_text(report: &Report, redeployments: &[HelperRedeployment]) -> String {
     let mut text = format!(
         "Updated agentenv {} -> {} at {}\n",
         report.from,
@@ -137,10 +179,16 @@ fn report_text(report: &Report) -> String {
             failure.error
         ));
     }
+    if !redeployments.is_empty() {
+        text.push_str("Remote sudo helpers must match this build again; run, per SSH target:\n");
+        for redeployment in redeployments {
+            text.push_str(&format!("  {}\n", redeployment.command()));
+        }
+    }
     text
 }
 
-fn report_json(report: &Report) -> Value {
+fn report_json(report: &Report, redeployments: &[HelperRedeployment]) -> Value {
     json!({
         "from": report.from.to_string(),
         "to": report.to.to_string(),
@@ -151,6 +199,14 @@ fn report_json(report: &Report) -> Value {
             .skill_failures
             .iter()
             .map(|failure| json!({ "path": failure.path, "error": failure.error }))
+            .collect::<Vec<_>>(),
+        "helper_redeployments": redeployments
+            .iter()
+            .map(|redeployment| json!({
+                "profile": redeployment.profile,
+                "entry": redeployment.entry,
+                "command": redeployment.command(),
+            }))
             .collect::<Vec<_>>(),
     })
 }

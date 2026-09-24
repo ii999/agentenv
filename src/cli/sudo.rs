@@ -25,6 +25,17 @@ pub struct SudoArgs {
     /// Check the endpoint, helper compatibility, and execution prerequisites.
     #[arg(long, conflicts_with = "plan")]
     pub check: bool,
+    /// Install or upgrade the remote helper at the target's helper_path over
+    /// its SSH route, then check it. Never happens implicitly.
+    #[arg(long, conflicts_with_all = ["plan", "check"])]
+    pub deploy_helper: bool,
+    /// Helper file to upload instead of the bundled companion or the release
+    /// asset for the destination.
+    #[arg(long, value_name = "PATH", requires = "deploy_helper")]
+    pub from: Option<PathBuf>,
+    /// Reinstall even when the destination already reports this build.
+    #[arg(long, requires = "deploy_helper")]
+    pub force: bool,
     /// Setup deadline in seconds.
     #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
     pub connect_timeout_secs: u64,
@@ -54,6 +65,27 @@ pub(crate) fn execute(
         let request = request.ok_or_else(command_required)?;
         return render_plan(profile, &entry, &target, &request, json);
     }
+    // The command that repairs a helper mismatch, naming the profile so the
+    // same target is reached whichever way this profile was selected. The
+    // --flag=value form keeps names that start with '-' working.
+    let remediation = format!(
+        "agentenv --profile={} sudo --with={} --deploy-helper",
+        super::shell_word(&profile.name),
+        super::entry_word(&entry)
+    );
+    if args.deploy_helper {
+        if request.is_some() {
+            return Err(AppError::Usage(
+                "sudo --deploy-helper does not accept a command".to_owned(),
+            ));
+        }
+        if args.cwd.is_some() {
+            return Err(AppError::Usage(
+                "sudo --deploy-helper does not accept --cwd".to_owned(),
+            ));
+        }
+        return deploy_helper(config, &target, &args, json);
+    }
     if args.check {
         if request.is_some() {
             return Err(AppError::Usage(
@@ -65,16 +97,126 @@ pub(crate) fn execute(
                 "sudo --check does not accept --cwd".to_owned(),
             ));
         }
-        return check(config, &target, &args, json);
+        return check(config, &target, &remediation, &args, json);
     }
     if json {
         return Err(AppError::Usage(
-            "sudo execution does not support --json; use --plan --json or --check --json"
+            "sudo execution does not support --json; use --plan --json, --check --json or --deploy-helper --json"
                 .to_owned(),
         ));
     }
     let request = request.ok_or_else(command_required)?;
-    run(config, target, request, &args)
+    run(config, target, &remediation, request, &args)
+}
+
+/// Installs or upgrades the helper on an SSH target and reports the result.
+fn deploy_helper(
+    config: &Config,
+    target: &agentenv::config::SudoTarget,
+    args: &SudoArgs,
+    json: bool,
+) -> Result<Output, AppError> {
+    if !matches!(target.transport, SudoTransport::Ssh(_)) {
+        return Err(AppError::Usage(
+            "sudo --deploy-helper requires an SSH target; local targets use the helper installed beside agentenv".to_owned(),
+        ));
+    }
+    let source = match &args.from {
+        Some(path) => sudo::deploy::Source::File(path.clone()),
+        None => {
+            let executable = std::env::current_exe().map_err(|_| {
+                AppError::SudoExecution(
+                    "helper-missing: could not determine the agentenv executable path".to_owned(),
+                )
+            })?;
+            sudo::deploy::Source::Automatic {
+                bundle: sudo::companion_path(&executable)?,
+                release_base_url: agentenv::update::base_url(&|name| std::env::var(name).ok()),
+            }
+        }
+    };
+    let runtime = runtime()?;
+    let (cancel, cancellation) = sudo::cancellation_channel();
+    super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
+    let result = runtime.block_on(sudo::client::deploy_helper(
+        config,
+        target,
+        source,
+        args.force,
+        Duration::from_secs(args.connect_timeout_secs),
+        Duration::from_secs(args.auth_timeout_secs),
+        cancellation,
+    ));
+    runtime.shutdown_timeout(Duration::from_millis(100));
+    let (report, ready) = result?;
+    let stdout = if json {
+        serde_json::to_string(&serde_json::json!({
+            "status": report.status.label(),
+            "transport": "ssh",
+            "helper_path": report.helper_path,
+            "destination": report.destination,
+            "source": report.source(),
+            "previous": report.previous,
+            "installed": report.installed,
+            "helper": ready,
+            "sudo_authentication": "not-attempted",
+        }))
+        .expect("deployment JSON is serializable")
+            + "\n"
+    } else {
+        let destination = format!(
+            "{}/{} ({})",
+            report.destination.platform,
+            plain_value(&report.destination.machine),
+            report.destination.target
+        );
+        let first = match &report.status {
+            sudo::deploy::Status::Deployed { source } => format!(
+                "Installed {} at {} on {} from {} {}; previously {}.",
+                plain_value(&report.installed),
+                plain_value(&report.helper_path),
+                destination,
+                match source.kind {
+                    "file" => "file",
+                    "bundle" => "the bundled companion",
+                    _ => "release asset",
+                },
+                plain_value(&source.name),
+                report
+                    .previous
+                    .as_deref()
+                    .map_or_else(|| "absent".to_owned(), plain_value)
+            ),
+            sudo::deploy::Status::UpToDate => format!(
+                "The helper at {} on {} is up to date ({}).",
+                plain_value(&report.helper_path),
+                destination,
+                plain_value(&report.installed)
+            ),
+        };
+        format!(
+            "{first}\nSSH helper is ready as {} in {}; sudo authentication was not attempted.\n",
+            plain_value(&ready.auth_user),
+            plain_value(&ready.cwd)
+        )
+    };
+    Ok(Output::success(stdout, String::new()))
+}
+
+/// Points a helper mismatch at the command that repairs it. Connection and
+/// login failures surface as `ssh-connect-failed` and carry no remediation.
+fn with_remediation(error: AppError, remediation: &str) -> AppError {
+    match error {
+        AppError::SudoExecution(detail)
+            if detail.starts_with("helper-identity-mismatch")
+                || detail.starts_with("helper-handshake-missing") =>
+        {
+            AppError::SudoExecution(format!(
+                "{detail}; to install the helper matching this build, run: {remediation}"
+            ))
+        }
+        other => other,
+    }
 }
 
 fn request(args: &SudoArgs) -> Result<Option<ExecutionRequest>, AppError> {
@@ -128,6 +270,7 @@ fn runtime() -> Result<tokio::runtime::Runtime, AppError> {
 fn check(
     config: &Config,
     target: &agentenv::config::SudoTarget,
+    remediation: &str,
     args: &SudoArgs,
     json: bool,
 ) -> Result<Output, AppError> {
@@ -150,18 +293,42 @@ fn check(
             };
             Ok(Output::success(stdout, String::new()))
         }
-        SudoTransport::Ssh(_) => remote(config, target, None, args, json),
+        SudoTransport::Ssh(ssh) => {
+            // Execution interpolates helper_path as it is; deployment refuses
+            // paths outside its grammar, so a check names the problem whether
+            // or not the handshake succeeds.
+            let warning = sudo::deploy::helper_path_problem(&ssh.helper_path).map(|problem| {
+                format!(
+                    "helper_path {} is outside the deployment grammar ({problem}); --deploy-helper refuses it, so change helper_path before deploying",
+                    plain_value(&ssh.helper_path.to_string_lossy())
+                )
+            });
+            match (
+                remote(config, target, remediation, None, args, json),
+                warning,
+            ) {
+                (Ok(mut output), Some(warning)) => {
+                    output.stderr.push_str(&format!("sudo-check: {warning}\n"));
+                    Ok(output)
+                }
+                (Err(AppError::SudoExecution(detail)), Some(warning)) => Err(
+                    AppError::SudoExecution(format!("{detail}; also, {warning}")),
+                ),
+                (result, _) => result,
+            }
+        }
     }
 }
 
 fn run(
     config: &Config,
     target: agentenv::config::SudoTarget,
+    remediation: &str,
     request: ExecutionRequest,
     args: &SudoArgs,
 ) -> Result<Output, AppError> {
     if !matches!(target.transport, SudoTransport::Local) {
-        return remote(config, &target, Some(request), args, false);
+        return remote(config, &target, remediation, Some(request), args, false);
     }
     // sudo runs in its own process group, so a target reading a controlling
     // terminal would be stopped by the OS instead of receiving input.
@@ -215,6 +382,7 @@ fn run(
 fn remote(
     config: &Config,
     target: &agentenv::config::SudoTarget,
+    remediation: &str,
     request: Option<ExecutionRequest>,
     args: &SudoArgs,
     json: bool,
@@ -231,7 +399,7 @@ fn remote(
         cancellation,
     ));
     runtime.shutdown_timeout(Duration::from_millis(100));
-    let outcome = result?;
+    let outcome = result.map_err(|error| with_remediation(error, remediation))?;
     if let Some(execution) = outcome.execution {
         let mut stderr = String::new();
         if outcome.close_failed {
@@ -250,8 +418,11 @@ fn remote(
         });
     }
     let ready = outcome.ready.ok_or_else(|| {
-        AppError::SudoExecution(
-            "helper-handshake-missing: remote readiness was not observed".into(),
+        with_remediation(
+            AppError::SudoExecution(
+                "helper-handshake-missing: remote readiness was not observed".into(),
+            ),
+            remediation,
         )
     })?;
     let stdout = if json {

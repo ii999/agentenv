@@ -3,3 +3,4 @@
 .claude/handoffs/
 .codex/handoffs/
 .copilot/handoffs/
+__pycache__/

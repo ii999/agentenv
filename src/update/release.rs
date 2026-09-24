@@ -80,6 +80,8 @@ impl Client {
             .user_agent(format!("agentenv/{}", env!("CARGO_PKG_VERSION")))
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(60)))
+            // A stalled body must fail rather than hang a foreground command.
+            .timeout_recv_body(Some(Duration::from_secs(600)))
             .build();
         Self {
             base_url: base_url.to_owned(),
@@ -90,6 +92,51 @@ impl Client {
     /// Resolves the release for `tag`, or the latest release when `tag` is
     /// `None`, from its `SHA256SUMS` file.
     pub fn fetch(&self, tag: Option<&str>) -> Result<Release, AppError> {
+        let sums = self
+            .fetch_sums(tag)
+            .map_err(SumsFailure::into_update_error)?;
+        parse_release(&sums, tag)
+    }
+
+    /// Resolves one standalone asset of release `tag` by exact file name, for
+    /// example `agentenv-sudo-helper-v0.3.0-aarch64-unknown-linux-gnu`.
+    pub fn fetch_asset(&self, tag: &str, name: &str) -> Result<Asset, AssetLookup> {
+        let sums = self
+            .fetch_sums(Some(tag))
+            .map_err(|failure| match failure {
+                SumsFailure::NotFound(detail) => AssetLookup::NoRelease(detail),
+                SumsFailure::Failed(detail) => AssetLookup::Transport(detail),
+            })?;
+        let mut found = None;
+        for line in sums.lines() {
+            let mut fields = line.split_whitespace();
+            let (Some(digest), Some(listed)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            if listed.trim_start_matches('*') != name {
+                continue;
+            }
+            if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(AssetLookup::Malformed(format!(
+                    "{SUMS_FILE} carries a malformed digest for {name}"
+                )));
+            }
+            if found.is_some() {
+                return Err(AssetLookup::Malformed(format!(
+                    "{SUMS_FILE} lists {name} more than once"
+                )));
+            }
+            found = Some(Asset {
+                name: name.to_owned(),
+                digest: digest.to_ascii_lowercase(),
+            });
+        }
+        found.ok_or_else(|| {
+            AssetLookup::NoAsset(format!("release {tag} ships no asset named {name}"))
+        })
+    }
+
+    fn fetch_sums(&self, tag: Option<&str>) -> Result<String, SumsFailure> {
         let url = match tag {
             Some(tag) => format!("{}/download/{tag}/{SUMS_FILE}", self.base_url),
             None => format!("{}/latest/download/{SUMS_FILE}", self.base_url),
@@ -99,76 +146,154 @@ impl Client {
             None => "the latest release".to_owned(),
         };
         let mut response = self.agent.get(&url).call().map_err(|error| match error {
-            ureq::Error::StatusCode(404) => AppError::Update(format!(
+            ureq::Error::StatusCode(404) => SumsFailure::NotFound(format!(
                 "{} has no {SUMS_FILE} at {url}; check the release tag",
                 describe()
             )),
-            other => AppError::Update(format!(
+            other => SumsFailure::Failed(format!(
                 "cannot fetch {SUMS_FILE} for {}: {other}",
                 describe()
             )),
         })?;
-        let sums = response
+        response
             .body_mut()
             .with_config()
             .limit(SUMS_LIMIT)
             .read_to_string()
             .map_err(|error| {
-                AppError::Update(format!(
+                SumsFailure::Failed(format!(
                     "cannot read {SUMS_FILE} for {}: {error}",
                     describe()
                 ))
-            })?;
-        parse_release(&sums, tag)
+            })
     }
 
     /// Downloads the release archive into `dir`, verifying its SHA-256 digest
     /// against the entry from `SHA256SUMS` before returning the path.
     pub fn download(&self, release: &Release, dir: &Path) -> Result<PathBuf, AppError> {
-        let url = format!(
-            "{}/download/{}/{}",
-            self.base_url, release.tag, release.asset.name
-        );
-        let mut response = self.agent.get(&url).call().map_err(|error| {
-            AppError::Update(format!("cannot download {}: {error}", release.asset.name))
-        })?;
-        let destination = dir.join(&release.asset.name);
+        self.download_asset(&release.tag, &release.asset, dir, ARCHIVE_LIMIT)
+            .map_err(DownloadFailure::into_update_error)
+    }
+
+    /// Downloads one asset of release `tag` into `dir`, reading at most
+    /// `limit` bytes, and verifies it against `asset.digest`; a digest
+    /// mismatch is reported distinctly.
+    pub fn download_asset(
+        &self,
+        tag: &str,
+        asset: &Asset,
+        dir: &Path,
+        limit: u64,
+    ) -> Result<PathBuf, DownloadFailure> {
+        let url = format!("{}/download/{tag}/{}", self.base_url, asset.name);
+        let transport = |detail: String| DownloadFailure::Transport(detail);
+        let mut response = self
+            .agent
+            .get(&url)
+            .call()
+            .map_err(|error| transport(format!("cannot download {}: {error}", asset.name)))?;
+        let destination = dir.join(&asset.name);
         let mut file = File::create(&destination).map_err(|error| {
-            AppError::Update(format!("cannot create {}: {error}", destination.display()))
+            transport(format!("cannot create {}: {error}", destination.display()))
         })?;
-        let mut reader = response
-            .body_mut()
-            .with_config()
-            .limit(ARCHIVE_LIMIT)
-            .reader();
+        let mut reader = response.body_mut().with_config().limit(limit).reader();
         let mut hasher = Sha256::new();
         let mut buffer = [0u8; 64 * 1024];
         loop {
             let read = reader.read(&mut buffer).map_err(|error| {
-                AppError::Update(format!(
-                    "download of {} failed: {error}",
-                    release.asset.name
-                ))
+                transport(format!("download of {} failed: {error}", asset.name))
             })?;
             if read == 0 {
                 break;
             }
             hasher.update(&buffer[..read]);
             file.write_all(&buffer[..read]).map_err(|error| {
-                AppError::Update(format!("cannot write {}: {error}", destination.display()))
+                transport(format!("cannot write {}: {error}", destination.display()))
             })?;
         }
         file.flush().map_err(|error| {
-            AppError::Update(format!("cannot write {}: {error}", destination.display()))
+            transport(format!("cannot write {}: {error}", destination.display()))
         })?;
         let actual = hex(&hasher.finalize());
-        if actual != release.asset.digest {
-            return Err(AppError::Update(format!(
-                "checksum verification failed for {}: {SUMS_FILE} lists {} but the download hashes to {actual}",
-                release.asset.name, release.asset.digest
-            )));
+        if actual != asset.digest {
+            return Err(DownloadFailure::Checksum {
+                name: asset.name.clone(),
+                expected: asset.digest.clone(),
+                actual,
+            });
         }
         Ok(destination)
+    }
+}
+
+/// Why a release's `SHA256SUMS` could not be read: absent, or failed.
+enum SumsFailure {
+    NotFound(String),
+    Failed(String),
+}
+
+impl SumsFailure {
+    fn into_update_error(self) -> AppError {
+        match self {
+            Self::NotFound(detail) | Self::Failed(detail) => AppError::Update(detail),
+        }
+    }
+}
+
+/// Why a named asset could not be resolved from a release.
+#[derive(Debug)]
+pub enum AssetLookup {
+    /// The release has no `SHA256SUMS`: it is not published.
+    NoRelease(String),
+    /// The release exists but lists no asset of that name.
+    NoAsset(String),
+    /// `SHA256SUMS` is malformed or lists the name more than once.
+    Malformed(String),
+    Transport(String),
+}
+
+impl std::fmt::Display for AssetLookup {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRelease(detail)
+            | Self::NoAsset(detail)
+            | Self::Malformed(detail)
+            | Self::Transport(detail) => formatter.write_str(detail),
+        }
+    }
+}
+
+/// Why a verified download did not produce a file.
+#[derive(Debug)]
+pub enum DownloadFailure {
+    /// The bytes arrived but do not match `SHA256SUMS`.
+    Checksum {
+        name: String,
+        expected: String,
+        actual: String,
+    },
+    Transport(String),
+}
+
+impl DownloadFailure {
+    pub fn into_update_error(self) -> AppError {
+        AppError::Update(self.to_string())
+    }
+}
+
+impl std::fmt::Display for DownloadFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Checksum {
+                name,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "checksum verification failed for {name}: {SUMS_FILE} lists {expected} but the download hashes to {actual}"
+            ),
+            Self::Transport(detail) => formatter.write_str(detail),
+        }
     }
 }
 

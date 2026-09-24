@@ -285,6 +285,141 @@ Host *
             process.wait(timeout=5)
 
 
+DEPLOY_DIR = RUNTIME / "deploy"
+DEPLOYED_HELPER = DEPLOY_DIR / "libexec" / "agentenv-sudo-helper"
+BUNDLED_HELPER = "/opt/agentenv/agentenv-sudo-helper"
+
+
+def deploy(lab: Lab, *extra: str, login_mode: str = "valid") -> subprocess.CompletedProcess[bytes]:
+    argv = [APP, "--no-project", "--json", "sudo", "--with", "admin", "--connect-timeout-secs", "8",
+            "--auth-timeout-secs", "8", "--deploy-helper", *extra]
+    return lab.command(argv, user="labuser", env={"AGENTENV_FILE": str(CONFIG), "LAB_LOGIN_MODE": login_mode,
+        "LAB_SUDO_MODE": "valid", "SSH_AUTH_SOCK": str(AGENT_SOCKET), "HOME": "/home/labuser"}, timeout=60)
+
+
+def report(result: subprocess.CompletedProcess[bytes]) -> dict:
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return {}
+
+
+def failure(result: subprocess.CompletedProcess[bytes]) -> str:
+    """The failure line agentenv printed, for the record of a failed case."""
+    return result.stderr.decode(errors="replace").strip()[-400:]
+
+
+def mtime_ns(path: Path) -> int | None:
+    return path.stat().st_mtime_ns if path.exists() else None
+
+
+def temporaries() -> list[Path]:
+    """Upload temporaries beside the deployed helper, with any pid suffix."""
+    return sorted(DEPLOYED_HELPER.parent.glob(DEPLOYED_HELPER.name + ".agentenv-new*"))
+
+
+def helper_identity() -> str:
+    return subprocess.run([BUNDLED_HELPER, "--identity"], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def deployment(lab: Lab) -> None:
+    """Explicit helper deployment through the same SSH route as execution."""
+    import shutil
+    import stat
+
+    shutil.rmtree(DEPLOY_DIR, ignore_errors=True)
+    account = pwd.getpwnam("labuser")
+    identity = helper_identity()
+    configure(helper=str(DEPLOYED_HELPER))
+
+    # A first installation from the bundled companion (same target as the
+    # destination): 0755, user-owned, identity verified, check handshake done.
+    before = counts()
+    result = deploy(lab)
+    data = report(result)
+    mode = DEPLOYED_HELPER.stat().st_mode if DEPLOYED_HELPER.exists() else 0
+    lab.record("deploy_first_install_from_bundle", result.returncode == 0 and data.get("status") == "deployed"
+        and data.get("previous") is None and data.get("installed") == identity
+        and data.get("source", {}).get("kind") == "bundle" and data.get("helper", {}).get("build")
+        and stat.S_IMODE(mode) == 0o755 and DEPLOYED_HELPER.stat().st_uid == account.pw_uid
+        and not temporaries()
+        and counts() == before, status=result.returncode, report={k: data.get(k) for k in ("status", "previous", "source")},
+        failure=failure(result))
+
+    # The deployed helper serves real remote sudo execution.
+    before = counts()
+    result = invoke(lab, ["/opt/sudo-lab/bin/allowed", "fixed"])
+    record(lab, "deploy_then_execute_through_deployed_helper", result, before, (0, 1), result.returncode == 0)
+
+    # A rerun changes nothing; --force reinstalls the same identity.
+    mtime = mtime_ns(DEPLOYED_HELPER)
+    result = deploy(lab)
+    data = report(result)
+    lab.record("deploy_rerun_is_up_to_date", result.returncode == 0 and data.get("status") == "up-to-date"
+        and data.get("source") is None and mtime_ns(DEPLOYED_HELPER) == mtime, status=result.returncode,
+        failure=failure(result))
+    result = deploy(lab, "--force")
+    data = report(result)
+    lab.record("deploy_force_reinstalls", result.returncode == 0 and data.get("status") == "deployed"
+        and data.get("previous") == identity, status=result.returncode, failure=failure(result))
+
+    # An older helper at the path is upgraded, and --from takes the given file.
+    DEPLOYED_HELPER.parent.mkdir(parents=True, exist_ok=True)
+    DEPLOYED_HELPER.write_text("#!/bin/sh\ncase \"$1\" in --identity) echo 'agentenv-sudo-helper 1 0.0.1';; *) exit 9;; esac\n")
+    DEPLOYED_HELPER.chmod(0o755)
+    os.chown(DEPLOYED_HELPER, account.pw_uid, account.pw_gid)
+    result = deploy(lab, "--from", BUNDLED_HELPER)
+    data = report(result)
+    lab.record("deploy_upgrades_older_helper_from_file", result.returncode == 0 and data.get("status") == "deployed"
+        and data.get("previous") == "agentenv-sudo-helper 1 0.0.1" and data.get("source", {}).get("kind") == "file"
+        and DEPLOYED_HELPER.read_bytes() == Path(BUNDLED_HELPER).read_bytes(), status=result.returncode,
+        failure=failure(result))
+
+    # Refusals leave the destination untouched: a wrong source (forced past
+    # the up-to-date decision so it is actually uploaded and verified), an
+    # occupied path, and a login shell that prints on stdout.
+    result = deploy(lab, "--force", "--from", "/opt/sudo-lab/target.py")
+    lab.record("deploy_refuses_wrong_source", result.returncode == 9 and b"helper-deploy-identity-mismatch" in result.stderr
+        and DEPLOYED_HELPER.exists() and DEPLOYED_HELPER.read_bytes() == Path(BUNDLED_HELPER).read_bytes()
+        and not temporaries(), status=result.returncode,
+        failure=failure(result))
+    DEPLOYED_HELPER.unlink(missing_ok=True)
+    DEPLOYED_HELPER.write_bytes(b"not a helper")
+    os.chown(DEPLOYED_HELPER, account.pw_uid, account.pw_gid)
+    result = deploy(lab)
+    lab.record("deploy_refuses_occupied_path", result.returncode == 9 and b"helper-deploy-path-occupied" in result.stderr
+        and DEPLOYED_HELPER.read_bytes() == b"not a helper", status=result.returncode, failure=failure(result))
+    DEPLOYED_HELPER.unlink()
+    checked(["usermod", "--shell", "/bin/bash", "labuser"])
+    bashrc = Path("/home/labuser/.bashrc")
+    previous_rc = bashrc.read_bytes() if bashrc.exists() else None
+    bashrc.write_text("echo 'Welcome to the lab'\n")
+    try:
+        result = deploy(lab)
+        libexec = DEPLOY_DIR / "libexec"
+        untouched = not DEPLOYED_HELPER.exists() and (not libexec.exists() or not any(libexec.iterdir()))
+        lab.record("deploy_refuses_stdout_banner_before_writing", result.returncode == 9
+            and b"helper-deploy-preflight-unparseable" in result.stderr and untouched, status=result.returncode,
+            failure=failure(result))
+    finally:
+        if previous_rc is None:
+            bashrc.unlink()
+        else:
+            bashrc.write_bytes(previous_rc)
+        checked(["usermod", "--shell", "/bin/sh", "labuser"])
+
+    # Saved-password login: three sessions, three login replies, no sudo lookup.
+    configure("password", helper=str(DEPLOYED_HELPER))
+    before = counts()
+    result = deploy(lab)
+    data = report(result)
+    after = counts()
+    lab.record("deploy_with_password_login_uses_three_sessions", result.returncode == 0 and data.get("status") == "deployed"
+        and (after[0] - before[0], after[1] - before[1]) == (3, 0) and b"SENTINEL" not in result.stdout + result.stderr,
+        status=result.returncode, lookups=(after[0] - before[0], after[1] - before[1]), failure=failure(result))
+    configure()
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--provider":
         return provider(sys.argv[2])
@@ -360,6 +495,7 @@ def main() -> int:
         lifecycle(lab, disconnect=False)
         lifecycle(lab, disconnect=False, group=True)
         lifecycle(lab, disconnect=True)
+        deployment(lab)
     finally:
         server.terminate()
         server.communicate(timeout=5)
