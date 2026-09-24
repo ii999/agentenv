@@ -18,7 +18,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-posix
           mkdir -p "$RUNNER_TEMP/cross"
-          tar -czf "$RUNNER_TEMP/cross/mingw.tar.gz" -C / usr/x86_64-w64-mingw32 usr/share/mingw-w64 usr/lib/gcc/x86_64-w64-mingw32 usr/libexec/gcc/x86_64-w64-mingw32 usr/bin/x86_64-w64-mingw32-*
+          python3 - <<'PY'
+          import glob, os, tarfile
+          paths = ['/usr/x86_64-w64-mingw32', '/usr/share/mingw-w64', '/usr/lib/gcc/x86_64-w64-mingw32'] + glob.glob('/usr/bin/x86_64-w64-mingw32-*')
+          with tarfile.open(os.environ['RUNNER_TEMP'] + '/cross/mingw.tar.gz', 'w:gz', dereference=True) as archive:
+              for path in paths:
+                  archive.add(path, arcname=path.lstrip('/'))
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: agentenv-cross-compiler
