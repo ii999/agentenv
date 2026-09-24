@@ -162,7 +162,15 @@ fn run_selected(
             let mut backend = CdpBackend::new(browser_target(args)?);
             run_backend(&mut backend, definition, executable, timeout)
         }
-        FillBackendKind::Playwright | FillBackendKind::Desktop => Err(FillError::new(
+        #[cfg(windows)]
+        FillBackendKind::Desktop => {
+            let mut backend = fill::desktop::DesktopBackend::new(args.expect_pid.expect("validated PID"));
+            run_backend(&mut backend, definition, executable, timeout)
+        }
+        #[cfg(not(windows))]
+        FillBackendKind::Desktop => Err(FillError::new(Reason::BackendUnavailable,
+            "the desktop backend is not available in this build").into()),
+        FillBackendKind::Playwright => Err(FillError::new(
             Reason::BackendUnavailable,
             format!(
                 "the {} backend is not available in this build; run 'agentenv credential fill --capabilities' to see what is",
@@ -274,9 +282,12 @@ fn validate_backend_arguments(
             forbid(args.expect_pid.is_some(), "--expect-pid")?;
         }
         FillBackendKind::Desktop => {
-            if args.expect_pid.is_none() {
+            if args
+                .expect_pid
+                .is_none_or(|pid| pid == 0 || pid > i32::MAX as u32)
+            {
                 return Err(AppError::Usage(
-                    "--backend desktop requires --expect-pid".to_owned(),
+                    "--backend desktop requires --expect-pid with a positive process id".to_owned(),
                 ));
             }
             forbid(args.endpoint.is_some(), "--endpoint")?;
@@ -318,15 +329,24 @@ fn capabilities(args: &CredentialFillArgs, json: bool) -> Result<Output, AppErro
             "attaches to a Chromium-family browser through a loopback remote debugging port",
         ),
         ("playwright", false, false, "not included in this build"),
-        ("desktop", false, false, "not included in this build"),
+        (
+            "desktop",
+            cfg!(windows),
+            cfg!(windows),
+            if cfg!(windows) {
+                "Windows UI Automation Edit control and Unicode SendInput; permission and focus are checked per target"
+            } else {
+                "not included in this build"
+            },
+        ),
     ];
-    let resolver_confidential = cfg!(unix);
+    let resolver_confidential = cfg!(any(unix, windows));
     if json {
         let mut table = serde_json::Map::new();
         for (name, compiled, available, detail) in backends {
             table.insert(
                 name.to_owned(),
-                serde_json::json!({ "compiled": compiled, "available": available, "detail": detail }),
+                serde_json::json!({ "compiled": compiled, "available": if name == "desktop" && cfg!(windows) { None } else { Some(available) }, "detail": detail }),
             );
         }
         let document = serde_json::json!({
@@ -346,6 +366,8 @@ fn capabilities(args: &CredentialFillArgs, json: bool) -> Result<Output, AppErro
         text.push_str(&format!(
             "{name}: {} ({detail})\n",
             match (compiled, available) {
+                (true, _) if name == "desktop" && cfg!(windows) =>
+                    "compiled, target/permission-dependent",
                 (true, true) => "available",
                 (true, false) => "compiled, unavailable",
                 _ => "not compiled",

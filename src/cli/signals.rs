@@ -33,7 +33,7 @@ pub(super) fn install_signal_forwarder(
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(super) fn install_signal_forwarder(
     runtime: &tokio::runtime::Runtime,
     cancel: tokio::sync::watch::Sender<i32>,
@@ -45,4 +45,39 @@ pub(super) fn install_signal_forwarder(
         }
     });
     Ok(())
+}
+
+/// Install both handlers before starting any operation. Signal numbers belong
+/// to the remote POSIX protocol, not Windows console-event enum values.
+#[cfg(windows)]
+pub(super) fn install_signal_forwarder(
+    runtime: &tokio::runtime::Runtime,
+    cancel: tokio::sync::watch::Sender<i32>,
+    error: impl Fn() -> AppError,
+) -> Result<(), AppError> {
+    runtime.block_on(async move {
+        let mut interrupt = tokio::signal::windows::ctrl_c().map_err(|_| error())?;
+        let mut stop = tokio::signal::windows::ctrl_break().map_err(|_| error())?;
+        tokio::spawn(async move {
+            // Both listeners live for the rest of the process. Once none
+            // remains, tokio's console handler declines the event and the
+            // default handler terminates the process in the middle of
+            // cancellation cleanup; a repeated Ctrl+C must stay a no-op.
+            let mut forwarded = false;
+            loop {
+                let signal = tokio::select! {
+                    received = interrupt.recv() => received.map(|()| 2),
+                    received = stop.recv() => received.map(|()| 15),
+                };
+                let Some(signal) = signal else {
+                    return;
+                };
+                if !forwarded {
+                    forwarded = true;
+                    let _ = cancel.send(signal);
+                }
+            }
+        });
+        Ok(())
+    })
 }

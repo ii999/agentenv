@@ -22,8 +22,8 @@ pub async fn execute(
     auth_timeout: Duration,
     cancellation: Cancellation,
 ) -> Result<RemoteOutcome, AppError> {
-    #[cfg(unix)]
-    return unix::execute(
+    #[cfg(any(unix, windows))]
+    return native::execute(
         config,
         target,
         request,
@@ -32,7 +32,7 @@ pub async fn execute(
         cancellation,
     )
     .await;
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (
             config,
@@ -49,8 +49,8 @@ pub async fn execute(
     }
 }
 
-#[cfg(unix)]
-mod unix {
+#[cfg(any(unix, windows))]
+mod native {
     use super::super::{
         protocol::{
             self, Cancel, ExecutionResult, Failure, FailureReason, Frame, Hello,
@@ -65,6 +65,7 @@ mod unix {
     use crate::credential::resolver::{self, ResolutionStage};
     use crate::credential::Secret;
     use std::future::Future;
+    #[cfg(unix)]
     use std::io::Read;
     use std::path::PathBuf;
     use std::pin::Pin;
@@ -134,9 +135,12 @@ mod unix {
             return Ok(cancelled(*cancellation.borrow()));
         }
         let mut bytes = [0; 8];
+        #[cfg(unix)]
         std::fs::File::open("/dev/urandom")
             .and_then(|mut file| file.read_exact(&mut bytes))
             .map_err(|_| owned("session-unavailable"))?;
+        #[cfg(windows)]
+        crate::windows::random(&mut bytes).map_err(|_| owned("session-unavailable"))?;
         let request_id = u64::from_be_bytes(bytes).max(1);
         let start_frame = request
             .as_ref()
@@ -184,7 +188,11 @@ mod unix {
                 let path = executable
                     .parent()
                     .ok_or_else(|| owned("helper-missing"))?
-                    .join("agentenv-ssh-askpass");
+                    .join(if cfg!(windows) {
+                        "agentenv-ssh-askpass.exe"
+                    } else {
+                        "agentenv-ssh-askpass"
+                    });
                 let budget = remaining(started, setup_timeout, None);
                 if budget.is_zero() {
                     return Err(owned("setup-timeout"));
@@ -212,7 +220,10 @@ mod unix {
         // A terminal or harness signal to agentenv's process group must reach
         // only agentenv, which forwards it as Cancel; ssh would otherwise exit
         // and turn an observable result into completion unknown.
+        #[cfg(unix)]
         command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         let mut child = command.spawn().map_err(|_| owned("ssh-spawn-failed"))?;
         let ssh_pid = child.id().ok_or_else(|| owned("ssh-spawn-failed"))?;
         let reader = child
@@ -1103,7 +1114,7 @@ mod unix {
                 tokio::io::empty(),
                 tokio::io::sink(),
                 unrequested(),
-                libc::SIGINT,
+                2, // protocol SIGINT, on either client platform
             )
             .await
             .expect("the already-sent result is evidence");

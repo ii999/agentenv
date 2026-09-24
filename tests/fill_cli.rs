@@ -133,11 +133,17 @@ fn capabilities_reports_backends_without_a_credential() {
             "{backend} compiled flag"
         );
         assert!(
-            document["backends"][backend]["available"].is_boolean(),
+            document["backends"][backend]["available"].is_boolean()
+                || (cfg!(windows)
+                    && backend == "desktop"
+                    && document["backends"][backend]["available"].is_null()),
             "{backend} available flag"
         );
     }
-    assert_eq!(document["resolver"]["confidential"], cfg!(unix));
+    assert_eq!(
+        document["resolver"]["confidential"],
+        cfg!(any(unix, windows))
+    );
 
     let text = run_ac(
         &fixture.config,
@@ -398,7 +404,7 @@ fn keychain_credential_goes_through_the_resolver_fill_stage() {
     store_keychain_value(&fixture, "vault_token", SENTINEL_NESTED);
     let debug = [("RUST_LOG", "trace"), ("RUST_BACKTRACE", "1")];
     let run = fixture.fill("filled", &debug, &["vault_token"]);
-    if cfg!(unix) {
+    if cfg!(any(unix, windows)) {
         assert_exit(&run, 0, "keychain fill succeeds through the resolver");
         assert_fill_json(&run, "test", "field-filled");
         assert_eq!(fixture.delivered().as_deref(), Some(SENTINEL_NESTED));
@@ -411,7 +417,7 @@ fn keychain_credential_goes_through_the_resolver_fill_stage() {
 
     let unset_fixture = Fixture::new(CONFIG);
     let missing = unset_fixture.fill("filled", &debug, &["vault_token"]);
-    if cfg!(unix) {
+    if cfg!(any(unix, windows)) {
         assert_exit(&missing, 4, "a missing keychain item is a credential error");
     } else {
         // Off Unix the keychain is never consulted: the command refuses

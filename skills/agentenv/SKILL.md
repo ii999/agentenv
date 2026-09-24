@@ -290,3 +290,16 @@ authentication credential.
 
 Diagnostics never echo secret values, so it is safe to relay them to the
 user verbatim.
+
+### Windows desktop credential filling
+
+Use `credential fill NAME --backend desktop --expect-pid PID` only after your
+desktop automation has focused an empty intended input in that process. Do
+not steal focus while filling. Windows requires a writable UI Automation Edit
+control and no held modifier keys. It inserts text without clearing or
+submitting; `input-sent` does not establish login success. Never read back a
+credential to verify it. Capabilities reports desktop runtime availability
+as unknown until the actual target is checked. Exit 11 is uncertain mutation:
+never retry automatically. Prefer CDP when the browser exposes a supported
+loopback debugging endpoint. Windows `keychain` and `command` credentials use
+the confidential resolver; no environment-value workaround is needed.

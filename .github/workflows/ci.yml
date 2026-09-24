@@ -43,10 +43,24 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # test-keychain swaps the OS keychain for a file-backed store so the
-      # credential suite runs without touching the runner's real keychain.
+      # Most credential cases use the test-only store. The native Windows case
+      # creates and removes one uniquely named synthetic Credential Manager entry.
       - name: Run tests
+        id: native_tests
         run: cargo test --features test-keychain
+      - name: Windows lint (both provider configurations)
+        if: runner.os == 'Windows'
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo clippy --all-targets --features test-keychain -- -D warnings
+      - name: Native Windows OpenSSH loopback fixture
+        if: runner.os == 'Windows'
+        run: |
+          python -m pip install paramiko==4.0.0
+          python tests/windows_lab/ssh.py
+      - name: Native Windows focused-input fixture
+        if: runner.os == 'Windows' && !cancelled() && steps.native_tests.outcome == 'success'
+        run: pwsh -NoProfile -STA -File tests/windows_lab/desktop.ps1
 
   sudo-integration:
     name: Isolated Linux sudo and SSH integration

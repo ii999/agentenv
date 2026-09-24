@@ -355,10 +355,11 @@ Current compatibility evidence is deliberately limited and is recorded in
   and refusal cases there. The shipped x86_64 Linux asset has no recorded run.
 - The native macOS OpenSSH client passed 8 cases on arm64 against that Linux
   destination. The x86_64 macOS client and macOS local sudo remain unverified.
-- All Windows SSH execution is unavailable in this release because the native
-  client boundary is not implemented. Confidential password IPC and native
-  Windows OpenSSH behavior are also unverified. Native Windows local sudo is
-  outside this release.
+- Windows builds include the native OpenSSH client boundary, a private named-pipe
+  credential resolver and one-shot SSH askpass. Use native `ssh.exe` from Windows
+  OpenSSH; MSYS/Cygwin clients and Windows ProxyJump routes are rejected. Native
+  Windows local sudo/UAC elevation remains outside this implementation. See
+  `docs/design/windows-port.md` for tests and the compatibility boundary.
 
 ## Credential filling
 
@@ -367,8 +368,9 @@ it. The agent keeps using its own browser automation to navigate and submit;
 agentenv only writes the value into the one field the agent names. This
 release ships the Chrome DevTools Protocol (CDP) backend, which attaches to an
 existing Chromium-family browser through its loopback remote debugging port.
-The Playwright and desktop backends are designed but not included; `--capabilities`
-reports what the installed binary can do.
+Windows also includes focused desktop input through UI Automation and native
+Unicode input. The Playwright backend and non-Windows desktop adapters are not
+included; `--capabilities` reports what the installed binary can do.
 
 ```bash
 agentenv credential fill --capabilities --json
@@ -443,6 +445,33 @@ delivered value. Inspect the field before retrying an `11`; never
 retry automatically. The whole operation, including credential lookup and any
 keychain authorization dialog, runs under one deadline of `--timeout-ms`
 (default 30,000, at most 300,000).
+
+### Windows focused input
+
+Windows builds support `env`, Windows Credential Manager (`keychain`), and
+`command` providers for CDP and desktop filling. Keychain and command lookup
+use a cancellable child process and private named pipe, not CLI stdout.
+
+```powershell
+agentenv credential fill --capabilities --json
+agentenv credential fill portal_password --backend desktop --expect-pid 12345 --json
+```
+
+Prepare an empty, focused input in that process first. The desktop adapter
+requires an enabled, visible, writable UI Automation Edit control, rechecks
+its identity after lookup, and refuses changed focus or held modifier keys.
+It inserts literal Unicode once without using the clipboard, clearing the
+field, switching windows, reading its value, or pressing Enter. Success is
+`input-sent`, not a claim of login success or verified field content.
+
+Desktop capabilities report `compiled: true` with `available: null`: target
+and permission availability can only be checked for the actual invocation.
+An interactive Windows desktop is required. Secure desktop/UAC prompts and
+input into higher-integrity applications are not supported. A remaining OS
+focus race exists between the final check and input dispatch; keep the target
+focused while running the operation. Exit 11 means input may have occurred;
+inspect the destination before any manual retry. See
+`docs/design/windows-port.md` for build and validation instructions.
 
 ## Agent usage protocol
 

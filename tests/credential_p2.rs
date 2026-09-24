@@ -390,6 +390,7 @@ fn command_config(script: &Path, arguments: &[&str]) -> String {
     )
 }
 
+#[cfg(unix)]
 fn toml_string(value: &str) -> String {
     serde_json::to_string(value).expect("test strings serialize")
 }
