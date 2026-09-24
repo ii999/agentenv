@@ -1,6 +1,6 @@
 //! One foreground SSH session, with independent login and sudo authentication.
 
-use super::{protocol::Ready, Cancellation, ExecutionOutcome, ExecutionRequest};
+use super::{deploy, protocol::Ready, Cancellation, ExecutionOutcome, ExecutionRequest};
 use crate::config::{Config, SudoTarget};
 use crate::error::AppError;
 use std::time::Duration;
@@ -49,9 +49,50 @@ pub async fn execute(
     }
 }
 
+/// Installs or upgrades the remote helper through the target's SSH route and
+/// then performs the check-mode handshake as the acceptance criterion. It
+/// never runs during execution or `--check`; see `docs/design/helper-deployment.md`.
+pub async fn deploy_helper(
+    config: &Config,
+    target: &SudoTarget,
+    source: deploy::Source,
+    force: bool,
+    setup_timeout: Duration,
+    auth_timeout: Duration,
+    cancellation: Cancellation,
+) -> Result<(deploy::Report, Ready), AppError> {
+    #[cfg(any(unix, windows))]
+    return native::deploy_helper(
+        config,
+        target,
+        source,
+        force,
+        setup_timeout,
+        auth_timeout,
+        cancellation,
+    )
+    .await;
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (
+            config,
+            target,
+            source,
+            force,
+            setup_timeout,
+            auth_timeout,
+            cancellation,
+        );
+        Err(AppError::SudoExecution(
+            "unsupported-platform: this build has no verified SSH credential channel".into(),
+        ))
+    }
+}
+
 #[cfg(any(unix, windows))]
 mod native {
     use super::super::{
+        deploy::{HelperSource, SessionOutput, SessionRunner},
         protocol::{
             self, Cancel, ExecutionResult, Failure, FailureReason, Frame, Hello,
             MessageKind as Kind, Mode, PasswordRequest, Start, Stream, MAX_STREAM_CHUNK_SIZE,
@@ -306,12 +347,380 @@ mod native {
                 Ok(outcome)
             }
             Err(error) => {
+                // EOF before Ready with ssh exiting 255 means ssh never ran
+                // the helper: a connection, host key or login failure rather
+                // than a helper that is missing or mismatched.
+                let connection_failed = handshake_missing(&error)
+                    && matches!(
+                        timeout(Duration::from_secs(2), child.wait()).await,
+                        Ok(Ok(status)) if status.code() == Some(SSH_FAILURE_STATUS)
+                    );
                 stop_ssh(&mut child).await;
-                Err(error)
+                if connection_failed {
+                    Err(owned("ssh-connect-failed"))
+                } else {
+                    Err(error)
+                }
             }
         };
         drop(diagnostic);
         result
+    }
+
+    fn handshake_missing(error: &AppError) -> bool {
+        matches!(error, AppError::SudoExecution(detail) if detail.starts_with("helper-handshake-missing"))
+    }
+
+    fn deploy_failed(detail: impl std::fmt::Display) -> AppError {
+        deploy::Reason::SessionFailed.error(detail.to_string())
+    }
+    fn deploy_cancelled(signal: i32) -> AppError {
+        deploy::Reason::Cancelled.error(format!("deployment was cancelled by signal {signal}"))
+    }
+    fn connect_failed() -> AppError {
+        AppError::SudoExecution(
+            "ssh-connect-failed: the SSH connection or login failed before the remote command ran"
+                .to_owned(),
+        )
+    }
+    fn check_failed(status: &deploy::Status, error: AppError) -> AppError {
+        match error {
+            AppError::SudoExecution(detail) => deploy::Reason::CheckFailed.error(format!(
+                "the deployment finished as {} but the check handshake through helper_path failed ({detail})",
+                status.label()
+            )),
+            other => other,
+        }
+    }
+
+    /// Makes a helper source observe cancellation: a signal while bytes are
+    /// being read, probed or downloaded ends deployment as cancelled instead
+    /// of after the source's own deadlines. A detached download finishes or
+    /// times out on its own without touching the destination; when the
+    /// process exits first, its temporary download directory (public release
+    /// bytes, never a secret) is left for the operating system to clean.
+    struct CancellableSource<S> {
+        source: S,
+        cancellation: Cancellation,
+    }
+
+    impl<S: HelperSource + Send> HelperSource for CancellableSource<S> {
+        async fn bytes(
+            self,
+            destination: &deploy::Destination,
+        ) -> Result<deploy::HelperBytes, AppError> {
+            let mut cancellation = self.cancellation;
+            if *cancellation.borrow() > 0 {
+                return Err(deploy_cancelled(*cancellation.borrow()));
+            }
+            tokio::select! {
+                biased;
+                _ = cancellation_requested(&mut cancellation) => Err(deploy_cancelled(*cancellation.borrow())),
+                result = self.source.bytes(destination) => result,
+            }
+        }
+    }
+
+    /// Upload allowance added to the setup budget: one second per 128 KiB
+    /// keeps a 64 MiB upload viable at roughly one megabit per second.
+    fn transfer_allowance(bytes: usize) -> Duration {
+        Duration::from_secs((bytes / (128 * 1024)) as u64)
+    }
+
+    /// One remote command over the prepared route, with the same login
+    /// authentication, process-group isolation and stderr discipline as the
+    /// serve session.
+    pub(super) struct SshSessionRunner<'a> {
+        config: &'a Config,
+        prepared: &'a ssh::PreparedSsh,
+        executable: PathBuf,
+        setup_timeout: Duration,
+        auth_timeout: Duration,
+        cancellation: Cancellation,
+    }
+
+    impl SessionRunner for SshSessionRunner<'_> {
+        async fn run(
+            &mut self,
+            remote_command: &str,
+            stdin: Vec<u8>,
+            stdout_limit: usize,
+        ) -> Result<SessionOutput, AppError> {
+            let started = Instant::now();
+            let budget_total = self.setup_timeout + transfer_allowance(stdin.len());
+            let mut cancellation = self.cancellation.clone();
+            if *cancellation.borrow() > 0 {
+                return Err(deploy_cancelled(*cancellation.borrow()));
+            }
+            let mut command = self.prepared.command_for(remote_command);
+            let mut timing = None;
+            let login = match &self.prepared.auth {
+                PreparedAuth::PublicKey => None,
+                PreparedAuth::Password {
+                    credential,
+                    expected_prompt,
+                } => {
+                    let path = self
+                        .executable
+                        .parent()
+                        .ok_or_else(|| owned("helper-missing"))?
+                        .join(if cfg!(windows) {
+                            "agentenv-ssh-askpass.exe"
+                        } else {
+                            "agentenv-ssh-askpass"
+                        });
+                    let budget = remaining(started, self.setup_timeout, None);
+                    if budget.is_zero() {
+                        return Err(deploy_failed("the session deadline expired"));
+                    }
+                    let session = tokio::select! {
+                        biased;
+                        _ = cancellation_requested(&mut cancellation) => return Err(deploy_cancelled(*cancellation.borrow())),
+                        result = ssh_askpass::Session::create(&path, budget) => result?,
+                    };
+                    timing = Some(session.auth_timing());
+                    session.configure(&mut command);
+                    Some((
+                        session,
+                        definition(self.config, &credential.name)?,
+                        expected_prompt.clone(),
+                    ))
+                }
+            };
+            #[cfg(unix)]
+            command.process_group(0);
+            #[cfg(windows)]
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+            let mut child = command
+                .spawn()
+                .map_err(|error| deploy_failed(format!("cannot start ssh: {error}")))?;
+            let ssh_pid = child
+                .id()
+                .ok_or_else(|| deploy_failed("cannot start ssh"))?;
+            let mut reader = child
+                .stdout
+                .take()
+                .ok_or_else(|| deploy_failed("ssh stdout unavailable"))?;
+            let mut writer = child
+                .stdin
+                .take()
+                .ok_or_else(|| deploy_failed("ssh stdin unavailable"))?;
+            let mut stderr = child
+                .stderr
+                .take()
+                .ok_or_else(|| deploy_failed("ssh stderr unavailable"))?;
+            let diagnostic = AbortTask(tokio::spawn(async move {
+                let mut bytes = [0; 4096];
+                while let Ok(length) = stderr.read(&mut bytes).await {
+                    if length == 0 {
+                        break;
+                    }
+                }
+            }));
+            let auth_timeout = self.auth_timeout;
+            let setup_timeout = self.setup_timeout;
+            let mut broker: Option<Operation> = login.map(|(session, credential, prompt)| {
+                let executable = self.executable.clone();
+                Box::pin(async move {
+                    session
+                        .serve(
+                            ssh_pid,
+                            &prompt,
+                            setup_timeout,
+                            auth_timeout,
+                            || async move {
+                                resolver::resolve(
+                                    &executable,
+                                    &credential,
+                                    ResolutionStage::SshPassword,
+                                    255,
+                                    auth_timeout,
+                                )
+                                .await
+                            },
+                        )
+                        .await
+                }) as Operation
+            });
+            // The write and the bounded read run together: the destination
+            // may print before it has consumed stdin, and a full pipe in
+            // either direction would otherwise deadlock the session. The
+            // read decides when the session is over: a destination that
+            // exits before consuming stdin breaks the pipe or leaves the
+            // write pending, and its exit status then explains why.
+            let upload = !stdin.is_empty();
+            let mut io = Box::pin(async move {
+                let write = async {
+                    if !stdin.is_empty() {
+                        writer.write_all(&stdin).await?;
+                        writer.flush().await?;
+                    }
+                    drop(writer);
+                    Ok::<(), std::io::Error>(())
+                };
+                let read = async {
+                    let mut stdout = Vec::new();
+                    let mut buffer = [0; 8192];
+                    loop {
+                        let length = reader.read(&mut buffer).await?;
+                        if length == 0 {
+                            break;
+                        }
+                        if stdout.len() + length > stdout_limit {
+                            return Err(std::io::Error::other(
+                                "the destination printed more than the session allows",
+                            ));
+                        }
+                        stdout.extend_from_slice(&buffer[..length]);
+                    }
+                    Ok::<Vec<u8>, std::io::Error>(stdout)
+                };
+                tokio::pin!(write);
+                tokio::pin!(read);
+                let mut write_done = false;
+                let mut delivered = false;
+                let stdout = loop {
+                    tokio::select! {
+                        result = &mut write, if !write_done => {
+                            write_done = true;
+                            delivered = result.is_ok();
+                        }
+                        result = &mut read => break result?,
+                    }
+                };
+                Ok::<(Vec<u8>, bool), std::io::Error>((stdout, delivered))
+            });
+            let mut cancellation_open = true;
+            let mut timing_open = timing.is_some();
+            let (stdout, delivered) = loop {
+                if *cancellation.borrow() > 0 {
+                    stop_ssh(&mut child).await;
+                    return Err(deploy_cancelled(*cancellation.borrow()));
+                }
+                let budget = remaining(started, budget_total, timing.as_ref());
+                if budget.is_zero() {
+                    stop_ssh(&mut child).await;
+                    return Err(deploy_failed("the session deadline expired"));
+                }
+                tokio::select! {
+                    biased;
+                    changed = cancellation.changed(), if cancellation_open => {
+                        if changed.is_err() { cancellation_open = false; }
+                    }
+                    result = optional(&mut broker), if broker.is_some() => {
+                        if let Err(error) = result {
+                            stop_ssh(&mut child).await;
+                            return Err(error);
+                        }
+                        broker = None;
+                    }
+                    result = &mut io => {
+                        match result {
+                            Ok(output) => break output,
+                            Err(error) => {
+                                stop_ssh(&mut child).await;
+                                return Err(deploy_failed(error));
+                            }
+                        }
+                    }
+                    changed = timing_changed(&mut timing), if timing_open => {
+                        if changed.is_err() { timing_open = false; }
+                    }
+                    _ = tokio::time::sleep(budget) => {}
+                }
+            };
+            drop(io);
+            drop(broker);
+            // stdout is closed, so ssh should exit at once; as in execution,
+            // it gets five seconds, and a signal ends the wait early.
+            let status = tokio::select! {
+                biased;
+                _ = cancellation_requested(&mut cancellation) => {
+                    stop_ssh(&mut child).await;
+                    return Err(deploy_cancelled(*cancellation.borrow()));
+                }
+                waited = timeout(Duration::from_secs(5), child.wait()) => match waited {
+                    Ok(Ok(status)) => status.code(),
+                    _ => {
+                        stop_ssh(&mut child).await;
+                        None
+                    }
+                },
+            };
+            drop(diagnostic);
+            // ssh itself exits 255 when it never ran the remote command:
+            // connection, host key or login failures before the preflight
+            // are not deployment failures and carry no deployment
+            // remediation. During an upload the same status means the
+            // connection ended mid-session, which deployment classifies
+            // itself because the path may already have changed.
+            if status == Some(SSH_FAILURE_STATUS) && stdout.is_empty() && !upload {
+                return Err(connect_failed());
+            }
+            if upload && !delivered && status == Some(0) {
+                return Err(deploy_failed(
+                    "the destination reported success without consuming the upload",
+                ));
+            }
+            Ok(SessionOutput { status, stdout })
+        }
+    }
+
+    /// The exit status ssh reserves for its own failures.
+    const SSH_FAILURE_STATUS: i32 = 255;
+
+    pub(super) async fn deploy_helper(
+        config: &Config,
+        target: &SudoTarget,
+        source: deploy::Source,
+        force: bool,
+        setup_timeout: Duration,
+        auth_timeout: Duration,
+        mut cancellation: Cancellation,
+    ) -> Result<(deploy::Report, Ready), AppError> {
+        if *cancellation.borrow() > 0 {
+            return Err(deploy_cancelled(*cancellation.borrow()));
+        }
+        let prepared = tokio::select! {
+            biased;
+            _ = cancellation_requested(&mut cancellation) => return Err(deploy_cancelled(*cancellation.borrow())),
+            result = ssh::prepare(target, setup_timeout) => result?,
+        };
+        let executable = std::env::current_exe().map_err(|_| owned("resolver-unavailable"))?;
+        let mut runner = SshSessionRunner {
+            config,
+            prepared: &prepared,
+            executable,
+            setup_timeout,
+            auth_timeout,
+            cancellation: cancellation.clone(),
+        };
+        let helper_path = PathBuf::from(prepared.helper_path());
+        let source = CancellableSource {
+            source,
+            cancellation: cancellation.clone(),
+        };
+        let report = deploy::deploy(&mut runner, &helper_path, force, source).await?;
+        // The acceptance criterion is the ordinary check-mode handshake
+        // through the configured path, exactly as `--check` performs it,
+        // including its own route preparation.
+        let outcome = execute(
+            config,
+            target,
+            None,
+            setup_timeout,
+            auth_timeout,
+            cancellation,
+        )
+        .await
+        .map_err(|error| check_failed(&report.status, error))?;
+        if let Some(execution) = outcome.execution {
+            return Err(deploy_cancelled(execution.signal.unwrap_or(0)));
+        }
+        let ready = outcome
+            .ready
+            .ok_or_else(|| check_failed(&report.status, owned("helper-handshake-missing")))?;
+        Ok((report, ready))
     }
 
     struct AbortTask<T>(tokio::task::JoinHandle<T>);
@@ -877,6 +1286,40 @@ mod native {
                 .await
                 .expect("already received output survives the obsolete credit reply");
             assert_eq!(output, [0, 255, 10, 42]);
+        }
+
+        struct Pending;
+        impl HelperSource for Pending {
+            async fn bytes(self, _: &deploy::Destination) -> Result<deploy::HelperBytes, AppError> {
+                std::future::pending().await
+            }
+        }
+
+        #[tokio::test]
+        async fn a_signal_interrupts_a_pending_helper_source() {
+            let (cancel, cancellation) = super::super::super::cancellation_channel();
+            let source = CancellableSource {
+                source: Pending,
+                cancellation,
+            };
+            let destination = deploy::Destination {
+                platform: "linux",
+                machine: "x86_64".to_owned(),
+                target: "x86_64-unknown-linux-gnu",
+                glibc: None,
+            };
+            let bytes = tokio::spawn(async move { source.bytes(&destination).await });
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            cancel.send(2).expect("cancellation delivered");
+            let error = tokio::time::timeout(Duration::from_secs(2), bytes)
+                .await
+                .expect("the pending source is abandoned promptly")
+                .expect("task finished")
+                .expect_err("cancellation is an error");
+            assert!(
+                matches!(&error, AppError::SudoExecution(detail) if detail.starts_with("helper-deploy-cancelled: ")),
+                "{error}"
+            );
         }
 
         struct Broken;

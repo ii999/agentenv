@@ -74,12 +74,30 @@ known-hosts file, a stable host-key alias, an absolute remote helper path, and
 an explicit public-key or password method. Verify host fingerprints through a
 trusted channel; `ssh-keyscan` alone is not identity verification.
 
-The matching unprivileged `agentenv-sudo-helper` must already exist at the
-configured remote path. Deployment is a separate user-authorized operation:
-verify the standalone release asset checksum, upload it through the chosen
-deployment mechanism, set it executable, and run `sudo --check`. Never install,
-upload, update, or replace the remote helper implicitly. A mismatch fails
-closed without releasing the sudo password.
+The matching unprivileged `agentenv-sudo-helper` must exist at the configured
+remote path and be built from the same version as the client; every
+`agentenv update` invalidates the remote helpers until they are redeployed.
+Deployment is a separate user-authorized operation:
+
+```bash
+agentenv sudo --with <entry> --deploy-helper [--from <file>] [--force] --json
+```
+
+Run it only when the user asks to set up or upgrade a target's helper. It uses
+the target's own SSH route and login method, installs or upgrades the helper at
+`helper_path`, and finishes with the check handshake; `up-to-date` means
+nothing changed. When execution or `--check` fails with
+`helper-identity-mismatch` or `helper-handshake-missing`, report the
+remediation command the error names and stop; never run it as automatic
+remediation, and never install, upload, update, or replace the remote helper
+by any other means. `ssh-connect-failed` is a connection or login problem, not
+a helper problem, and names no remediation. After `agentenv update`, the
+report's `helper_redeployments` list names the targets whose helpers now need
+this command; relay it to the user rather than running it. A mismatch fails
+closed without releasing the sudo password. Exit `9` with
+`helper-deploy-<reason>` leaves the previous helper,
+the newly verified one, or nothing at the path, so rerunning is safe once the
+reason is addressed.
 
 Sudoers must grant the actual requested executable and arguments. Do not
 broaden policy, add NOPASSWD, or substitute a privileged shell or wrapper.

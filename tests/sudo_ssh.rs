@@ -347,3 +347,46 @@ fn restore_environment(name: &str, value: Option<&std::ffi::OsStr>) {
         None => std::env::remove_var(name),
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn deployment_sessions_reuse_the_route_with_only_the_remote_command_replaced() {
+    let _lock = lock_environment().await;
+    let directory = TempDir::new().expect("temp directory");
+    let prepared = prepare(
+        &explicit_target(directory.path().join("known_hosts")),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("explicit policy prepares without connecting");
+    assert_eq!(
+        prepared.helper_path(),
+        "/home/deploy/.local/libexec/agentenv-sudo-helper"
+    );
+    let serve_command = prepared.command();
+    let preflight_command = prepared.command_for("sh -c 'uname -s' agentenv-preflight '/x'");
+    let serve: Vec<String> = serve_command
+        .as_std()
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    let preflight: Vec<String> = preflight_command
+        .as_std()
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(serve.len(), preflight.len());
+    assert_eq!(serve[..serve.len() - 1], preflight[..preflight.len() - 1]);
+    assert_eq!(
+        serve.last().map(String::as_str),
+        Some("/home/deploy/.local/libexec/agentenv-sudo-helper --serve")
+    );
+    assert_eq!(
+        preflight.last().map(String::as_str),
+        Some("sh -c 'uname -s' agentenv-preflight '/x'")
+    );
+    assert_eq!(
+        preflight_command.as_std().get_envs().collect::<Vec<_>>(),
+        serve_command.as_std().get_envs().collect::<Vec<_>>(),
+        "the curated environment is identical for every session"
+    );
+}

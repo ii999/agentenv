@@ -27,6 +27,7 @@ use crate::config::env_value;
 use crate::error::AppError;
 
 pub use install::Installation;
+pub use release::{Asset, AssetLookup, Client, DownloadFailure};
 
 /// The target triple this binary was built for, injected by `build.rs`. It
 /// selects the release asset, so a binary can only ever update to another
@@ -213,7 +214,8 @@ pub fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo.toml carries a semver version")
 }
 
-fn base_url(env: &impl Fn(&str) -> Option<String>) -> String {
+/// The release base URL: `AGENTENV_RELEASE_BASE_URL` when set, else GitHub.
+pub fn base_url(env: &impl Fn(&str) -> Option<String>) -> String {
     env_value(env, BASE_URL_ENV)
         .map(|url| url.trim_end_matches('/').to_owned())
         .unwrap_or_else(|| release::DEFAULT_BASE_URL.to_owned())

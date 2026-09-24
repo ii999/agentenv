@@ -111,6 +111,29 @@ impl Server {
     }
 }
 
+impl Server {
+    /// Publishes one standalone asset for `tag` and lists it in that tag's
+    /// `SHA256SUMS`; `digest_override` corrupts its entry.
+    fn publish_asset(&self, tag: &str, name: &str, bytes: &[u8], digest_override: Option<&str>) {
+        let download = self.root.path().join("download").join(tag);
+        fs::create_dir_all(&download).expect("download dir");
+        fs::write(download.join(name), bytes).expect("asset written");
+        let digest = digest_override.map_or_else(
+            || {
+                Sha256::digest(bytes)
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>()
+            },
+            str::to_owned,
+        );
+        let sums = download.join("SHA256SUMS");
+        let mut existing = fs::read_to_string(&sums).unwrap_or_default();
+        existing.push_str(&format!("{digest}  {name}\n"));
+        fs::write(sums, existing).expect("sums written");
+    }
+}
+
 fn serve(mut stream: TcpStream, files: &Path) {
     let mut reader = BufReader::new(stream.try_clone().expect("stream clone"));
     let mut request_line = String::new();
@@ -320,6 +343,86 @@ fn update_replaces_the_binary_and_installed_skills_only() {
 }
 
 #[test]
+fn update_names_the_ssh_sudo_targets_whose_helpers_need_redeployment() {
+    let server = Server::start();
+    server.publish(&format!("v{CURRENT}"), Some("skill"), None, true, None);
+    let install = Install::new(&["bin"]);
+    let config_dir = install.home.join(".config").join("agentenv");
+    fs::create_dir_all(&config_dir).expect("config dir");
+    let config_file = config_dir.join("config.toml");
+    fs::write(
+        &config_file,
+        r#"version = 1
+default_profile = "work"
+[profiles.work]
+description = "Work."
+[credentials.admin]
+description = "Administrator password."
+provider = "command"
+argv = ["/bin/sh", "-c", "printf secret"]
+usages = ["sudo"]
+[profiles.work.local_admin]
+description = "Local administrator."
+kind = "sudo-target"
+[profiles.work.local_admin.sudo]
+transport = "local"
+credential = "credential://admin"
+auth_user = "me"
+run_as = "root"
+sudo_path = "/usr/bin/sudo"
+[profiles.work.prod_admin]
+description = "Production host."
+kind = "sudo-target"
+[profiles.work.prod_admin.sudo]
+transport = "ssh"
+credential = "credential://admin"
+auth_user = "deploy"
+run_as = "root"
+sudo_path = "/usr/bin/sudo"
+[profiles.work.prod_admin.sudo.ssh]
+mode = "explicit"
+hostname = "prod.example.internal"
+user = "deploy"
+port = 22
+host_key_alias = "prod"
+known_hosts_file = "/home/me/.ssh/known_hosts"
+helper_path = "/home/deploy/.local/libexec/agentenv-sudo-helper"
+[profiles.work.prod_admin.sudo.ssh.auth]
+method = "publickey"
+identity_files = []
+use_agent = true
+"#,
+    )
+    .expect("config written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config_file, fs::Permissions::from_mode(0o600)).expect("config mode");
+    }
+
+    let run = install.run(&server, &["--json", "update", "--force"]);
+    assert_exit(&run, 0, "update succeeds");
+    let report: serde_json::Value = serde_json::from_str(run.stdout.trim()).expect("JSON report");
+    assert_eq!(
+        report["helper_redeployments"],
+        serde_json::json!([{
+            "profile": "work",
+            "entry": "prod_admin",
+            "command": "agentenv --profile=work sudo --with=prod_admin --deploy-helper",
+        }]),
+        "only SSH targets are listed, and no remote action is taken"
+    );
+    let run = install.run(&server, &["update", "--force"]);
+    assert_exit(&run, 0, "update succeeds");
+    assert_mentions(
+        &run,
+        "agentenv --profile=work sudo --with=prod_admin --deploy-helper",
+        "the text report names the deployment command",
+    );
+    assert!(!run.stdout.contains("local_admin"), "{}", run.stdout);
+}
+
+#[test]
 fn update_reports_an_already_current_install() {
     let server = Server::start();
     server.publish(&format!("v{CURRENT}"), None, None, true, None);
@@ -412,4 +515,158 @@ fn update_refuses_a_cargo_managed_binary() {
     assert_exit(&run, 7, "a cargo-managed binary is refused");
     assert_mentions(&run, "cargo install", "the refusal names the cargo path");
     assert!(install.binary_is_original(), "the binary is untouched");
+}
+
+mod standalone_assets {
+    use super::*;
+    use agentenv::sudo::deploy::{Destination, HelperSource, Source};
+    use agentenv::update::{AssetLookup, Client, DownloadFailure};
+
+    #[test]
+    fn named_asset_is_found_verified_and_read_back() {
+        let server = Server::start();
+        let name = "agentenv-sudo-helper-v1.2.3-aarch64-unknown-linux-gnu";
+        server.publish_asset("v1.2.3", "agentenv-v1.2.3-other.tar.gz", b"other", None);
+        server.publish_asset("v1.2.3", name, b"helper-bytes", None);
+        let client = Client::new(&server.base_url);
+        let asset = client.fetch_asset("v1.2.3", name).expect("asset listed");
+        assert_eq!(asset.name, name);
+        assert_eq!(asset.digest.len(), 64);
+        let dir = TempDir::new().expect("download dir");
+        let path = client
+            .download_asset("v1.2.3", &asset, dir.path(), 1024)
+            .expect("download verifies");
+        assert_eq!(fs::read(path).expect("downloaded bytes"), b"helper-bytes");
+    }
+
+    #[test]
+    fn missing_asset_and_corrupt_digest_are_distinct_failures() {
+        let server = Server::start();
+        let name = "agentenv-sudo-helper-v1.2.3-x86_64-unknown-linux-gnu";
+        server.publish_asset("v1.2.3", name, b"helper-bytes", Some(&"0".repeat(64)));
+        let client = Client::new(&server.base_url);
+        match client.fetch_asset(
+            "v1.2.3",
+            "agentenv-sudo-helper-v1.2.3-riscv64gc-unknown-linux-gnu",
+        ) {
+            Err(AssetLookup::NoAsset(detail)) => {
+                assert!(detail.contains("ships no asset named"), "{detail}")
+            }
+            other => panic!("expected NoAsset, got {other:?}"),
+        }
+        match client.fetch_asset("v9.9.9", name) {
+            Err(AssetLookup::NoRelease(detail)) => assert!(detail.contains("v9.9.9"), "{detail}"),
+            other => panic!("expected NoRelease, got {other:?}"),
+        }
+        let asset = client
+            .fetch_asset("v1.2.3", name)
+            .expect("listed with a bad digest");
+        let dir = TempDir::new().expect("download dir");
+        match client.download_asset("v1.2.3", &asset, dir.path(), 1024) {
+            Err(DownloadFailure::Checksum { name: failed, .. }) => assert_eq!(failed, name),
+            other => panic!("expected a checksum failure, got {other:?}"),
+        }
+        let malformed = format!("zz  {name}-malformed\n");
+        let sums = server.root.path().join("download/v1.2.3/SHA256SUMS");
+        let mut text = fs::read_to_string(&sums).unwrap();
+        text.push_str(&malformed);
+        fs::write(&sums, text).unwrap();
+        match client.fetch_asset("v1.2.3", &format!("{name}-malformed")) {
+            Err(AssetLookup::Malformed(detail)) => {
+                assert!(detail.contains("malformed digest"), "{detail}")
+            }
+            other => panic!("expected Malformed, got {other:?}"),
+        }
+        server.publish_asset("v1.2.3", name, b"helper-bytes", None);
+        match client.fetch_asset("v1.2.3", name) {
+            Err(AssetLookup::Malformed(detail)) => {
+                assert!(detail.contains("more than once"), "{detail}")
+            }
+            other => panic!("expected a duplicate refusal, got {other:?}"),
+        }
+    }
+
+    fn linux_arm() -> Destination {
+        Destination {
+            platform: "linux",
+            machine: "aarch64".into(),
+            target: "aarch64-unknown-linux-gnu",
+            glibc: Some("2.36".into()),
+        }
+    }
+
+    fn automatic(server: &Server) -> Source {
+        Source::Automatic {
+            bundle: server.root.path().join("no-bundle"),
+            release_base_url: server.base_url.clone(),
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_source_downloads_and_verifies_the_helper_for_this_version() {
+        let server = Server::start();
+        let tag = format!("v{CURRENT}");
+        let name = format!("agentenv-sudo-helper-{tag}-aarch64-unknown-linux-gnu");
+        // The real release layout: the archive entry first, then the
+        // standalone helpers, all in one SHA256SUMS.
+        server.publish(&tag, None, None, true, None);
+        server.publish_asset(
+            &tag,
+            &format!("agentenv-sudo-helper-{tag}-x86_64-unknown-linux-gnu"),
+            b"x86",
+            None,
+        );
+        server.publish_asset(&tag, &name, b"aarch64-helper", None);
+        let bytes = automatic(&server)
+            .bytes(&linux_arm())
+            .await
+            .expect("release source");
+        assert_eq!(bytes.kind, "release");
+        assert_eq!(bytes.name, name);
+        assert_eq!(bytes.bytes, b"aarch64-helper");
+        // The archive lookup used by `agentenv update` still parses that file.
+        Client::new(&server.base_url)
+            .fetch(Some(&tag))
+            .expect("archive still resolves");
+    }
+
+    #[tokio::test]
+    async fn automatic_source_reports_unreleased_versions_and_checksum_mismatches() {
+        let server = Server::start();
+        let tag = format!("v{CURRENT}");
+        let name = format!("agentenv-sudo-helper-{tag}-aarch64-unknown-linux-gnu");
+        let error = automatic(&server)
+            .bytes(&linux_arm())
+            .await
+            .expect_err("nothing published");
+        let text = error.to_string();
+        assert!(text.contains("helper-deploy-source-unavailable"), "{text}");
+        assert!(
+            text.contains("is not published") && text.contains("--from"),
+            "{text}"
+        );
+        assert!(!text.contains("check the release tag"), "{text}");
+        server.publish(&tag, None, None, true, None);
+        let error = automatic(&server)
+            .bytes(&linux_arm())
+            .await
+            .expect_err("no helper asset");
+        let text = error.to_string();
+        assert!(
+            text.contains("ships no helper for aarch64-unknown-linux-gnu")
+                && text.contains("--from"),
+            "{text}"
+        );
+        server.publish_asset(&tag, &name, b"aarch64-helper", Some(&"f".repeat(64)));
+        let error = automatic(&server)
+            .bytes(&linux_arm())
+            .await
+            .expect_err("bad digest");
+        assert!(
+            error
+                .to_string()
+                .contains("helper-deploy-checksum-mismatch"),
+            "{error}"
+        );
+    }
 }

@@ -1,6 +1,8 @@
 FROM rust:1.98-slim-trixie@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7 AS build
 WORKDIR /build/agentenv
-ENV CARGO_HTTP_TIMEOUT=30 CARGO_NET_RETRY=1
+# Stripped, debuginfo-free binaries keep the helper within the 64 MiB
+# deployment upload bound; the lab exercises behaviour, not symbols.
+ENV CARGO_HTTP_TIMEOUT=30 CARGO_NET_RETRY=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_STRIP=true
 COPY Cargo.toml Cargo.lock build.rs ./
 COPY vendor/ /build/vendor/
 COPY src/ ./src/

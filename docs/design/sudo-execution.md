@@ -865,10 +865,11 @@ architectures, with release checksums/provenance. Installation is explicit:
 place the matching asset at the configured user-owned absolute path, set it
 executable, verify identity/protocol with `--check`, then use execution. No
 automatic upload, download, remote self-update, root installation, or runtime
-dependency is required during normal use. A future installer can automate this
-as a separately authorized operation; `helper-deployment.md` proposes it as an
-explicit `agentenv sudo --deploy-helper` command. Protocol mismatch does not
-trigger an upload. No remote Python/Node installation is required.
+dependency is required during normal use. The separately authorized installer
+is `agentenv sudo --with <entry> --deploy-helper`, specified in
+`helper-deployment.md`: explicit, over the same prepared route, writing only
+the configured path. Protocol mismatch does not trigger an upload. No remote
+Python/Node installation is required.
 
 ## Implementation plan
 

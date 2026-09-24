@@ -606,3 +606,519 @@ fn sudo_that_survives_the_forwarded_signal_is_completion_unconfirmed() {
         "escalation must not be reported as a confirmed termination"
     );
 }
+
+mod deployment {
+    //! `--deploy-helper` usage boundaries and an end-to-end run in which a
+    //! fake `ssh` delegates `-G` policy evaluation to the real client and
+    //! executes every remote command locally through `/bin/sh -c`, exactly
+    //! as sshd hands the command to a login shell.
+
+    use super::*;
+
+    fn ssh_config(
+        directory: &std::path::Path,
+        helper_path: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let config = directory.join("agentenv.toml");
+        let marker = directory.join("provider-ran");
+        fs::write(
+            &config,
+            format!(
+                r#"version = 1
+default_profile = "work"
+[profiles.work]
+description = "Work."
+[credentials.admin]
+description = "Administrator password."
+provider = "command"
+argv = ["/bin/sh", "-c", "touch '{}' && printf secret"]
+usages = ["sudo"]
+[profiles.work.local_admin]
+description = "Local administrator."
+kind = "sudo-target"
+[profiles.work.local_admin.sudo]
+transport = "local"
+credential = "credential://admin"
+auth_user = "{account}"
+run_as = "root"
+sudo_path = "/usr/bin/sudo"
+[profiles.work.admin]
+description = "Loopback SSH target."
+kind = "sudo-target"
+[profiles.work.admin.sudo]
+transport = "ssh"
+credential = "credential://admin"
+auth_user = "{account}"
+run_as = "root"
+sudo_path = "/usr/bin/sudo"
+[profiles.work.admin.sudo.ssh]
+mode = "explicit"
+hostname = "127.0.0.1"
+user = "{account}"
+port = 22
+host_key_alias = "agentenv-fixture"
+known_hosts_file = "{known_hosts}"
+helper_path = "{helper}"
+[profiles.work.admin.sudo.ssh.auth]
+method = "publickey"
+identity_files = ["{key}"]
+use_agent = false
+"#,
+                marker.display(),
+                account = account_name(),
+                known_hosts = directory.join("known_hosts").display(),
+                helper = helper_path.display(),
+                key = directory.join("fixture_key").display(),
+            ),
+        )
+        .expect("config written");
+        fs::write(directory.join("fixture_key"), "unused fixture identity\n").expect("key written");
+        fs::set_permissions(
+            directory.join("fixture_key"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("key mode");
+        config
+    }
+
+    /// A stand-in for `ssh`: policy queries reach the real client, and the
+    /// remote command runs locally under `/bin/sh -c`.
+    fn fake_ssh(directory: &std::path::Path) -> std::path::PathBuf {
+        let bin = directory.join("bin");
+        fs::create_dir_all(&bin).expect("bin dir");
+        let script = bin.join("ssh");
+        fs::write(
+            &script,
+            // A file named ssh-exit beside bin makes the fake ssh fail like a
+            // connection failure: no output, no remote command, that status.
+            // ssh-exit-install does the same for the install session only,
+            // like a connection lost after the upload began.
+            "#!/bin/sh\nfor argument in \"$@\"; do [ \"$argument\" = \"-G\" ] && exec /usr/bin/ssh \"$@\"; done\nd=$(dirname \"$0\")\n[ -f \"$d/../ssh-exit\" ] && exit \"$(cat \"$d/../ssh-exit\")\"\nfor last in \"$@\"; do :; done\ncase \"$last\" in *agentenv-install*) [ -f \"$d/../ssh-exit-install\" ] && exit \"$(cat \"$d/../ssh-exit-install\")\";; esac\nexec /bin/sh -c \"$last\"\n",
+        )
+        .expect("fake ssh written");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
+        bin
+    }
+
+    fn run_deploy(
+        config: &std::path::Path,
+        bin: &std::path::Path,
+        arguments: &[&str],
+    ) -> std::process::Output {
+        let mut command = Command::cargo_bin("agentenv").expect("agentenv binary");
+        command
+            .env_clear()
+            .env("AGENTENV_FILE", config)
+            .env("AGENTENV_NO_PROJECT", "1")
+            // The fake ssh comes first; the destination-side commands
+            // (sh, uname, getconf, cat, wc, chmod, mv) come from the system.
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("HOME", config.parent().unwrap())
+            .args(arguments)
+            .output()
+            .expect("run agentenv")
+    }
+
+    #[test]
+    fn deploy_helper_usage_is_explicit_and_offline() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let helper_path = directory.path().join("libexec/agentenv-sudo-helper");
+        let config = ssh_config(directory.path(), &helper_path);
+        let bin = fake_ssh(directory.path());
+        for (arguments, status, needle) in [
+            (
+                vec![
+                    "sudo",
+                    "--with",
+                    "admin",
+                    "--deploy-helper",
+                    "--",
+                    "/usr/bin/id",
+                ],
+                1,
+                "does not accept a command",
+            ),
+            (
+                vec![
+                    "sudo",
+                    "--with",
+                    "admin",
+                    "--deploy-helper",
+                    "--cwd",
+                    "/tmp",
+                ],
+                1,
+                "does not accept --cwd",
+            ),
+            (
+                vec!["sudo", "--with", "local_admin", "--deploy-helper"],
+                1,
+                "requires an SSH target",
+            ),
+            (
+                vec!["sudo", "--with", "admin", "--deploy-helper", "--check"],
+                1,
+                "cannot be used with",
+            ),
+            (
+                vec!["sudo", "--with", "admin", "--deploy-helper", "--plan"],
+                1,
+                "cannot be used with",
+            ),
+            (
+                vec!["sudo", "--with", "admin", "--from", "/tmp/x"],
+                1,
+                "--deploy-helper",
+            ),
+            (
+                vec!["sudo", "--with", "admin", "--force"],
+                1,
+                "--deploy-helper",
+            ),
+        ] {
+            let output = run_deploy(&config, &bin, &arguments);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{arguments:?}: {stderr}"
+            );
+            assert!(stderr.contains(needle), "{arguments:?}: {stderr}");
+        }
+        assert!(!helper_path.exists(), "usage errors never open a session");
+        assert!(!directory.path().join("provider-ran").exists());
+    }
+
+    #[test]
+    fn deploy_helper_installs_upgrades_and_reports_through_the_route() {
+        if !std::path::Path::new("/usr/bin/ssh").is_file() {
+            eprintln!("skipping: /usr/bin/ssh is required for policy evaluation");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        let helper_path = directory.path().join("libexec/agentenv-sudo-helper");
+        let config = ssh_config(directory.path(), &helper_path);
+        let bin = fake_ssh(directory.path());
+        let real_helper = assert_cmd::cargo::cargo_bin("agentenv-sudo-helper");
+        let real = real_helper.to_str().expect("UTF-8 path");
+        let identity = format!(
+            "agentenv-sudo-helper {PROTOCOL_VERSION} {}",
+            env!("CARGO_PKG_VERSION")
+        );
+
+        // A wrong source is refused on the destination and nothing is installed.
+        let probe = assert_cmd::cargo::cargo_bin("test-probe");
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                probe.to_str().unwrap(),
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(
+            stderr.contains("helper-deploy-identity-mismatch"),
+            "{stderr}"
+        );
+        assert!(!helper_path.exists());
+        assert!(
+            fs::read_dir(directory.path().join("libexec"))
+                .map(|entries| entries.count() == 0)
+                .unwrap_or(true),
+            "no temporary upload remains"
+        );
+
+        // First installation.
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "--json",
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                real,
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("JSON report");
+        assert_eq!(report["status"], "deployed");
+        assert_eq!(report["transport"], "ssh");
+        assert_eq!(report["helper_path"], helper_path.to_str().unwrap());
+        assert_eq!(report["previous"], serde_json::Value::Null);
+        assert_eq!(report["installed"], identity);
+        assert_eq!(report["source"]["kind"], "file");
+        assert_eq!(report["source"]["name"], real);
+        assert_eq!(report["helper"]["build"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(report["helper"]["auth_user"], account_name());
+        assert_eq!(report["sudo_authentication"], "not-attempted");
+        assert!(report["destination"]["target"].as_str().unwrap().contains(
+            if cfg!(target_os = "macos") {
+                "apple-darwin"
+            } else {
+                "linux"
+            }
+        ));
+        assert_eq!(
+            fs::metadata(&helper_path).unwrap().permissions().mode() & 0o7777,
+            0o755
+        );
+        assert_eq!(
+            fs::read(&helper_path).unwrap(),
+            fs::read(&real_helper).unwrap()
+        );
+        assert!(
+            !directory.path().join("provider-ran").exists(),
+            "deployment never resolves the sudo credential"
+        );
+
+        // Rerun is a no-op; --force reinstalls over the same identity.
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "--json",
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                real,
+            ],
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("JSON report");
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(report["status"], "up-to-date");
+        assert_eq!(report["source"], serde_json::Value::Null);
+        assert_eq!(report["previous"], identity);
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                real,
+                "--force",
+            ],
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(stdout.starts_with("Installed "), "{stdout}");
+        assert!(
+            stdout.contains(&format!("previously {identity}")),
+            "{stdout}"
+        );
+        assert!(stdout.contains("SSH helper is ready as"), "{stdout}");
+
+        // The ordinary check works through the installed helper, and a
+        // mismatching helper names the remediation.
+        let output = run_deploy(
+            &config,
+            &bin,
+            &["--json", "sudo", "--with", "admin", "--check"],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::write(&helper_path, format!("#!/bin/sh\ncase \"$1\" in --identity) echo 'agentenv-sudo-helper {PROTOCOL_VERSION} 0.0.1';; *) exit 9;; esac\n")).unwrap();
+        let output = run_deploy(&config, &bin, &["sudo", "--with", "admin", "--check"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(
+            stderr.contains("run: agentenv --profile=work sudo --with=admin --deploy-helper"),
+            "{stderr}"
+        );
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "--json",
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                real,
+            ],
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("JSON report");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(report["status"], "deployed");
+        assert_eq!(
+            report["previous"],
+            format!("agentenv-sudo-helper {PROTOCOL_VERSION} 0.0.1")
+        );
+    }
+
+    #[test]
+    fn deploy_helper_separates_connection_failures_from_helper_failures() {
+        if !std::path::Path::new("/usr/bin/ssh").is_file() {
+            eprintln!("skipping: /usr/bin/ssh is required for policy evaluation");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        let helper_path = directory.path().join("libexec/agentenv-sudo-helper");
+        let config = ssh_config(directory.path(), &helper_path);
+        let bin = fake_ssh(directory.path());
+        let real_helper = assert_cmd::cargo::cargo_bin("agentenv-sudo-helper");
+        let real = real_helper.to_str().expect("UTF-8 path");
+
+        // ssh exiting 255 before any output is a connection or login
+        // failure: no deployment remediation, and deployment itself does not
+        // report it as an unparseable preflight.
+        fs::write(directory.path().join("ssh-exit"), "255\n").unwrap();
+        let output = run_deploy(&config, &bin, &["sudo", "--with", "admin", "--check"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(stderr.contains("ssh-connect-failed"), "{stderr}");
+        assert!(!stderr.contains("--deploy-helper"), "{stderr}");
+        let output = run_deploy(
+            &config,
+            &bin,
+            &["sudo", "--with", "admin", "--deploy-helper", "--from", real],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(stderr.contains("ssh-connect-failed"), "{stderr}");
+        assert!(!stderr.contains("helper-deploy-"), "{stderr}");
+        fs::remove_file(directory.path().join("ssh-exit")).unwrap();
+
+        // The same status during the install session means the connection
+        // ended after the upload began: a deployment failure that states
+        // the destination may hold either helper and rerunning is safe.
+        fs::write(directory.path().join("ssh-exit-install"), "255\n").unwrap();
+        let output = run_deploy(
+            &config,
+            &bin,
+            &["sudo", "--with", "admin", "--deploy-helper", "--from", real],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(stderr.contains("helper-deploy-session-failed"), "{stderr}");
+        assert!(stderr.contains("rerunning is safe"), "{stderr}");
+        assert!(!stderr.contains("ssh-connect-failed"), "{stderr}");
+        assert!(!helper_path.exists());
+        fs::remove_file(directory.path().join("ssh-exit-install")).unwrap();
+
+        // A remote command that ends without a Ready frame after ssh itself
+        // succeeded is a helper problem and names the remediation.
+        let output = run_deploy(&config, &bin, &["sudo", "--with", "admin", "--check"]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(stderr.contains("helper-handshake-missing"), "{stderr}");
+        assert!(
+            stderr.contains("run: agentenv --profile=work sudo --with=admin --deploy-helper"),
+            "{stderr}"
+        );
+    }
+
+    #[test]
+    fn deploy_helper_classifies_install_failures_that_precede_the_upload() {
+        if !std::path::Path::new("/usr/bin/ssh").is_file() {
+            eprintln!("skipping: /usr/bin/ssh is required for policy evaluation");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        // The parent of helper_path is a regular file, so the install command
+        // fails before it reads the upload; an upload larger than any pipe
+        // buffer then cannot be written completely.
+        let blocker = directory.path().join("blocker");
+        fs::write(&blocker, "not a directory\n").unwrap();
+        let helper_path = blocker.join("agentenv-sudo-helper");
+        let config = ssh_config(directory.path(), &helper_path);
+        let bin = fake_ssh(directory.path());
+        let large = directory.path().join("large-helper");
+        fs::write(&large, vec![0x2a; 4 * 1024 * 1024]).unwrap();
+        let output = run_deploy(
+            &config,
+            &bin,
+            &[
+                "sudo",
+                "--with",
+                "admin",
+                "--deploy-helper",
+                "--from",
+                large.to_str().unwrap(),
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(stderr.contains("helper-deploy-replace-failed"), "{stderr}");
+        assert!(!stderr.contains("Broken pipe"), "{stderr}");
+        assert_eq!(fs::read_to_string(&blocker).unwrap(), "not a directory\n");
+    }
+
+    #[test]
+    fn check_warns_about_a_helper_path_outside_the_deployment_grammar() {
+        if !std::path::Path::new("/usr/bin/ssh").is_file() {
+            eprintln!("skipping: /usr/bin/ssh is required for policy evaluation");
+            return;
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        // '@' is fine for the shell that execution uses but outside the
+        // deployment grammar, so the check succeeds and warns. The file name
+        // stays agentenv-sudo-helper, which the serving helper requires.
+        let helper_path = directory.path().join("libexec@deploy/agentenv-sudo-helper");
+        fs::create_dir_all(helper_path.parent().unwrap()).unwrap();
+        fs::copy(
+            assert_cmd::cargo::cargo_bin("agentenv-sudo-helper"),
+            &helper_path,
+        )
+        .unwrap();
+        let config = ssh_config(directory.path(), &helper_path);
+        let bin = fake_ssh(directory.path());
+        let output = run_deploy(
+            &config,
+            &bin,
+            &["--json", "sudo", "--with", "admin", "--check"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("JSON report");
+        assert_eq!(report["status"], "ready");
+        assert!(
+            stderr.contains("outside the deployment grammar (unsupported character)"),
+            "{stderr}"
+        );
+        let output = run_deploy(
+            &config,
+            &bin,
+            &["sudo", "--with", "admin", "--deploy-helper", "--force"],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(9), "{stderr}");
+        assert!(
+            stderr.contains("helper-deploy-invalid-helper-path"),
+            "{stderr}"
+        );
+    }
+}

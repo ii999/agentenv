@@ -268,11 +268,13 @@ agentenv --profile work sudo --with prod_admin -- /usr/bin/systemctl restart ngi
 agentenv sudo --with prod_admin --cwd /var/lib/example -- /usr/bin/tee config.json
 agentenv sudo --with prod_admin --plan --json -- /usr/bin/systemctl restart nginx
 agentenv sudo --with prod_admin --check --json
+agentenv sudo --with prod_admin --deploy-helper --json
 ```
 
 `--plan` performs no credential lookup, SSH evaluation, or connection.
 `--check` checks local prerequisites or the remote helper handshake without
-requesting a sudo password. Execution uses pipes and no PTY, so interactive
+requesting a sudo password. `--deploy-helper` installs or upgrades the remote
+helper on an SSH target and then performs that same check; see below. Execution uses pipes and no PTY, so interactive
 shells, terminal programs, password changes, MFA conversations, and sudoers
 `requiretty` policies are unsupported. Local execution refuses a terminal as
 stdin; redirect it from a file, a pipe, or `/dev/null`.
@@ -313,21 +315,58 @@ does not replace it with a privileged shell or wrapper.
 
 ### Remote helper deployment
 
-Remote execution requires the matching unprivileged
-`agentenv-sudo-helper` on the destination. Unix release jobs publish it as a
-standalone checksummed asset as well as inside the archive. Verify the release
-checksum, copy the helper through an independently authorized deployment path,
-place it at the absolute user-owned `helper_path`, make it executable, and then
-run the configured check:
+Remote execution requires the unprivileged `agentenv-sudo-helper` at the
+configured `helper_path` on the destination, built from the same version as
+the client: the handshake refuses any other build. Every `agentenv update`
+therefore needs the remote helpers redeployed. One explicit command does that
+per SSH target:
 
 ```bash
-agentenv sudo --with prod_admin --check --json
+agentenv sudo --with prod_admin --deploy-helper [--from <file>] [--force] [--json]
 ```
 
+It uses the target's existing SSH route, host-key pinning, option policy, and
+login method; nothing else in the configuration changes. It runs up to three
+sessions: a preflight that reports the destination's platform, machine, glibc
+and the current state of `helper_path` without writing; an install that writes
+the helper beside the path as `<helper_path>.agentenv-new.<pid>`, verifies its size
+and identity on the destination, and renames it into place; and the ordinary
+`--check` handshake as acceptance. With saved-password login each session is
+one SSH password prompt answered from the configured credential; the sudo
+credential is never resolved. The helper bytes come from `--from <file>` when
+given, otherwise from the bundled companion when the destination runs the same
+target as this client, otherwise from the standalone release asset
+`agentenv-sudo-helper-v<version>-<target>` verified against that release's
+`SHA256SUMS` (`AGENTENV_RELEASE_BASE_URL` points it at a mirror). A client
+built from an unreleased version has no asset and needs `--from`.
+
+A rerun with nothing to do reports `up-to-date`; `--force` reinstalls. The
+command refuses, without writing, a `helper_path` that holds anything other
+than a helper (a symlink, directory, or other file), a destination without a
+prebuilt helper (Linux needs glibc 2.28 or newer; musl systems build from
+source), and a login shell that prints on stdout. `helper_path` must be an
+absolute path using only letters, digits, `.`, `_`, `/`, `+` and `-`, ending
+in `/agentenv-sudo-helper`; `--check` warns about a configured path outside
+that grammar. Failures exit `9` with `sudo-execution: helper-deploy-<reason>`;
+every failure leaves the previous helper, the newly verified one, or nothing
+at the path, and rerunning is always safe. A connection or login failure
+before the first session runs is `ssh-connect-failed`, as for execution; one
+that interrupts a later session is reported as a deployment failure. `--json`
+reports the status,
+destination, source, previous and installed identities, and the check result.
+After a successful `agentenv update`, the report lists the deployment command
+for every SSH sudo target in the configuration (`helper_redeployments` in
+`--json`); it never runs them.
+
 The helper runs as the SSH login user and needs no root installation, service,
-credential store, Python, or Node.js. agentenv never uploads, downloads,
-self-updates, or installs it during execution. A missing or mismatched helper
-fails before the sudo password is resolved; repair the deployment explicitly.
+credential store, Python, or Node.js. Deployment only ever happens through
+`--deploy-helper`: execution, `--check`, and `agentenv update` never upload,
+download, or replace the remote helper, and a mismatch fails before the sudo
+password is resolved while naming the deployment command. Hosts that the
+client cannot reach directly, or that require a change-managed copy, take the
+standalone release asset `agentenv-sudo-helper-<tag>-<target>` through their
+own deployment path: verify its checksum, place it at `helper_path`, make it
+executable, and run `--check`.
 
 ### Authentication and failure limits
 

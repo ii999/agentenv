@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::error::AppError;
 
 pub mod client;
+pub mod deploy;
 pub mod protocol;
 pub mod remote;
 pub mod ssh;
@@ -230,7 +231,8 @@ pub fn companion_path(executable: &Path) -> Result<PathBuf, AppError> {
         )
     })?;
     Ok(directory.join(format!(
-        "agentenv-sudo-helper{}",
+        "{}{}",
+        deploy::HELPER_FILE_NAME,
         std::env::consts::EXE_SUFFIX
     )))
 }
