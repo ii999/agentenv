@@ -437,6 +437,8 @@ async fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(windows)]
+    child.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     let mut child = child.spawn().map_err(|_| {
         owned(
             "ssh-unavailable",

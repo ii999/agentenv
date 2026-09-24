@@ -309,19 +309,12 @@ impl Backend for DesktopBackend {
         if focus(self.pid)? != inspected {
             return Err(fail(Reason::TargetChanged));
         }
+        // The focus check above and the deadline check inside begin_mutation
+        // are the last refusals that can report "nothing was changed". After
+        // the gate there is no await, task or check: encoding is the only
+        // work between it and SendInput, so the documented focus race is the
+        // width of a UTF-16 conversion and every later failure is uncertain.
         let batch = InputBatch::new(delivery.begin_mutation()?.as_str());
-        // No await or delegated task after the mutation gate. Recheck native
-        // focus and time after encoding; any failure now is conservatively
-        // uncertain, as required by the coordinator's single-send contract.
-        if focus(self.pid)? != inspected {
-            return Err(fail(Reason::TargetChanged));
-        }
-        if delivery.deadline().expired() {
-            return Err(FillError::new(
-                Reason::Timeout,
-                "the input deadline expired",
-            ));
-        }
         let sent = unsafe { SendInput(&batch.0, std::mem::size_of::<INPUT>() as i32) };
         if sent as usize != batch.0.len() {
             return Err(FillError::uncertain(Reason::DeliveryFailed, "Windows did not accept the entire input batch; check target integrity and inspect the field before retrying"));

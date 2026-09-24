@@ -179,6 +179,22 @@ async fn resolver_timeout_closes_the_channel() {
 }
 
 #[tokio::test]
+async fn resolver_exiting_before_it_connects_fails_promptly_as_a_provider_error() {
+    // test-probe is not agentenv: it exits without ever opening the pipe.
+    let started = std::time::Instant::now();
+    let result = resolve_detailed(
+        Path::new(env!("CARGO_BIN_EXE_test-probe")),
+        &definition(&["value", "unused"], CredentialUsage::Environment),
+        ResolutionStage::Fill,
+        FILL_VALUE_LIMIT,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(result.unwrap_err(), ResolveError::Provider);
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
 async fn askpass_accepts_only_the_bound_process_and_prompt() {
     for good in [true, false] {
         let session = Session::create(

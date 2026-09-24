@@ -61,7 +61,32 @@ pub(super) async fn resolve(
     job.assign(&resolver.child)
         .map_err(|_| ResolveError::Provider)?;
     resolver.job = Some(job);
-    pipe.connect().await.map_err(|_| ResolveError::Provider)?;
+    // A pipe server sees no EOF from a client that never arrives, so a
+    // resolver that exits before connecting is watched explicitly; otherwise
+    // an immediate startup failure would surface as a full-deadline timeout.
+    {
+        let connect = pipe.connect();
+        tokio::pin!(connect);
+        loop {
+            tokio::select! {
+                biased;
+                connected = &mut connect => {
+                    connected.map_err(|_| ResolveError::Provider)?;
+                    break;
+                }
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                    if resolver
+                        .child
+                        .try_wait()
+                        .map_err(|_| ResolveError::Provider)?
+                        .is_some()
+                    {
+                        return Err(ResolveError::Provider);
+                    }
+                }
+            }
+        }
+    }
     if windows::client_pid(&pipe).map_err(|_| ResolveError::Provider)? != resolver.child.id() {
         return Err(ResolveError::Provider);
     }

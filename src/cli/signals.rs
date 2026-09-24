@@ -59,11 +59,24 @@ pub(super) fn install_signal_forwarder(
         let mut interrupt = tokio::signal::windows::ctrl_c().map_err(|_| error())?;
         let mut stop = tokio::signal::windows::ctrl_break().map_err(|_| error())?;
         tokio::spawn(async move {
-            let signal = tokio::select! {
-                _ = interrupt.recv() => 2,
-                _ = stop.recv() => 15,
-            };
-            let _ = cancel.send(signal);
+            // Both listeners live for the rest of the process. Once none
+            // remains, tokio's console handler declines the event and the
+            // default handler terminates the process in the middle of
+            // cancellation cleanup; a repeated Ctrl+C must stay a no-op.
+            let mut forwarded = false;
+            loop {
+                let signal = tokio::select! {
+                    received = interrupt.recv() => received.map(|()| 2),
+                    received = stop.recv() => received.map(|()| 15),
+                };
+                let Some(signal) = signal else {
+                    return;
+                };
+                if !forwarded {
+                    forwarded = true;
+                    let _ = cancel.send(signal);
+                }
+            }
         });
         Ok(())
     })
