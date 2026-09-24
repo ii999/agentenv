@@ -45,6 +45,14 @@ pub enum AppError {
 
     #[error("sudo-execution: completion-unconfirmed: {0}")]
     SudoCompletionUnconfirmed(String),
+
+    /// A filling failure before any mutation was attempted.
+    #[error("credential-fill: {0}")]
+    Fill(String),
+
+    /// A filling failure after mutation may have started or completed.
+    #[error("credential-fill: {0}")]
+    FillUncertain(String),
 }
 
 impl AppError {
@@ -59,6 +67,8 @@ impl AppError {
             Self::Update(_) => 7,
             Self::SudoExecution(_) => 9,
             Self::SudoCompletionUnconfirmed(_) => 10,
+            Self::Fill(_) => 8,
+            Self::FillUncertain(_) => 11,
             Self::TargetNotExecutable(_) => 127,
         }
     }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: shadow DOM</title></head>
+<body data-page="shadow">
+  <h1>Shadow roots</h1>
+  <div id="open-host"></div>
+  <div id="closed-host"></div>
+  <script>
+    const open = document.getElementById('open-host').attachShadow({ mode: 'open' });
+    open.innerHTML = '<input id="in-open-shadow" type="password" value="open-initial">';
+    const closed = document.getElementById('closed-host').attachShadow({ mode: 'closed' });
+    closed.innerHTML = '<input id="in-closed-shadow" type="password" value="closed-initial">';
+    window.__closedRoot = closed;
+  </script>
+  <script src="/fixture.js"></script>
+  <script>
+    // fixture.js only sees light DOM; instrument the open shadow input so a
+    // shadow-piercing fill produces a receipt.
+    window.__fixture.attach(open.getElementById('in-open-shadow'));
+  </script>
+</body>
+</html>

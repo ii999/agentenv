@@ -1,0 +1,1174 @@
+{
+  "version": 1,
+  "description": "Parity scenarios for the CDP filling clients. {A} and {B} are replaced with the fixture origins (127.0.0.1 and localhost). Each scenario is run once per implementation against freshly opened pages, with receipts cleared first.",
+  "values": {
+    "basic": "correct horse battery staple",
+    "unicode": "pässwörd-日本語-🔑-\"quoted\"-<b>&amp;</b>-\\slash-'single'-`tick`-{json}",
+    "spaces": "  leading and trailing  ",
+    "long": "ghp_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  },
+  "reasons": [
+    "connect-failed",
+    "version-unsupported",
+    "context-absent",
+    "page-absent",
+    "page-ambiguous",
+    "frame-absent",
+    "frame-ambiguous",
+    "frame-invalid",
+    "target-absent",
+    "target-ambiguous",
+    "target-hidden",
+    "target-disabled",
+    "target-readonly",
+    "target-unfillable",
+    "target-changed",
+    "timeout",
+    "recording-conflict"
+  ],
+  "filledEvents": [
+    "focus",
+    "beforeinput",
+    "input"
+  ],
+  "scenarios": [
+    {
+      "id": "text-basic",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "username",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "password-replace",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "password",
+          "value": "basic"
+        }
+      },
+      "notes": "The field is prefilled; the receipt must equal the value exactly, proving replacement rather than append."
+    },
+    {
+      "id": "email-replace",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#email"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "email",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "textarea-replace",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#notes"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "notes",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "contenteditable-replace",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#editor"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "editor",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "unicode-value",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password"
+      },
+      "value": "unicode",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "password",
+          "value": "unicode"
+        }
+      }
+    },
+    {
+      "id": "spaces-preserved",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password"
+      },
+      "value": "spaces",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "password",
+          "value": "spaces"
+        }
+      }
+    },
+    {
+      "id": "long-token",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password"
+      },
+      "value": "long",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "password",
+          "value": "long"
+        }
+      },
+      "notes": "Above the 255-byte authentication limit; exercises the fill value contract."
+    },
+    {
+      "id": "react-controlled",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "react.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/react.html",
+        "selector": "#react-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "react-password",
+          "value": "basic",
+          "valueSource": "react-state"
+        }
+      },
+      "notes": "The receipt carries React state, so a fill that bypasses React's change tracking yields no matching receipt."
+    },
+    {
+      "id": "offscreen-visible",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#offscreen"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "offscreen",
+          "value": "basic"
+        }
+      },
+      "notes": "Playwright treats an offscreen element with a non-empty box as visible."
+    },
+    {
+      "id": "shadow-open",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "shadow.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/shadow.html",
+        "selector": "#in-open-shadow"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "in-open-shadow",
+          "value": "basic"
+        }
+      },
+      "notes": "Playwright CSS selectors pierce open shadow roots."
+    },
+    {
+      "id": "shadow-closed",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "shadow.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/shadow.html",
+        "selector": "#in-closed-shadow"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "frame-same-origin",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "iframe#same"
+        ],
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "inner",
+          "frameOrigin": "A",
+          "field": "inner-password",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "frame-cross-origin",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "iframe#cross"
+        ],
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "inner",
+          "frameOrigin": "B",
+          "field": "inner-password",
+          "value": "basic"
+        },
+        "oopif": true
+      },
+      "notes": "The child is a separate site; the harness records whether it was an out-of-process iframe target."
+    },
+    {
+      "id": "frame-nested-cross",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "iframe#cross",
+          "iframe#nested"
+        ],
+        "selector": "#leaf-token"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "leaf",
+          "frameOrigin": "A",
+          "field": "leaf-token",
+          "value": "basic"
+        },
+        "oopif": true
+      }
+    },
+    {
+      "id": "frame-no-implicit-descent",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-absent",
+        "receipt": null
+      },
+      "notes": "The selector exists only inside child frames; without a frame chain it must not be found."
+    },
+    {
+      "id": "frame-chain-absent",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "iframe#missing"
+        ],
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "frame-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "frame-chain-not-iframe",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "#not-a-frame"
+        ],
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "frame-invalid",
+        "receipt": null
+      }
+    },
+    {
+      "id": "frame-chain-ambiguous",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "frames.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/frames.html",
+        "frameSelectors": [
+          "iframe"
+        ],
+        "selector": "#inner-password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "frame-ambiguous",
+        "receipt": null
+      }
+    },
+    {
+      "id": "selector-ambiguous",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": ".password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-ambiguous",
+        "receipt": null
+      }
+    },
+    {
+      "id": "selector-absent",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#nope"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "hidden-display-none",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#hidden"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-hidden",
+        "receipt": null
+      }
+    },
+    {
+      "id": "hidden-visibility",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#invisible"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-hidden",
+        "receipt": null
+      }
+    },
+    {
+      "id": "hidden-zero-size",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#zero"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-hidden",
+        "receipt": null
+      }
+    },
+    {
+      "id": "disabled-attribute",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#disabled"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-disabled",
+        "receipt": null
+      }
+    },
+    {
+      "id": "disabled-fieldset",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#in-disabled-fieldset"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-disabled",
+        "receipt": null
+      }
+    },
+    {
+      "id": "disabled-aria",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#aria-disabled"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-disabled",
+        "receipt": null
+      },
+      "notes": "A text input has the implicit textbox role, so aria-disabled applies under Playwright's rules."
+    },
+    {
+      "id": "readonly-attribute",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#readonly"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-readonly",
+        "receipt": null
+      }
+    },
+    {
+      "id": "readonly-aria-contenteditable",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "duplicates.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#aria-readonly"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-readonly",
+        "receipt": null
+      },
+      "notes": "Playwright checks the textbox role's aria-readonly before the contenteditable exemption."
+    },
+    {
+      "id": "unfillable-checkbox",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#checkbox"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-unfillable",
+        "receipt": null
+      }
+    },
+    {
+      "id": "unfillable-date",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#birthday"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-unfillable",
+        "receipt": null
+      },
+      "notes": "Playwright would set the value directly for date-like inputs; the filling contract excludes them."
+    },
+    {
+      "id": "unfillable-div",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#plain-div"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-unfillable",
+        "receipt": null
+      }
+    },
+    {
+      "id": "unfillable-label",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "label[for=username]"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-unfillable",
+        "receipt": null
+      },
+      "notes": "Playwright would retarget a label to its control; the filling contract requires the selector to name the control itself."
+    },
+    {
+      "id": "page-absent",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/duplicates.html",
+        "selector": "#unique"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "page-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "page-ambiguous",
+      "open": [
+        {
+          "ref": "one",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        },
+        {
+          "ref": "two",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "page-ambiguous",
+        "receipt": null
+      }
+    },
+    {
+      "id": "page-exact-rejects-query",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "query": "?state=abc123&nonce=42",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "pageMatch": "exact",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "page-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "page-origin-path-ignores-query",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "query": "?state=abc123&nonce=42#frag",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "pageMatch": "origin-path",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "username",
+          "value": "basic"
+        }
+      }
+    },
+    {
+      "id": "page-origin-path-rejects-other-origin",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "B",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "pageMatch": "origin-path",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "page-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "context-ambiguous",
+      "open": [
+        {
+          "ref": "default",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        },
+        {
+          "ref": "second",
+          "origin": "A",
+          "page": "login.html",
+          "context": 1
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "page-ambiguous",
+        "receipt": null
+      }
+    },
+    {
+      "id": "context-index-selects",
+      "open": [
+        {
+          "ref": "default",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        },
+        {
+          "ref": "second",
+          "origin": "A",
+          "page": "login.html",
+          "context": 1
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "contextIndex": 1,
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "second",
+          "frame": "main",
+          "field": "username",
+          "value": "basic"
+        }
+      },
+      "notes": "Context index 0 is the default context; created contexts follow in Target.getBrowserContexts order."
+    },
+    {
+      "id": "context-index-absent",
+      "open": [
+        {
+          "ref": "default",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "contextIndex": 3,
+        "selector": "#username"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "context-absent",
+        "receipt": null
+      }
+    },
+    {
+      "id": "navigation-before-insert",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "navigate.html",
+          "query": "?after=800",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/navigate.html?after=800",
+        "selector": "#password",
+        "delayBeforeInsertMs": 1800
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-changed",
+        "receipt": null
+      },
+      "notes": "The page navigates to a document with the same selector during the delay; a retargeting client would fill the new field and produce a receipt."
+    },
+    {
+      "id": "frame-detached-before-insert",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "detach.html",
+          "query": "?after=800",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/detach.html?after=800",
+        "frameSelectors": [
+          "iframe#doomed"
+        ],
+        "selector": "#inner-password",
+        "delayBeforeInsertMs": 1800
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-changed",
+        "receipt": null
+      }
+    },
+    {
+      "id": "ambiguous-before-insert",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "ambiguous.html",
+          "query": "?after=800",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/ambiguous.html?after=800",
+        "selector": ".late-dup",
+        "delayBeforeInsertMs": 1800
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "target-ambiguous",
+        "receipt": null
+      },
+      "notes": "Revalidation must count matches again, not merely check that the prepared element is still attached."
+    },
+    {
+      "id": "timeout-before-insert",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password",
+        "timeoutMs": 700,
+        "delayBeforeInsertMs": 4000
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "timeout",
+        "receipt": null
+      },
+      "notes": "The deadline expires while the client is still before insertion; no mutation may follow."
+    },
+    {
+      "id": "worker-present",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "workers.html",
+          "context": 0
+        }
+      ],
+      "hostSetup": "await-workers",
+      "request": {
+        "pageUrl": "{A}/pages/workers.html",
+        "selector": "#password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "filled",
+        "receipt": {
+          "ref": "main",
+          "frame": "main",
+          "field": "password",
+          "value": "basic"
+        }
+      },
+      "notes": "The page runs a dedicated worker and a service worker; auto-attach reports both as targets without frames, and the fill must ignore them."
+    },
+    {
+      "id": "devtools-open",
+      "open": [
+        {
+          "ref": "main",
+          "origin": "A",
+          "page": "login.html",
+          "context": 0
+        }
+      ],
+      "hostSetup": "open-devtools",
+      "implementations": [
+        "product"
+      ],
+      "request": {
+        "pageUrl": "{A}/pages/login.html",
+        "selector": "#password"
+      },
+      "value": "basic",
+      "expect": {
+        "outcome": "error",
+        "reason": "recording-conflict",
+        "receipt": null
+      },
+      "notes": "The host opens DevTools on the target page through Target.openDevTools before the fill. Only the product refuses an open DevTools window; the prototype and the reference client have no such check, so this scenario is product-only."
+    }
+  ]
+}

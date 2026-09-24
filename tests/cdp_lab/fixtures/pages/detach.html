@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: detach</title></head>
+<body data-page="detach">
+  <h1>Removes its iframe after a delay</h1>
+  <iframe id="doomed" src="{{OTHER}}/pages/frame-inner.html?frame=doomed" width="600" height="200"></iframe>
+  <script src="/fixture.js"></script>
+  <script>
+    const after = Number(new URLSearchParams(location.search).get('after') || '0');
+    if (after > 0) setTimeout(() => { document.getElementById('doomed').remove(); }, after);
+  </script>
+</body>
+</html>

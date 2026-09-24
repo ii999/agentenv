@@ -360,6 +360,90 @@ Current compatibility evidence is deliberately limited and is recorded in
   Windows OpenSSH behavior are also unverified. Native Windows local sudo is
   outside this release.
 
+## Credential filling
+
+`credential fill` delivers one credential into a destination without printing
+it. The agent keeps using its own browser automation to navigate and submit;
+agentenv only writes the value into the one field the agent names. This
+release ships the Chrome DevTools Protocol (CDP) backend, which attaches to an
+existing Chromium-family browser through its loopback remote debugging port.
+The Playwright and desktop backends are designed but not included; `--capabilities`
+reports what the installed binary can do.
+
+```bash
+agentenv credential fill --capabilities --json
+agentenv credential fill portal_password --backend cdp \
+  --endpoint http://127.0.0.1:9222 \
+  --page-url https://portal.example/login --selector '#password' --json
+agentenv credential fill portal_password --backend cdp \
+  --endpoint http://127.0.0.1:9222 \
+  --page-url https://portal.example/login --page-match origin-path \
+  --frame-selector 'iframe#auth' --selector 'input[name=password]' --json
+```
+
+The browser must expose a remote debugging port on loopback, for example
+Chrome, Chromium, or Edge started with `--remote-debugging-port=9222`. Chrome
+and Chromium 136 and later refuse remote debugging on the default profile, so
+start the browser with a dedicated `--user-data-dir` as well. Browser
+automation tools that already drive a Chromium through CDP can pass their
+endpoint directly. Remote endpoints and endpoint authentication are not
+supported.
+
+Targeting is strict. `--page-url` must match exactly one open page across all
+browser contexts; `--page-match origin-path` ignores the query string and
+fragment, which login and single-sign-on pages change between reads;
+`--context-index` disambiguates duplicate pages in different contexts, where
+`0` is the default context. Each `--frame-selector` must match exactly one
+iframe in its parent frame; without any, the main frame is used and child
+frames are never searched implicitly. `--selector` must match exactly one
+visible, enabled, editable text control: an `input` of a text-like type, a
+`textarea`, or a contenteditable element. Open shadow roots are searched;
+labels are not retargeted to their controls, and date, color, checkbox, and
+file inputs are refused. The existing content is replaced, and the page sees
+the same `focus`, `beforeinput`, and `input` events a person typing would
+produce, so reactive frameworks observe the change.
+
+Before any credential is resolved, agentenv connects, checks the protocol
+version, selects the page, frame chain, and element, and fails if DevTools
+is open on that page, because a DevTools recorder's state cannot be read.
+Chromium tracing, screencasts, screenshots, and Playwright tracing, HAR, or
+video started by another client are not observable and must be kept off by
+the automation host during a fill. Only then is the credential resolved,
+through the same confidential resolver the sudo channel uses, and the target
+is validated again immediately before one `Input.insertText`. A page that
+navigated, a frame that was removed, or a selector that became ambiguous in
+between fails rather than filling a different element. The connection is then
+closed; the browser, its pages, and other clients' sessions are left as they
+were.
+
+Only credentials that permit `environment` usage can be filled; sudo and SSH
+passwords are refused before resolution. The value must be a single line of
+UTF-8 of at most 8,192 bytes, preserved exactly including spaces; control
+characters, the U+2028/U+2029 line separators, and the U+202A–U+202E and
+U+2066–U+2069 bidirectional controls are rejected as `value-unsupported`. A
+command provider runs confidentially (no stdin, stderr discarded) and one
+trailing newline is removed from its output; an empty or non-UTF-8 value is
+a credential error. The success result is only `{"version":1,"backend":"cdp","effect":"field-filled"}`.
+agentenv never reads the field back, takes no screenshot, and does not submit
+the form; the effect says the replacement was delivered, not that a login
+succeeded, and a later screenshot by another tool can still show a visible
+API-key field.
+
+Failures leave stdout empty and write one stderr line
+`credential-fill: <reason>: <message>`. Exit code `8` means nothing was
+changed: `backend-unavailable`, `connect-failed`, `version-unsupported`,
+`recording-conflict`, `context-absent`, `page-absent`, `page-ambiguous`,
+`frame-absent`, `frame-ambiguous`, `frame-invalid`, `target-absent`,
+`target-ambiguous`, `target-hidden`, `target-disabled`, `target-readonly`,
+`target-unfillable`, `target-changed`, `value-unsupported`, `timeout`, or
+`cancelled` (SIGINT, SIGTERM, or SIGHUP) before insertion. Exit code `11`
+means the destination may have changed: `timeout`, `cancelled`, or
+`delivery-failed` during insertion, or `cleanup-unconfirmed` after a
+delivered value. Inspect the field before retrying an `11`; never
+retry automatically. The whole operation, including credential lookup and any
+keychain authorization dialog, runs under one deadline of `--timeout-ms`
+(default 30,000, at most 300,000).
+
 ## Agent usage protocol
 
 A full agent skill ships in `skills/agentenv/` and in every release archive;
@@ -503,6 +587,10 @@ agentenv credential add <name> --description "<text>" --provider keychain \
     --service <service> --account <account> --usage sudo [--usage ssh-password]
 agentenv credential update <name> --usage <environment|sudo|ssh-password> \
     [--usage <purpose> ...] [--inject-as <ENV>]
+agentenv credential fill --capabilities --json
+agentenv credential fill <name> --backend cdp --endpoint <http://127.0.0.1:port> \
+    --page-url <url> [--page-match exact|origin-path] [--context-index <n>] \
+    [--frame-selector <css> ...] --selector <css> [--timeout-ms <ms>] --json
 ```
 
 Maintenance commands are:
@@ -531,6 +619,8 @@ credential first, then reference it from entries (`credential://<name>`) and,
 for the keychain provider, store its value with `credential set`.
 `credential update` replaces only the permitted-purpose metadata and validates
 the whole file before writing; it never resolves or changes the saved value.
+`credential fill` delivers a credential into a browser field; see
+[Credential filling](#credential-filling).
 `credential list --json` reports an additive `usages` array and always includes
 `inject_as`, which is `null` for authentication-only definitions.
 
@@ -547,7 +637,9 @@ Prefer `keychain` or `command` for local development:
   and stderr. For `sudo` or `ssh-password` use, the provider is confidential
   and noninteractive: stdin and stderr are closed, stdout is bounded, and its
   complete output is validated without stripping a newline. An authentication
-  provider must emit only the password bytes, with no CR, LF, or NUL.
+  provider must emit only the password bytes, with no CR, LF, or NUL. For
+  `credential fill`, the provider is confidential and noninteractive in the
+  same way, but one trailing newline is stripped as for environment injection.
 - `env` is useful for CI and already-managed shells. Its value is readable by
   any process that inherits the environment, including an agent process, so it
   is a weaker choice for local use.
@@ -736,8 +828,10 @@ Commands use these statuses:
 | `5` | Project trust-state failure: `status` found an untrusted, invalid, or unavailable project file, or `allow`/`revoke` found no project file |
 | `6` | Project requirements are unsatisfied or cannot be checked by `status` |
 | `7` | `update` could not resolve, download, verify, or install a release, or replaced the binary but could not refresh an agent skill |
+| `8` | `credential fill` failed before anything was changed (stderr prefix `credential-fill: <reason>:`) |
 | `9` | `sudo` owned execution, protocol, or helper failure (stderr prefix `sudo-execution:`) |
 | `10` | `sudo` completion could not be confirmed; the command may have run (stderr prefix `sudo-execution: completion-unconfirmed:`) |
+| `11` | `credential fill` failed after the destination may have changed; inspect it before retrying (stderr prefix `credential-fill: <reason>:`) |
 | `127` | `run` target could not be executed |
 
 ## License

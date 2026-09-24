@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: react</title></head>
+<body data-page="react">
+  <h1>React controlled input fixture</h1>
+  <div id="root"></div>
+  <script src="/vendor/react.js"></script>
+  <script src="/vendor/react-dom.js"></script>
+  <script src="/fixture.js"></script>
+  <script>
+    // A controlled input: the DOM value is only what React state says it is.
+    // The receipt reports React state, not the DOM, so a fill that bypasses
+    // React's event path shows up as a missing or stale receipt.
+    const { useState, useEffect, createElement: h } = React;
+    function Form() {
+      const [password, setPassword] = useState('react-initial');
+      const [changes, setChanges] = useState(0);
+      useEffect(() => {
+        window.__fixture.attach(document.getElementById('react-password'));
+      }, []);
+      useEffect(() => {
+        if (changes > 0) {
+          window.__fixture.report('react-password', password, 'react-state');
+        }
+      }, [password, changes]);
+      return h('form', { onSubmit: (event) => event.preventDefault() },
+        h('input', {
+          id: 'react-password',
+          type: 'password',
+          value: password,
+          onChange: (event) => { setPassword(event.target.value); setChanges((n) => n + 1); },
+        }),
+        h('span', { id: 'react-state', 'data-changes': changes }, password.length),
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(h(Form));
+  </script>
+</body>
+</html>

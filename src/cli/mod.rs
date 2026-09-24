@@ -7,7 +7,9 @@
 //! [`validate`], and self-update in [`update`].
 
 mod credential;
+mod fill;
 mod project;
+mod signals;
 mod sudo;
 mod update;
 mod validate;
@@ -188,6 +190,8 @@ pub enum CredentialCommand {
     Add(CredentialAddArgs),
     /// Replace a credential definition's permitted usages without reading its value.
     Update(CredentialUpdateArgs),
+    /// Deliver a credential into a browser or desktop destination without printing it.
+    Fill(fill::CredentialFillArgs),
 }
 
 #[derive(Debug, Args)]
@@ -509,6 +513,9 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Set { name },
         }) => credential::set(&config, &name, invocation.json),
+        Command::Credential(CredentialArgs {
+            command: CredentialCommand::Fill(args),
+        }) => fill::execute(&config, args, invocation.json),
         Command::Project(_) | Command::Update(_) => {
             unreachable!("project and update commands return before loading the configuration")
         }

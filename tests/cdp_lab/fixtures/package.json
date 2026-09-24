@@ -1,0 +1,10 @@
+{
+  "name": "agentenv-cdp-lab-fixtures",
+  "private": true,
+  "type": "module",
+  "description": "Fixture pages and receipt server for the CDP filling parity lab",
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "agentenv-cdp-lab-reference",
+  "private": true,
+  "type": "module",
+  "description": "playwright-core connectOverCDP reference client for the CDP filling parity lab",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

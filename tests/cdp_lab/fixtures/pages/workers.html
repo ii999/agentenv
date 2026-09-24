@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: workers</title></head>
+<body data-page="workers">
+  <h1>Login fixture with workers</h1>
+  <form onsubmit="return false">
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" value="stale-secret">
+  </form>
+  <script>
+    // A dedicated worker and a service worker are auto-attached targets for
+    // a flattened CDP session; neither has a frame or an Emulation domain.
+    const worker = new Worker('/worker.js');
+    worker.postMessage('ping');
+    window.__workerReady = new Promise((resolve) => { worker.onmessage = () => resolve(true); });
+    window.__serviceWorkerReady = navigator.serviceWorker
+      ? navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then(() => true).catch(() => false)
+      : Promise.resolve(false);
+  </script>
+  <script src="/fixture.js"></script>
+</body>
+</html>

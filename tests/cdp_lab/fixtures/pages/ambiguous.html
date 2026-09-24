@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: late duplicate</title></head>
+<body data-page="ambiguous">
+  <h1>Adds a duplicate match after a delay</h1>
+  <input id="late-original" class="late-dup" type="password" value="original">
+  <script src="/fixture.js"></script>
+  <script>
+    const after = Number(new URLSearchParams(location.search).get('after') || '0');
+    if (after > 0) setTimeout(() => {
+      const twin = document.createElement('input');
+      twin.id = 'late-twin';
+      twin.className = 'late-dup';
+      twin.type = 'password';
+      document.body.appendChild(twin);
+      window.__fixture.attach(twin);
+    }, after);
+  </script>
+</body>
+</html>
