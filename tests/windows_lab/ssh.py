@@ -101,6 +101,10 @@ def serve(listener, host_key, peer, errors):
              "features": ["one-shot-auth", "binary-streams", "credits", "cancel"]})
         channel.send_exit_status(0)
         channel.shutdown_write()
+        # SSH EOF is only a half-close. A real completed helper sends CLOSE
+        # too; Win32 OpenSSH correctly waits for it before exiting. Keep the
+        # transport alive so the queued Ready/status/CLOSE frames can drain.
+        channel.close()
         # Keep the SSH transport alive until the client consumes Ready and closes.
         until = time.monotonic() + 10
         while transport.is_active() and time.monotonic() < until:
