@@ -11,7 +11,9 @@ use std::process::Command;
 use toml::{Table, Value};
 
 use crate::config::validate::{resolve_in_entry, walk_entry_references};
-use crate::config::{Config, CredentialDef, Profile};
+use crate::config::{
+    Config, CredentialDef, CredentialRef, CredentialUsage, Profile, REFERENCE_PREFIX,
+};
 use crate::credential::{provider_for, Secret};
 use crate::error::AppError;
 use crate::path::{single_entry_name, Segments};
@@ -177,11 +179,20 @@ impl InjectionPlan {
     /// [`Self::resolve_and_launch`].
     pub fn build(cfg: &Config, profile: &Profile, entries: &[String]) -> Result<Self, AppError> {
         let mut injections = Vec::new();
+        let mut selected = Vec::new();
 
         for argument in entries {
             let entry_name = single_entry_name(argument)?;
             let table = entry_table(profile, &entry_name)?;
-
+            selected.push((entry_name, table));
+        }
+        // Inspect every credential reference before planning any injection.
+        // This prevents a mixed entry or later entry from causing an
+        // authentication credential to be resolved by ordinary `run`.
+        for (_, table) in &selected {
+            reject_authentication_references(cfg, table)?;
+        }
+        for (entry_name, table) in selected {
             collect_references(cfg, table, &mut injections);
             collect_inject_values(&entry_name, table, &mut injections);
         }
@@ -283,9 +294,32 @@ fn collect_references(cfg: &Config, entry: &Table, injections: &mut Vec<Injectio
             target: reference
                 .target_override
                 .clone()
-                .unwrap_or_else(|| definition.inject_as.clone()),
+                .or_else(|| definition.inject_as.clone())
+                .expect("environment credentials have a validated inject_as"),
         });
     });
+}
+
+fn reject_authentication_references(cfg: &Config, entry: &Table) -> Result<(), AppError> {
+    fn inspect(cfg: &Config, value: &Value) -> Option<String> {
+        match value {
+            Value::String(text) if text.starts_with(REFERENCE_PREFIX) => {
+                let reference = CredentialRef::parse(text).ok()?;
+                let definition = cfg.credential(&reference.name)?;
+                (!definition.permits(CredentialUsage::Environment)).then(|| definition.name.clone())
+            }
+            Value::Array(items) => items.iter().find_map(|item| inspect(cfg, item)),
+            Value::Table(table) => table.values().find_map(|item| inspect(cfg, item)),
+            _ => None,
+        }
+    }
+
+    let Some(name) = entry.values().find_map(|value| inspect(cfg, value)) else {
+        return Ok(());
+    };
+    Err(AppError::Injection(format!(
+        "credential '{name}' is restricted to authentication use and cannot be exported by 'agentenv run'; select an environment credential instead"
+    )))
 }
 
 fn collect_inject_values(entry_name: &str, entry: &Table, injections: &mut Vec<Injection>) {

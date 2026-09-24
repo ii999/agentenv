@@ -31,6 +31,9 @@ struct Cli {
 }
 
 fn main() {
+    if let Some(status) = agentenv::credential::resolver::internal_entry() {
+        process::exit(status);
+    }
     let cli = parse_cli();
     let Some(command) = cli.command else {
         print_help_and_exit();

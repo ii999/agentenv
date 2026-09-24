@@ -47,3 +47,28 @@ jobs:
       # credential suite runs without touching the runner's real keychain.
       - name: Run tests
         run: cargo test --features test-keychain
+
+  sudo-integration:
+    name: Isolated Linux sudo and SSH integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # All accounts, passwords, host keys and sudoers rules belong to the
+      # disposable containers. The job never modifies the runner's sudo policy.
+      - name: Measure installed sudo and OpenSSH behavior
+        run: bash tests/sudo_lab/run.sh --output-dir "$RUNNER_TEMP/sudo-compatibility"
+      - name: Build and verify local sudo execution
+        run: python3 tests/sudo_execution_lab/run.py
+      - name: Verify SSH login and remote sudo execution
+        run: >-
+          docker run --rm --network none
+          --hostname agentenv-sudo-lab --add-host agentenv-sudo-lab:127.0.0.1
+          --entrypoint python3 agentenv-sudo-execution:lab /opt/sudo-lab/verify_ssh.py
+      - name: Verify sudo policy variations and SSH refusal cases
+        run: >-
+          docker run --rm --network none
+          --hostname agentenv-sudo-lab --add-host agentenv-sudo-lab:127.0.0.1
+          --entrypoint python3 agentenv-sudo-execution:lab /opt/sudo-lab/verify_release.py

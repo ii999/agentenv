@@ -6,7 +6,7 @@ together with the agentenv agent skill.
 
 .DESCRIPTION
 Downloads the x86_64 Windows archive for the requested release, verifies its
-SHA-256 checksum, installs agentenv.exe into the install directory, and
+SHA-256 checksum, installs the matching executable bundle, and
 installs the agent skill to ~\.agents\skills. Downloads use plain HTTPS
 from GitHub Releases.
 
@@ -23,7 +23,7 @@ Also install the agent skill to ~\.claude\skills for Claude Code, in
 addition to the ~\.agents\skills default.
 
 .PARAMETER NoSkill
-Install the binary only.
+Install the executable bundle only.
 #>
 param(
     [string]$Version = $env:AGENTENV_VERSION,
@@ -90,9 +90,75 @@ try {
 
     Expand-Archive (Join-Path $workDir $asset) -DestinationPath $workDir
     $extracted = Join-Path $workDir "agentenv-$Version-$target"
+    $releaseVersion = $Version.TrimStart('v')
+    $binaries = @('agentenv.exe', 'agentenv-sudo-helper.exe', 'agentenv-ssh-askpass.exe')
+    foreach ($binary in $binaries) {
+        if (-not (Test-Path (Join-Path $extracted $binary) -PathType Leaf)) {
+            throw "$asset is incomplete: missing $binary; install a complete release bundle."
+        }
+    }
+    $mainIdentity = & (Join-Path $extracted 'agentenv.exe') --version
+    if ($LASTEXITCODE -ne 0 -or $mainIdentity -ne "agentenv $releaseVersion") {
+        throw "$asset contains a mismatched agentenv executable."
+    }
+    $sudoIdentity = & (Join-Path $extracted 'agentenv-sudo-helper.exe') --identity
+    if ($LASTEXITCODE -ne 0 -or $sudoIdentity -ne "agentenv-sudo-helper 1 $releaseVersion") {
+        throw "$asset contains a mismatched sudo helper."
+    }
+    $sshIdentity = & (Join-Path $extracted 'agentenv-ssh-askpass.exe') --identity
+    if ($LASTEXITCODE -ne 0 -or $sshIdentity -ne "agentenv-ssh-askpass 1 $releaseVersion") {
+        throw "$asset contains a mismatched SSH askpass helper."
+    }
 
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item (Join-Path $extracted 'agentenv.exe') (Join-Path $InstallDir 'agentenv.exe') -Force
+    foreach ($binary in $binaries) {
+        $staged = Join-Path $InstallDir ".$binary.agentenv-new"
+        $backup = Join-Path $InstallDir ".$binary.agentenv-old"
+        Remove-Item $staged, $backup -Force -ErrorAction SilentlyContinue
+        Copy-Item (Join-Path $extracted $binary) $staged
+    }
+    $swapped = [System.Collections.Generic.List[string]]::new()
+    try {
+        foreach ($binary in @('agentenv-sudo-helper.exe', 'agentenv-ssh-askpass.exe', 'agentenv.exe')) {
+            $destination = Join-Path $InstallDir $binary
+            $staged = Join-Path $InstallDir ".$binary.agentenv-new"
+            $backup = Join-Path $InstallDir ".$binary.agentenv-old"
+            if (Test-Path $destination) { Move-Item $destination $backup }
+            $swapped.Add($binary)
+            Move-Item $staged $destination
+        }
+    }
+    catch {
+        $installFailure = $_.Exception.Message
+        $rollbackFailure = $null
+        for ($index = $swapped.Count - 1; $index -ge 0; $index--) {
+            $binary = $swapped[$index]
+            $destination = Join-Path $InstallDir $binary
+            $backup = Join-Path $InstallDir ".$binary.agentenv-old"
+            try {
+                if (Test-Path $destination) {
+                    Remove-Item $destination -Force -ErrorAction Stop
+                }
+                if (Test-Path $destination) {
+                    throw "Rollback could not remove $destination."
+                }
+                if (Test-Path $backup) { Move-Item $backup $destination }
+            }
+            catch {
+                if (-not $rollbackFailure) { $rollbackFailure = $_.Exception.Message }
+            }
+        }
+        foreach ($binary in $binaries) {
+            Remove-Item (Join-Path $InstallDir ".$binary.agentenv-new") -Force -ErrorAction SilentlyContinue
+        }
+        if ($rollbackFailure) {
+            throw "Cannot install or restore the complete executable bundle; rerun the installer to repair it. Install error: $installFailure Rollback error: $rollbackFailure"
+        }
+        throw "Cannot install the complete executable bundle; the previous bundle was restored. $installFailure"
+    }
+    foreach ($binary in $binaries) {
+        Remove-Item (Join-Path $InstallDir ".$binary.agentenv-old") -Force -ErrorAction SilentlyContinue
+    }
     $installed = & (Join-Path $InstallDir 'agentenv.exe') --version
     Write-Host "Installed $installed to $(Join-Path $InstallDir 'agentenv.exe')"
 

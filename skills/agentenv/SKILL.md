@@ -6,8 +6,9 @@ description: >-
   user-specific configuration such as LLM endpoints, models, kubernetes
   contexts, or CI settings; when a command requires an API key or other
   secret; when the user asks to save configuration or register a credential;
-  or when project instructions mention agentenv. Credentials are injected
-  into target processes and are never printed.
+  when a configured local or SSH sudo target must run a privileged command;
+  or when project instructions mention agentenv. Credentials are delivered
+  through bounded consumer-specific channels and are never printed.
 ---
 
 # agentenv
@@ -166,7 +167,7 @@ agentenv credential add <name> --description "<text>" --provider keychain \
     --service <service> --account <account> --inject-as <ENV>
 agentenv credential add <name> --description "<text>" --provider command \
     --argv <arg> [--argv <arg> ...] --inject-as <ENV>
-agentenv credential set <name>           # store a keychain value (hidden prompt / stdin)
+agentenv credential set <name>           # store a keychain value at a hidden prompt
 ```
 
 Order for a new credential: `credential add` the definition, then for the
@@ -176,9 +177,8 @@ get their values from their external systems; `credential set` does not
 apply to them.
 
 `credential set` reads the value from a hidden terminal prompt, so prefer
-asking the user to run it themselves. If they hand the value to you
-instead, pipe it via stdin without echoing it into the transcript or shell
-history.
+asking the user to run it themselves. Never ask them to send the value in
+chat or place it in argv, an environment variable, a command pipe, or a file.
 
 Prefer `keychain` or `command` providers for local use; `env` exposes the
 value to every process inheriting the environment and suits CI.
@@ -203,6 +203,15 @@ services:
 `${OPENAI_API_KEY}` interpolation is also supported by Compose. Do not use an
 `env_file:` containing secrets; it persists credentials in a file.
 
+## Privileged execution
+
+When the request uses a configured `sudo-target`, read
+[references/sudo-execution.md](references/sudo-execution.md) before planning,
+checking, executing, creating, or rotating that target. It contains the exact
+local/SSH commands, authentication-purpose workflow, one-shot failure rules,
+and current platform limitations. Ordinary `run --with` must not consume an
+authentication credential.
+
 ## Exit codes and errors
 
 | Code | Meaning | Typical response |
@@ -215,6 +224,8 @@ services:
 | 5 | Project trust-state failure | Run `agentenv project status`; use `allow` or `revoke` as indicated |
 | 6 | Project requirements unsatisfied or uncheckable (`project status` only) | Read the status report and repair the reported requirement or profile selection |
 | 7 | `update` failed, or replaced the binary but left an agent skill unrefreshed | Relay the diagnostic; rerun `agentenv update --force` once the cause is fixed |
+| 9 | Owned sudo execution, protocol, or helper failure | Relay the diagnostic; repair the named prerequisite before retrying |
+| 10 | Sudo completion could not be confirmed, locally or over SSH | Do not retry; report that the command may have run |
 | 127 | `run` target could not be executed | The target command is missing, not agentenv |
 
 Diagnostics never echo secret values, so it is safe to relay them to the

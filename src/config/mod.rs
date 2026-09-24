@@ -15,7 +15,8 @@ pub(crate) mod validate;
 pub mod write;
 
 pub use model::{
-    is_valid_env_name, Config, CredentialDef, CredentialRef, Profile, Provider, REFERENCE_PREFIX,
+    is_valid_env_name, Config, CredentialDef, CredentialRef, CredentialUsage, Profile, Provider,
+    SshAuth, SshConnection, SshTarget, SudoTarget, SudoTransport, REFERENCE_PREFIX,
 };
 pub use validate::resolve_in_entry;
 
@@ -197,7 +198,7 @@ inject_as = "OPENAI_API_KEY"
         let credential = config
             .credential("company_llm")
             .expect("the credential loads");
-        assert_eq!(credential.inject_as, "OPENAI_API_KEY");
+        assert_eq!(credential.inject_as.as_deref(), Some("OPENAI_API_KEY"));
         assert_eq!(credential.provider.kind(), "env");
     }
 

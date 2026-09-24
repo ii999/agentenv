@@ -2,12 +2,15 @@
 //! `credential add`).
 
 use agentenv::config::write as config_write;
-use agentenv::config::write::{CredentialAddRequest, ProviderSpec, SetRequest, ValueSpec};
+use agentenv::config::write::{
+    CredentialAddRequest, CredentialUpdateRequest, ProviderSpec, SetRequest, ValueSpec,
+};
+use agentenv::config::CredentialUsage;
 use agentenv::error::AppError;
 
 use super::{
-    trusted_project_pin, Command, CredentialAddArgs, CredentialArgs, CredentialCommand, Invocation,
-    Output, ProviderKind, ValueType,
+    trusted_project_pin, Command, CredentialAddArgs, CredentialArgs, CredentialCommand,
+    CredentialUsageArg, Invocation, Output, ProviderKind, ValueType,
 };
 
 /// Runs a config-write command (`set`, `unset`, `init`, `credential add`).
@@ -22,7 +25,13 @@ pub(super) fn execute(
         Command::Set(_) => "set",
         Command::Unset { .. } => "unset",
         Command::Init => "init",
-        Command::Credential(_) => "credential add",
+        Command::Credential(CredentialArgs {
+            command: CredentialCommand::Add(_),
+        }) => "credential add",
+        Command::Credential(CredentialArgs {
+            command: CredentialCommand::Update(_),
+        }) => "credential update",
+        Command::Credential(_) => unreachable!("read credential command routed to writer"),
         _ => unreachable!("write::execute handles only write commands"),
     };
     if invocation.json {
@@ -58,6 +67,16 @@ pub(super) fn execute(
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Add(args),
         }) => config_write::credential_add(credential_add_request(args)?, env)?,
+        Command::Credential(CredentialArgs {
+            command: CredentialCommand::Update(args),
+        }) => config_write::credential_update(
+            CredentialUpdateRequest {
+                name: args.name,
+                usages: normalize_usages(args.usages),
+                inject_as: args.inject_as,
+            },
+            env,
+        )?,
         _ => unreachable!("write::execute handles only write commands"),
     };
     Ok(Output {
@@ -75,6 +94,7 @@ fn credential_add_request(args: CredentialAddArgs) -> Result<CredentialAddReques
         description,
         provider,
         inject_as,
+        usages,
         env_var,
         service,
         account,
@@ -133,10 +153,27 @@ fn credential_add_request(args: CredentialAddArgs) -> Result<CredentialAddReques
             ProviderSpec::Command { argv }
         }
     };
+    let explicit_usages = !usages.is_empty();
     Ok(CredentialAddRequest {
         name,
         description,
         provider: spec,
         inject_as,
+        usages: normalize_usages(usages),
+        explicit_usages,
     })
+}
+
+fn normalize_usages(values: Vec<CredentialUsageArg>) -> Vec<CredentialUsage> {
+    if values.is_empty() {
+        return vec![CredentialUsage::Environment];
+    }
+    values
+        .into_iter()
+        .map(|value| match value {
+            CredentialUsageArg::Environment => CredentialUsage::Environment,
+            CredentialUsageArg::Sudo => CredentialUsage::Sudo,
+            CredentialUsageArg::SshPassword => CredentialUsage::SshPassword,
+        })
+        .collect()
 }

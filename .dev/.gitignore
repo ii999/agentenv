@@ -1,0 +1,4 @@
+/artifacts/
+/work/*/state.json
+/work/
+!/work/*/rounds/*/evidence/*.log

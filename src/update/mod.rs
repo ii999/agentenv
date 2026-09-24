@@ -3,10 +3,10 @@
 //! An update has two halves that share one interface: [`check`] resolves the
 //! installed binary, the platform's release asset, and the newest published
 //! version without writing anything; [`apply`] does the same and then
-//! downloads, verifies, and replaces the binary and every installed copy of
-//! the agent skill. Everything the command needs is derived from the running
-//! binary and the user's home directory, so there is no install manifest to
-//! keep in sync with the install scripts.
+//! downloads, verifies, and replaces the main executable, both companions,
+//! and every installed copy of the agent skill. Everything the command needs
+//! is derived from the running binary and the user's home directory, so there
+//! is no install manifest to keep in sync with the install scripts.
 //!
 //! Release discovery goes through the `SHA256SUMS` file each release ships:
 //! its asset names carry the tag and its digests verify the download, so one
@@ -120,13 +120,13 @@ pub fn check(
     })
 }
 
-/// Installs the requested release over the running binary and every
+/// Installs the requested release over the running executable bundle and every
 /// installed skill copy.
 ///
-/// The download is verified against `SHA256SUMS`, the extracted binary is
-/// executed once to confirm it reports the release version, and only then is
-/// the running binary replaced. A skill copy that fails to refresh after the
-/// binary is in place is recorded in the report instead of failing the whole
+/// The download is verified against `SHA256SUMS`, and every extracted
+/// executable must report its exact identity and release version before the
+/// installed bundle is replaced. A skill copy that fails to refresh after the
+/// bundle is in place is recorded in the report instead of failing the whole
 /// run, because the binary replacement has already happened and the report
 /// must say so.
 pub fn apply(
@@ -162,10 +162,17 @@ pub fn apply(
         format!("Verified {} against SHA256SUMS", release.asset.name),
     )?;
     let extracted = release::extract(&archive, &release, workdir.path())?;
-    release::verify_binary(&extracted.binary, &release.version)?;
+    release::verify_bundle(&extracted, &release.version)?;
 
-    install::replace_binary(&extracted.binary, &status.binary)?;
-    write_progress(progress, format!("Replaced {}", status.binary.display()))?;
+    let installation = Installation::discover(env)?;
+    install::replace_bundle(&extracted, &installation)?;
+    write_progress(
+        progress,
+        format!(
+            "Replaced the matching executable bundle at {}",
+            status.binary.display()
+        ),
+    )?;
 
     let mut skills = Vec::new();
     let mut skill_failures = Vec::new();

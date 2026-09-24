@@ -6,6 +6,8 @@
 //! re-check structure. Profiles, entries, and credentials keep config-file
 //! order (SPEC-021); the open-schema entry data stays in `toml::Table`s.
 
+use std::path::PathBuf;
+
 use toml::{Table, Value};
 
 use crate::error::AppError;
@@ -40,6 +42,33 @@ pub enum Provider {
     Command { argv: Vec<String> },
 }
 
+/// A consumer that may receive a credential's value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialUsage {
+    Environment,
+    Sudo,
+    SshPassword,
+}
+
+impl CredentialUsage {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::Sudo => "sudo",
+            Self::SshPassword => "ssh-password",
+        }
+    }
+
+    pub fn parse(token: &str) -> Option<Self> {
+        match token {
+            "environment" => Some(Self::Environment),
+            "sudo" => Some(Self::Sudo),
+            "ssh-password" => Some(Self::SshPassword),
+            _ => None,
+        }
+    }
+}
+
 impl Provider {
     /// The provider type token used in text and JSON output.
     pub fn kind(&self) -> &'static str {
@@ -61,7 +90,66 @@ pub struct CredentialDef {
     /// The provider and its fields.
     pub provider: Provider,
     /// The environment variable this credential injects by default.
-    pub inject_as: String,
+    pub inject_as: Option<String>,
+    /// The explicitly permitted consumers. Omission in TOML is normalized to
+    /// environment-only use for backward compatibility.
+    pub usages: Vec<CredentialUsage>,
+}
+
+impl CredentialDef {
+    pub fn permits(&self, usage: CredentialUsage) -> bool {
+        self.usages.contains(&usage)
+    }
+}
+
+/// A validated `kind = "sudo-target"` profile entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SudoTarget {
+    pub description: String,
+    pub credential: CredentialRef,
+    pub auth_user: String,
+    pub run_as: String,
+    pub sudo_path: PathBuf,
+    pub transport: SudoTransport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SudoTransport {
+    Local,
+    Ssh(SshTarget),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshTarget {
+    pub host_key_alias: String,
+    pub known_hosts_file: PathBuf,
+    pub helper_path: PathBuf,
+    pub connection: SshConnection,
+    pub auth: SshAuth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshConnection {
+    Config {
+        host_alias: String,
+        config_file: Option<PathBuf>,
+    },
+    Explicit {
+        hostname: String,
+        user: String,
+        port: u16,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshAuth {
+    PublicKey {
+        identity_files: Vec<PathBuf>,
+        use_agent: bool,
+    },
+    Password {
+        credential: CredentialRef,
+    },
 }
 
 /// A parsed `credential://<name>[?as=<ENV>]` reference (SPEC-012 grammar).
@@ -143,6 +231,13 @@ impl Config {
         self.credentials
             .iter()
             .find(|credential| credential.name == name)
+    }
+
+    /// Returns the typed sudo target for a marked entry. Configuration load
+    /// has already validated every field and reference used here.
+    pub fn sudo_target(&self, profile: &Profile, name: &str) -> Option<SudoTarget> {
+        let entry = profile.entries.get(name)?.as_table()?;
+        (entry.get("kind")?.as_str()? == "sudo-target").then(|| sudo_target_from_validated(entry))
     }
 
     /// Resolves the active profile (SPEC-004): the `--profile` flag, else
@@ -275,7 +370,21 @@ fn credential_from_validated(name: &str, value: &Value) -> CredentialDef {
     let inject_as = table
         .get("inject_as")
         .and_then(Value::as_str)
-        .expect("validated credential has a string inject_as");
+        .map(str::to_owned);
+    let usages = table.get("usages").map_or_else(
+        || vec![CredentialUsage::Environment],
+        |value| {
+            value
+                .as_array()
+                .expect("validated usages is an array")
+                .iter()
+                .map(|item| {
+                    CredentialUsage::parse(item.as_str().expect("validated usage is a string"))
+                        .expect("validated usage token")
+                })
+                .collect()
+        },
+    );
     let provider = match table
         .get("provider")
         .and_then(Value::as_str)
@@ -319,7 +428,109 @@ fn credential_from_validated(name: &str, value: &Value) -> CredentialDef {
         name: name.to_owned(),
         description: description.to_owned(),
         provider,
-        inject_as: inject_as.to_owned(),
+        inject_as,
+        usages,
+    }
+}
+
+fn sudo_target_from_validated(entry: &Table) -> SudoTarget {
+    let sudo = entry["sudo"].as_table().expect("validated sudo table");
+    let credential = CredentialRef::parse(
+        sudo["credential"]
+            .as_str()
+            .expect("validated sudo credential"),
+    )
+    .expect("validated sudo reference");
+    let transport = match sudo["transport"].as_str().expect("validated transport") {
+        "local" => SudoTransport::Local,
+        "ssh" => {
+            let ssh = sudo["ssh"].as_table().expect("validated ssh table");
+            let auth = ssh["auth"].as_table().expect("validated ssh auth table");
+            let auth = match auth["method"].as_str().expect("validated auth method") {
+                "publickey" => SshAuth::PublicKey {
+                    identity_files: auth
+                        .get("identity_files")
+                        .and_then(Value::as_array)
+                        .map_or_else(Vec::new, |items| {
+                            items
+                                .iter()
+                                .map(|item| {
+                                    PathBuf::from(item.as_str().expect("validated identity path"))
+                                })
+                                .collect()
+                        }),
+                    use_agent: auth
+                        .get("use_agent")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                },
+                "password" => SshAuth::Password {
+                    credential: CredentialRef::parse(
+                        auth["credential"]
+                            .as_str()
+                            .expect("validated ssh credential"),
+                    )
+                    .expect("validated ssh reference"),
+                },
+                _ => unreachable!("validated auth method"),
+            };
+            let connection = match ssh["mode"].as_str().expect("validated ssh mode") {
+                "ssh-config" => SshConnection::Config {
+                    host_alias: ssh["host_alias"]
+                        .as_str()
+                        .expect("validated host alias")
+                        .to_owned(),
+                    config_file: ssh
+                        .get("config_file")
+                        .and_then(Value::as_str)
+                        .map(PathBuf::from),
+                },
+                "explicit" => SshConnection::Explicit {
+                    hostname: ssh["hostname"]
+                        .as_str()
+                        .expect("validated hostname")
+                        .to_owned(),
+                    user: ssh["user"].as_str().expect("validated user").to_owned(),
+                    port: u16::try_from(ssh["port"].as_integer().expect("validated port"))
+                        .expect("validated port range"),
+                },
+                _ => unreachable!("validated ssh mode"),
+            };
+            SudoTransport::Ssh(SshTarget {
+                host_key_alias: ssh["host_key_alias"]
+                    .as_str()
+                    .expect("validated host key alias")
+                    .to_owned(),
+                known_hosts_file: PathBuf::from(
+                    ssh["known_hosts_file"]
+                        .as_str()
+                        .expect("validated known hosts path"),
+                ),
+                helper_path: PathBuf::from(
+                    ssh["helper_path"].as_str().expect("validated helper path"),
+                ),
+                connection,
+                auth,
+            })
+        }
+        _ => unreachable!("validated transport"),
+    };
+    SudoTarget {
+        description: entry["description"]
+            .as_str()
+            .expect("validated description")
+            .to_owned(),
+        credential,
+        auth_user: sudo["auth_user"]
+            .as_str()
+            .expect("validated auth user")
+            .to_owned(),
+        run_as: sudo["run_as"]
+            .as_str()
+            .expect("validated run-as user")
+            .to_owned(),
+        sudo_path: PathBuf::from(sudo["sudo_path"].as_str().expect("validated sudo path")),
+        transport,
     }
 }
 
@@ -635,6 +846,13 @@ inject_as = "C1"
                 argv: vec!["op".to_owned(), "read".to_owned(), "x".to_owned()]
             }
         );
-        assert_eq!(config.credential("c1").expect("c2 exists").inject_as, "C1");
+        assert_eq!(
+            config
+                .credential("c1")
+                .expect("c2 exists")
+                .inject_as
+                .as_deref(),
+            Some("C1")
+        );
     }
 }

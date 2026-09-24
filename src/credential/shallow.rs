@@ -168,7 +168,8 @@ mod tests {
             provider: Provider::Env {
                 name: "COMPANY_LLM_TOKEN".to_owned(),
             },
-            inject_as: "OPENAI_API_KEY".to_owned(),
+            inject_as: Some("OPENAI_API_KEY".to_owned()),
+            usages: vec![crate::config::CredentialUsage::Environment],
         }
     }
 
@@ -180,7 +181,8 @@ mod tests {
                 service: "agentenv".to_owned(),
                 account: "personal".to_owned(),
             },
-            inject_as: "OPENAI_API_KEY".to_owned(),
+            inject_as: Some("OPENAI_API_KEY".to_owned()),
+            usages: vec![crate::config::CredentialUsage::Environment],
         }
     }
 
@@ -191,7 +193,8 @@ mod tests {
             provider: Provider::Command {
                 argv: argv.iter().map(|s| s.to_string()).collect(),
             },
-            inject_as: "C".to_owned(),
+            inject_as: Some("C".to_owned()),
+            usages: vec![crate::config::CredentialUsage::Environment],
         }
     }
 

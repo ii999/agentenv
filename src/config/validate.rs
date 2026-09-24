@@ -156,10 +156,442 @@ fn validate_profiles(root: &Table, violations: &mut Vec<Violation>) {
                 &format!("entry '{entry_name}'"),
                 violations,
             );
+            validate_sudo_target(&entry_path, entry, credentials, violations);
             validate_inject_table(name, entry_name, entry, violations);
             validate_entry_references(&entry_path, entry, credentials, violations);
         }
     }
+}
+
+fn validate_sudo_target(
+    path: &str,
+    entry: &Table,
+    credentials: Option<&Table>,
+    violations: &mut Vec<Violation>,
+) {
+    let Some(kind) = entry.get("kind") else {
+        return;
+    };
+    if kind.as_str() != Some("sudo-target") {
+        return;
+    }
+    for key in entry.keys() {
+        if !["description", "kind", "sudo"].contains(&key.as_str()) {
+            violation(violations, format!("{path}.{key}"), format!("unknown field '{key}' in sudo target; allowed fields are description, kind, and sudo"));
+        }
+    }
+    let Some(sudo) = required_table(entry, "sudo", path, violations) else {
+        return;
+    };
+    let transport = required_string(sudo, "transport", &format!("{path}.sudo"), violations);
+    let allowed = match transport {
+        Some("local") => &[
+            "transport",
+            "credential",
+            "auth_user",
+            "run_as",
+            "sudo_path",
+        ][..],
+        Some("ssh") => &[
+            "transport",
+            "credential",
+            "auth_user",
+            "run_as",
+            "sudo_path",
+            "ssh",
+        ][..],
+        Some(_) => {
+            violation(
+                violations,
+                format!("{path}.sudo.transport"),
+                "transport must be 'local' or 'ssh'".to_owned(),
+            );
+            &[][..]
+        }
+        None => &[][..],
+    };
+    close_table(sudo, &format!("{path}.sudo"), allowed, violations);
+    validate_auth_reference(
+        sudo.get("credential"),
+        &format!("{path}.sudo.credential"),
+        credentials,
+        "sudo",
+        violations,
+    );
+    let auth_user =
+        validate_connection_atom(sudo, "auth_user", &format!("{path}.sudo"), violations);
+    validate_connection_atom(sudo, "run_as", &format!("{path}.sudo"), violations);
+    validate_absolute_path(
+        sudo.get("sudo_path"),
+        &format!("{path}.sudo.sudo_path"),
+        PathKind::PosixDestination,
+        violations,
+    );
+    match transport {
+        Some("local") => {
+            if sudo.contains_key("ssh") {
+                violation(
+                    violations,
+                    format!("{path}.sudo.ssh"),
+                    "local transport does not allow an ssh table".to_owned(),
+                );
+            }
+        }
+        Some("ssh") => validate_ssh_target(path, sudo, credentials, auth_user, violations),
+        _ => {}
+    }
+}
+
+fn validate_ssh_target(
+    path: &str,
+    sudo: &Table,
+    credentials: Option<&Table>,
+    auth_user: Option<&str>,
+    violations: &mut Vec<Violation>,
+) {
+    let base = format!("{path}.sudo.ssh");
+    let Some(ssh) = required_table(sudo, "ssh", &format!("{path}.sudo"), violations) else {
+        return;
+    };
+    let mode = required_string(ssh, "mode", &base, violations);
+    let common = [
+        "mode",
+        "host_key_alias",
+        "known_hosts_file",
+        "helper_path",
+        "auth",
+    ];
+    let allowed: Vec<&str> = match mode {
+        Some("ssh-config") => common
+            .into_iter()
+            .chain(["host_alias", "config_file"])
+            .collect(),
+        Some("explicit") => common
+            .into_iter()
+            .chain(["hostname", "user", "port"])
+            .collect(),
+        Some(_) => {
+            violation(
+                violations,
+                format!("{base}.mode"),
+                "mode must be 'ssh-config' or 'explicit'".to_owned(),
+            );
+            Vec::new()
+        }
+        None => Vec::new(),
+    };
+    close_table(ssh, &base, &allowed, violations);
+    validate_connection_atom(ssh, "host_key_alias", &base, violations);
+    validate_absolute_path(
+        ssh.get("known_hosts_file"),
+        &format!("{base}.known_hosts_file"),
+        PathKind::ClientNative,
+        violations,
+    );
+    validate_absolute_path(
+        ssh.get("helper_path"),
+        &format!("{base}.helper_path"),
+        PathKind::RemoteHelper,
+        violations,
+    );
+    match mode {
+        Some("ssh-config") => {
+            validate_connection_atom(ssh, "host_alias", &base, violations);
+            if let Some(value) = ssh.get("config_file") {
+                validate_absolute_path(
+                    Some(value),
+                    &format!("{base}.config_file"),
+                    PathKind::ClientNative,
+                    violations,
+                );
+            }
+        }
+        Some("explicit") => {
+            validate_connection_atom(ssh, "hostname", &base, violations);
+            let user = validate_connection_atom(ssh, "user", &base, violations);
+            if let (Some(expected), Some(actual)) = (auth_user, user) {
+                if expected != actual {
+                    violation(
+                        violations,
+                        format!("{base}.user"),
+                        "explicit SSH user must equal sudo.auth_user".to_owned(),
+                    );
+                }
+            }
+            match ssh.get("port").and_then(Value::as_integer) {
+                Some(1..=65535) => {}
+                _ => violation(
+                    violations,
+                    format!("{base}.port"),
+                    "port must be an integer from 1 through 65535".to_owned(),
+                ),
+            }
+        }
+        _ => {}
+    }
+    let Some(auth) = required_table(ssh, "auth", &base, violations) else {
+        return;
+    };
+    let auth_base = format!("{base}.auth");
+    match required_string(auth, "method", &auth_base, violations) {
+        Some("publickey") => {
+            let explicit = mode == Some("explicit");
+            let allowed = if explicit {
+                &["method", "identity_files", "use_agent"][..]
+            } else {
+                &["method"][..]
+            };
+            close_table(auth, &auth_base, allowed, violations);
+            if !explicit {
+                return;
+            }
+            let files = auth.get("identity_files").and_then(Value::as_array);
+            if let Some(files) = files {
+                for (index, value) in files.iter().enumerate() {
+                    validate_absolute_path(
+                        Some(value),
+                        &format!("{auth_base}.identity_files[{index}]"),
+                        PathKind::ClientNative,
+                        violations,
+                    );
+                }
+            } else {
+                violation(
+                    violations,
+                    format!("{auth_base}.identity_files"),
+                    "identity_files must be an array of absolute paths (use an empty array when relying only on the agent)".to_owned(),
+                );
+            }
+            if auth.get("use_agent").and_then(Value::as_bool).is_none() {
+                violation(
+                    violations,
+                    format!("{auth_base}.use_agent"),
+                    "use_agent must be an explicit boolean".to_owned(),
+                );
+            }
+            let has_files = files.is_some_and(|v| !v.is_empty());
+            let uses_agent = auth
+                .get("use_agent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !has_files && !uses_agent {
+                violation(
+                    violations,
+                    auth_base.clone(),
+                    "publickey authentication requires identity_files and/or use_agent = true"
+                        .to_owned(),
+                );
+            }
+        }
+        Some("password") => {
+            close_table(auth, &auth_base, &["method", "credential"], violations);
+            validate_auth_reference(
+                auth.get("credential"),
+                &format!("{auth_base}.credential"),
+                credentials,
+                "ssh-password",
+                violations,
+            );
+        }
+        Some(_) => violation(
+            violations,
+            format!("{auth_base}.method"),
+            "method must be 'publickey' or 'password'".to_owned(),
+        ),
+        None => {}
+    }
+}
+
+fn validate_auth_reference(
+    value: Option<&Value>,
+    path: &str,
+    credentials: Option<&Table>,
+    usage: &str,
+    violations: &mut Vec<Violation>,
+) {
+    let Some(text) = value.and_then(Value::as_str) else {
+        violation(
+            violations,
+            path.to_owned(),
+            format!("a {usage} credential reference is required"),
+        );
+        return;
+    };
+    let reference = match CredentialRef::parse(text) {
+        Ok(value) => value,
+        Err(message) => {
+            violation(violations, path.to_owned(), message);
+            return;
+        }
+    };
+    if reference.target_override.is_some() {
+        violation(
+            violations,
+            path.to_owned(),
+            "authentication credential references cannot use '?as=' aliases".to_owned(),
+        );
+    }
+    let Some(definition) = credentials
+        .and_then(|items| items.get(&reference.name))
+        .and_then(Value::as_table)
+    else {
+        return;
+    };
+    if !raw_credential_permits(definition, usage) {
+        violation(
+            violations,
+            path.to_owned(),
+            format!(
+                "credential '{}' does not permit {usage} use",
+                reference.name
+            ),
+        );
+    }
+}
+
+fn raw_credential_permits(definition: &Table, usage: &str) -> bool {
+    definition
+        .get("usages")
+        .and_then(Value::as_array)
+        .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(usage)))
+}
+
+fn required_table<'a>(
+    table: &'a Table,
+    field: &str,
+    base: &str,
+    violations: &mut Vec<Violation>,
+) -> Option<&'a Table> {
+    match table.get(field).and_then(Value::as_table) {
+        Some(value) => Some(value),
+        None => {
+            violation(
+                violations,
+                format!("{base}.{field}"),
+                format!("{field} must be a table"),
+            );
+            None
+        }
+    }
+}
+fn required_string<'a>(
+    table: &'a Table,
+    field: &str,
+    base: &str,
+    violations: &mut Vec<Violation>,
+) -> Option<&'a str> {
+    match table
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+    {
+        Some(value) => Some(value),
+        None => {
+            violation(
+                violations,
+                format!("{base}.{field}"),
+                format!("{field} must be a non-empty string"),
+            );
+            None
+        }
+    }
+}
+fn validate_connection_atom<'a>(
+    table: &'a Table,
+    field: &str,
+    base: &str,
+    violations: &mut Vec<Violation>,
+) -> Option<&'a str> {
+    let value = required_string(table, field, base, violations)?;
+    let has_ambiguous_destination_syntax = match field {
+        "hostname" | "host_alias" | "host_key_alias" => value.contains(['@', '/', '\\']),
+        "auth_user" | "run_as" | "user" => value.contains(['@', ':', '/', '\\']),
+        _ => false,
+    };
+    if value.len() > 255
+        || value.starts_with('-')
+        || value.chars().any(|c| c.is_control() || c.is_whitespace())
+        || has_ambiguous_destination_syntax
+    {
+        violation(
+            violations,
+            format!("{base}.{field}"),
+            format!("{field} contains unsupported connection metadata"),
+        );
+    }
+    Some(value)
+}
+#[derive(Clone, Copy)]
+enum PathKind {
+    /// A file read by the local SSH client. POSIX, drive-letter, and UNC
+    /// absolute paths are accepted so the same schema works on every client.
+    ClientNative,
+    /// An executable on a supported Unix destination.
+    PosixDestination,
+    /// The one executable path inserted into the remote login-shell command.
+    RemoteHelper,
+}
+
+fn validate_absolute_path(
+    value: Option<&Value>,
+    path: &str,
+    kind: PathKind,
+    violations: &mut Vec<Violation>,
+) {
+    let Some(text) = value.and_then(Value::as_str).filter(|v| !v.is_empty()) else {
+        violation(
+            violations,
+            path.to_owned(),
+            "must be a non-empty absolute path".to_owned(),
+        );
+        return;
+    };
+    let bytes = text.as_bytes();
+    let portable_absolute = text.starts_with('/')
+        || text.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'));
+    let absolute = match kind {
+        PathKind::ClientNative => portable_absolute,
+        PathKind::PosixDestination | PathKind::RemoteHelper => text.starts_with('/'),
+    };
+    let has_control = text.chars().any(char::is_control);
+    let helper_safe = !matches!(kind, PathKind::RemoteHelper)
+        || (text.is_ascii()
+            && !text
+                .chars()
+                .any(|c| c == '\\' || c.is_whitespace() || "'\"`$;&|<>*?()[]{}!".contains(c))
+            && text
+                .split('/')
+                .all(|segment| segment != "." && segment != ".."));
+    if !absolute || text.len() > 4096 || has_control || !helper_safe {
+        let message = match kind {
+            PathKind::ClientNative => {
+                "must be an absolute client path without control characters"
+            }
+            PathKind::PosixDestination => {
+                "must be an absolute POSIX destination path without control characters"
+            }
+            PathKind::RemoteHelper => "must be an absolute conservative ASCII path without control characters, backslashes, whitespace, shell metacharacters, or dot segments",
+        };
+        violation(violations, path.to_owned(), message.to_owned());
+    }
+}
+fn close_table(table: &Table, base: &str, allowed: &[&str], violations: &mut Vec<Violation>) {
+    for key in table.keys() {
+        if !allowed.contains(&key.as_str()) {
+            violation(
+                violations,
+                format!("{base}.{key}"),
+                format!("unknown field '{key}' in closed table"),
+            );
+        }
+    }
+}
+fn violation(violations: &mut Vec<Violation>, path: String, message: String) {
+    violations.push(Violation { path, message });
 }
 
 fn require_description(table: &Table, path: &str, owner: &str, violations: &mut Vec<Violation>) {
@@ -525,6 +957,10 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
         &format!("credential '{name}'"),
         violations,
     );
+    let usages = validate_credential_usages(name, definition, &path, violations);
+    let environment = usages
+        .as_ref()
+        .is_some_and(|items| items.contains(&"environment"));
     match definition.get("inject_as") {
         Some(Value::String(inject_as)) if !inject_as.is_empty() => {
             // SPEC-002 rule 6.
@@ -535,6 +971,12 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
                         "inject_as '{inject_as}' is not a valid environment variable name \
                          (expected [A-Za-z_][A-Za-z0-9_]*)"
                     ),
+                });
+            }
+            if !environment {
+                violations.push(Violation {
+                    path: format!("{path}.inject_as"),
+                    message: "inject_as is forbidden for authentication credentials".to_owned(),
                 });
             }
         }
@@ -551,13 +993,11 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
                       variable"
                 .to_owned(),
         }),
-        None => violations.push(Violation {
+        None if environment => violations.push(Violation {
             path: format!("{path}.inject_as"),
-            message: format!(
-                "credential '{name}' requires a non-empty string inject_as naming the target \
-                 environment variable; add an inject_as field"
-            ),
+            message: format!("credential '{name}' permits environment use and requires a non-empty string inject_as"),
         }),
+        None => {}
     }
     let provider = match definition.get("provider") {
         Some(Value::String(provider)) if PROVIDERS.contains(&provider.as_str()) => {
@@ -591,6 +1031,17 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
             None
         }
     };
+    if provider == Some("env")
+        && usages
+            .as_ref()
+            .is_some_and(|items| items.iter().any(|usage| *usage != "environment"))
+    {
+        violations.push(Violation {
+            path: format!("{path}.provider"),
+            message: "the env provider cannot be used for sudo or SSH password authentication"
+                .to_owned(),
+        });
+    }
     match provider {
         Some("env") => match definition.get("name") {
             Some(Value::String(variable)) if !variable.is_empty() => {
@@ -665,9 +1116,16 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
     // provider violation already names the problem.
     if let Some(provider) = provider {
         let allowed_fields: &[&str] = match provider {
-            "env" => &["description", "inject_as", "provider", "name"],
-            "keychain" => &["description", "inject_as", "provider", "service", "account"],
-            _ => &["description", "inject_as", "provider", "argv"],
+            "env" => &["description", "inject_as", "usages", "provider", "name"],
+            "keychain" => &[
+                "description",
+                "inject_as",
+                "usages",
+                "provider",
+                "service",
+                "account",
+            ],
+            _ => &["description", "inject_as", "usages", "provider", "argv"],
         };
         for key in definition.keys() {
             if !allowed_fields.contains(&key.as_str()) {
@@ -682,6 +1140,67 @@ fn validate_credential(name: &str, definition: &Table, violations: &mut Vec<Viol
             }
         }
     }
+}
+
+fn validate_credential_usages<'a>(
+    name: &str,
+    definition: &'a Table,
+    path: &str,
+    violations: &mut Vec<Violation>,
+) -> Option<Vec<&'a str>> {
+    let Some(value) = definition.get("usages") else {
+        return Some(vec!["environment"]);
+    };
+    let Some(array) = value.as_array() else {
+        violation(
+            violations,
+            format!("{path}.usages"),
+            "usages must be a non-empty array of purpose strings".to_owned(),
+        );
+        return None;
+    };
+    if array.is_empty() {
+        violation(
+            violations,
+            format!("{path}.usages"),
+            format!("credential '{name}' usages must not be empty"),
+        );
+        return None;
+    }
+    let mut parsed = Vec::new();
+    for (index, item) in array.iter().enumerate() {
+        let Some(token) = item.as_str() else {
+            violation(
+                violations,
+                format!("{path}.usages[{index}]"),
+                "usage must be one of: environment, sudo, ssh-password".to_owned(),
+            );
+            continue;
+        };
+        if !["environment", "sudo", "ssh-password"].contains(&token) {
+            violation(
+                violations,
+                format!("{path}.usages[{index}]"),
+                "unknown credential usage; expected environment, sudo, or ssh-password".to_owned(),
+            );
+        } else if parsed.contains(&token) {
+            violation(
+                violations,
+                format!("{path}.usages[{index}]"),
+                format!("duplicate credential usage '{token}'"),
+            );
+        } else {
+            parsed.push(token);
+        }
+    }
+    if parsed.contains(&"environment") && parsed.iter().any(|usage| *usage != "environment") {
+        violation(
+            violations,
+            format!("{path}.usages"),
+            "environment usage cannot be combined with sudo or ssh-password".to_owned(),
+        );
+    }
+    Some(parsed)
 }
 
 #[cfg(test)]

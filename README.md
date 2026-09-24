@@ -27,7 +27,9 @@ prebuilt binaries and a `SHA256SUMS` checksum file for:
 ### Install script
 
 The scripts download the archive for the current platform over HTTPS,
-verify its SHA-256 checksum, and install the binary and the agent skill.
+verify its SHA-256 checksum, and install the matching `agentenv`,
+`agentenv-sudo-helper`, and `agentenv-ssh-askpass` bundle plus the agent skill.
+They validate the complete bundle before replacing installed executables.
 
 On macOS and Linux:
 
@@ -38,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/ii999/agentenv/main/install.sh | ba
 The binary lands in `~/.local/bin` and the agent skill in
 `~/.agents/skills/agentenv`. Pass `--claude-skills` to also install the
 skill to `~/.claude/skills` for Claude Code, `--no-skill` to install the
-binary only, `--version <tag>` to pin a release, and `--dir <path>` to
+executable bundle only, `--version <tag>` to pin a release, and `--dir <path>` to
 change the binary directory (`AGENTENV_VERSION` and `AGENTENV_INSTALL_DIR`
 work the same way). When piping, place options after `bash -s --`:
 
@@ -67,7 +69,7 @@ curl -fsSLO "$base/agentenv-v0.2.0-aarch64-apple-darwin.tar.gz"
 curl -fsSLO "$base/SHA256SUMS"
 shasum -a 256 --check --ignore-missing SHA256SUMS
 tar -xzf agentenv-v0.2.0-aarch64-apple-darwin.tar.gz
-install -m 755 agentenv-v0.2.0-aarch64-apple-darwin/agentenv ~/.local/bin/
+install -m 755 agentenv-v0.2.0-aarch64-apple-darwin/agentenv* ~/.local/bin/
 ```
 
 Substitute the archive name for your platform from the table above. On Linux,
@@ -92,8 +94,8 @@ agentenv update
 
 `update` resolves the latest release from its `SHA256SUMS` file, downloads
 the archive for the running binary's platform, verifies the checksum, runs
-the downloaded binary once to confirm it reports the release version, and
-then replaces the binary in place. Every installed copy of the agent skill
+all three downloaded executables to confirm their identities and release
+version, and then replaces the bundle in place. Every installed copy of the agent skill
 (`~/.agents/skills/agentenv` and `~/.claude/skills/agentenv`) is refreshed
 from the same release; a copy that was never installed stays absent.
 
@@ -104,11 +106,13 @@ from the same release; a copy that was never installed stays absent.
   installed version.
 - `--force` reinstalls the current version, which repairs a damaged skill
   directory.
-- `--no-skill` updates the binary only.
+- `--no-skill` updates the executable bundle while leaving installed agent
+  skills unchanged.
 
 `update` refuses binaries installed by cargo or Homebrew and names the
 matching upgrade command instead. `AGENTENV_RELEASE_BASE_URL` points it at
-a release mirror.
+a release mirror. A missing or mismatched companion is never bypassed: rerun
+`agentenv update --force` or the installer to repair the complete bundle.
 
 ## Configuration
 
@@ -252,6 +256,110 @@ discovery for an ordinary invocation. The bypass does not apply to `agentenv
 project status`, `agentenv project allow`, or `agentenv project revoke`; those
 commands always discover the nearest project file.
 
+## Privileged command execution
+
+`sudo` executes one configured target once. Passwords are resolved only through
+the authentication channel; never put a password in command arguments,
+environment variables, chat, redirected command stdin, or a config value.
+
+```bash
+agentenv sudo --with local_admin -- /usr/bin/id -u
+agentenv --profile work sudo --with prod_admin -- /usr/bin/systemctl restart nginx
+agentenv sudo --with prod_admin --cwd /var/lib/example -- /usr/bin/tee config.json
+agentenv sudo --with prod_admin --plan --json -- /usr/bin/systemctl restart nginx
+agentenv sudo --with prod_admin --check --json
+```
+
+`--plan` performs no credential lookup, SSH evaluation, or connection.
+`--check` checks local prerequisites or the remote helper handshake without
+requesting a sudo password. Execution uses pipes and no PTY, so interactive
+shells, terminal programs, password changes, MFA conversations, and sudoers
+`requiretty` policies are unsupported. Local execution refuses a terminal as
+stdin; redirect it from a file, a pipe, or `/dev/null`.
+
+### Credentials and targets
+
+Declare each authentication purpose explicitly. `credential update` changes
+metadata only; it does not read, copy, or replace the stored value.
+
+```bash
+agentenv credential add prod_account \
+  --description "Production deploy password." \
+  --provider keychain --service agentenv.sudo --account prod/deploy \
+  --usage sudo --usage ssh-password
+agentenv credential set prod_account
+agentenv credential update prod_account --usage sudo --usage ssh-password
+```
+
+`credential set` uses hidden local input. Run it directly at a terminal. Do not
+pass its value as an argument or environment variable. Authentication
+credentials have no `inject_as`; the env provider and `?as=` overrides are not
+allowed for authentication use.
+
+Create a complete typed target atomically with `set --type json`. A local
+target uses `transport = "local"`. An SSH target uses either an `ssh-config`
+alias or a fully explicit hostname, user, and port; both modes also bind a
+host-key alias, known-hosts file, remote helper path, and explicit public-key
+or saved-password authentication method. The sudo and SSH login references are
+independent. They may name one definition that permits both usages, but each
+stage requests and validates it separately. Rotating that shared stored value
+changes both stages; separate definitions rotate independently.
+
+Host-key material must be enrolled out of band after verifying its fingerprint
+with a trusted source. `ssh-keyscan` output alone does not verify server
+identity. The selected sudoers rule must authorize the actual target executable
+and arguments because agentenv calls that executable directly through sudo; it
+does not replace it with a privileged shell or wrapper.
+
+### Remote helper deployment
+
+Remote execution requires the matching unprivileged
+`agentenv-sudo-helper` on the destination. Unix release jobs publish it as a
+standalone checksummed asset as well as inside the archive. Verify the release
+checksum, copy the helper through an independently authorized deployment path,
+place it at the absolute user-owned `helper_path`, make it executable, and then
+run the configured check:
+
+```bash
+agentenv sudo --with prod_admin --check --json
+```
+
+The helper runs as the SSH login user and needs no root installation, service,
+credential store, Python, or Node.js. agentenv never uploads, downloads,
+self-updates, or installs it during execution. A missing or mismatched helper
+fails before the sudo password is resolved; repair the deployment explicitly.
+
+### Authentication and failure limits
+
+Each SSH-login and sudo password must be complete UTF-8 of at most 255 encoded
+bytes, nonempty, and contain no CR, LF, or NUL. Values are preserved exactly,
+including leading and trailing spaces; they are never trimmed or truncated.
+One challenge is answered at most once per stage. There is no automatic retry.
+Exit code `10` means agentenv could not confirm how the command ended, locally
+or over SSH: for example, the connection was lost after the request may have
+reached the helper, sudo did not exit after a forwarded cancellation signal,
+or output could not be completed. The command may have run; never replay it
+automatically. Exit code `9` is an owned execution, protocol, or helper failure.
+Both carry a `sudo-execution:` prefix on stderr, which distinguishes them from a
+target that itself exits with `9` or `10`. A cancelled run reports the status
+that sudo or the remote helper actually observed. A reported target status,
+including `255`, remains the target's status when it arrived in a valid remote
+result; a later `sudo-execution:` warning such as `ssh-close-failed`,
+`output-interrupted`, or `remote-protocol-after-result` does not replace it.
+
+Current compatibility evidence is deliberately limited and is recorded in
+`docs/design/sudo-release-evidence.md`:
+
+- Linux destinations were measured only on arm64 Debian 13 with sudo 1.9.16p2,
+  using debug builds. The repository labs run 18 local, 37 SSH, and 16 policy
+  and refusal cases there. The shipped x86_64 Linux asset has no recorded run.
+- The native macOS OpenSSH client passed 8 cases on arm64 against that Linux
+  destination. The x86_64 macOS client and macOS local sudo remain unverified.
+- All Windows SSH execution is unavailable in this release because the native
+  client boundary is not implemented. Confidential password IPC and native
+  Windows OpenSSH behavior are also unverified. Native Windows local sudo is
+  outside this release.
+
 ## Agent usage protocol
 
 A full agent skill ships in `skills/agentenv/` and in every release archive;
@@ -391,6 +499,10 @@ agentenv credential add <name> --description "<text>" --provider keychain \
     --service <service> --account <account> --inject-as <ENV>
 agentenv credential add <name> --description "<text>" --provider command \
     --argv <arg> [--argv <arg> ...] --inject-as <ENV>
+agentenv credential add <name> --description "<text>" --provider keychain \
+    --service <service> --account <account> --usage sudo [--usage ssh-password]
+agentenv credential update <name> --usage <environment|sudo|ssh-password> \
+    [--usage <purpose> ...] [--inject-as <ENV>]
 ```
 
 Maintenance commands are:
@@ -409,13 +521,18 @@ refreshes installed agent skills; see [Update](#update).
 
 `credential list` performs only a shallow status check and does not read a
 secret store or execute a provider command. `credential check` resolves one
-credential and reports availability without printing its value. `credential
-set` accepts a keychain credential from a hidden terminal prompt or standard
-input. Environment and command credentials are managed by their external
+credential and reports availability without printing its value. Run
+`credential set` directly to enter a keychain credential at its hidden terminal
+prompt; do not put the value in argv, an environment variable, chat, a command
+pipe, or a file. Environment and command credentials are managed by their external
 systems and cannot be set by this command. `credential add` writes a
 credential definition to the config file — never a value; define the
 credential first, then reference it from entries (`credential://<name>`) and,
 for the keychain provider, store its value with `credential set`.
+`credential update` replaces only the permitted-purpose metadata and validates
+the whole file before writing; it never resolves or changes the saved value.
+`credential list --json` reports an additive `usages` array and always includes
+`inject_as`, which is `null` for authentication-only definitions.
 
 ## Providers
 
@@ -425,9 +542,12 @@ Prefer `keychain` or `command` for local development:
   Manager on Windows, and a secret-service implementation such as GNOME
   Keyring or KWallet on Linux.
 - `command` executes `argv` directly through the operating system, without a
-  shell. Its standard output supplies the credential; the provider strips one
-  trailing newline. Standard input and standard error remain available to the
-  external command for interactive authentication.
+  shell. For ordinary environment injection, its standard output supplies the
+  credential, one trailing newline is stripped, and the command inherits stdin
+  and stderr. For `sudo` or `ssh-password` use, the provider is confidential
+  and noninteractive: stdin and stderr are closed, stdout is bounded, and its
+  complete output is validated without stripping a newline. An authentication
+  provider must emit only the password bytes, with no CR, LF, or NUL.
 - `env` is useful for CI and already-managed shells. Its value is readable by
   any process that inherits the environment, including an agent process, so it
   is a weaker choice for local use.
@@ -616,6 +736,8 @@ Commands use these statuses:
 | `5` | Project trust-state failure: `status` found an untrusted, invalid, or unavailable project file, or `allow`/`revoke` found no project file |
 | `6` | Project requirements are unsatisfied or cannot be checked by `status` |
 | `7` | `update` could not resolve, download, verify, or install a release, or replaced the binary but could not refresh an agent skill |
+| `9` | `sudo` owned execution, protocol, or helper failure (stderr prefix `sudo-execution:`) |
+| `10` | `sudo` completion could not be confirmed; the command may have run (stderr prefix `sudo-execution: completion-unconfirmed:`) |
 | `127` | `run` target could not be executed |
 
 ## License

@@ -59,11 +59,30 @@ impl Server {
 
     /// Publishes `tag` with the probe as its binary and `skill_text` as the
     /// packaged `SKILL.md`; `digest_override` corrupts the checksum entry.
-    fn publish(&self, tag: &str, skill_text: Option<&str>, digest_override: Option<&str>) {
+    fn publish(
+        &self,
+        tag: &str,
+        skill_text: Option<&str>,
+        digest_override: Option<&str>,
+        current_bundle: bool,
+        omit: Option<&str>,
+    ) {
         let stem = format!("agentenv-{tag}-{TARGET}");
         let staging = self.root.path().join("staging").join(&stem);
         fs::create_dir_all(&staging).expect("staging dir");
-        fs::copy(cargo_bin("test-probe"), staging.join(BINARY_NAME)).expect("probe copied");
+        let main = if current_bundle {
+            cargo_bin("agentenv")
+        } else {
+            cargo_bin("test-probe")
+        };
+        fs::copy(main, staging.join(BINARY_NAME)).expect("main copied");
+        for name in ["agentenv-sudo-helper", "agentenv-ssh-askpass"] {
+            let packaged = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+            if omit == Some(name) {
+                continue;
+            }
+            fs::copy(cargo_bin(name), staging.join(packaged)).expect("companion copied");
+        }
         if let Some(text) = skill_text {
             let skill = staging.join("skills").join("agentenv");
             fs::create_dir_all(&skill).expect("skill dir");
@@ -240,7 +259,7 @@ fn read(path: &Path) -> String {
 #[test]
 fn check_reports_a_newer_release_without_writing() {
     let server = Server::start();
-    server.publish(&format!("v{NEXT}"), Some("new skill"), None);
+    server.publish(&format!("v{NEXT}"), Some("new skill"), None, false, None);
     let install = Install::new(&["bin"]);
 
     let run = install.run(&server, &["update", "--check"]);
@@ -262,16 +281,26 @@ fn check_reports_a_newer_release_without_writing() {
 #[test]
 fn update_replaces_the_binary_and_installed_skills_only() {
     let server = Server::start();
-    server.publish(&format!("v{NEXT}"), Some("new skill"), None);
+    server.publish(&format!("v{CURRENT}"), Some("new skill"), None, true, None);
     let install = Install::new(&["bin"]);
     install.seed_skill(&[".agents", "skills"], "old skill");
 
-    let run = install.run(&server, &["update"]);
+    let run = install.run(&server, &["update", "--force"]);
     assert_exit(&run, 0, "update succeeds");
-    assert_mentions(&run, NEXT, "the new version is reported");
-    assert!(!install.binary_is_original(), "the binary was replaced");
+    assert_mentions(&run, CURRENT, "the installed version is reported");
     let replaced = install.run(&server, &["--version"]);
-    assert_eq!(replaced.stdout.trim(), format!("agentenv {NEXT}"));
+    assert_eq!(replaced.stdout.trim(), format!("agentenv {CURRENT}"));
+    for name in ["agentenv-sudo-helper", "agentenv-ssh-askpass"] {
+        assert!(
+            install
+                .binary
+                .parent()
+                .expect("binary directory")
+                .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+                .is_file(),
+            "the complete companion bundle is installed"
+        );
+    }
     assert_eq!(read(&install.skill(&[".agents", "skills"])), "new skill");
     assert!(
         !install.skill(&[".claude", "skills"]).exists(),
@@ -293,7 +322,7 @@ fn update_replaces_the_binary_and_installed_skills_only() {
 #[test]
 fn update_reports_an_already_current_install() {
     let server = Server::start();
-    server.publish(&format!("v{CURRENT}"), None, None);
+    server.publish(&format!("v{CURRENT}"), None, None, true, None);
     let install = Install::new(&["bin"]);
 
     let run = install.run(&server, &["update"]);
@@ -305,7 +334,7 @@ fn update_reports_an_already_current_install() {
 #[test]
 fn update_refuses_a_silent_downgrade_but_honours_an_explicit_tag() {
     let server = Server::start();
-    server.publish("v0.0.1", None, None);
+    server.publish("v0.0.1", None, None, false, None);
     let install = Install::new(&["bin"]);
 
     let run = install.run(&server, &["update"]);
@@ -328,7 +357,13 @@ fn update_refuses_a_silent_downgrade_but_honours_an_explicit_tag() {
 #[test]
 fn update_rejects_a_checksum_mismatch() {
     let server = Server::start();
-    server.publish(&format!("v{NEXT}"), None, Some(&"0".repeat(64)));
+    server.publish(
+        &format!("v{NEXT}"),
+        None,
+        Some(&"0".repeat(64)),
+        false,
+        None,
+    );
     let install = Install::new(&["bin"]);
 
     let run = install.run(&server, &["update"]);
@@ -338,9 +373,39 @@ fn update_rejects_a_checksum_mismatch() {
 }
 
 #[test]
+fn update_rejects_a_missing_companion_without_replacing_main() {
+    let server = Server::start();
+    server.publish(
+        &format!("v{NEXT}"),
+        None,
+        None,
+        false,
+        Some("agentenv-ssh-askpass"),
+    );
+    let install = Install::new(&["bin"]);
+
+    let run = install.run(&server, &["update"]);
+    assert_exit(&run, 7, "an incomplete bundle is rejected");
+    assert_mentions(&run, "complete release bundle", "the repair is named");
+    assert!(install.binary_is_original(), "the main binary is untouched");
+}
+
+#[test]
+fn update_rejects_a_mismatched_companion_without_replacing_main() {
+    let server = Server::start();
+    server.publish(&format!("v{NEXT}"), None, None, false, None);
+    let install = Install::new(&["bin"]);
+
+    let run = install.run(&server, &["update"]);
+    assert_exit(&run, 7, "a mismatched companion is rejected");
+    assert_mentions(&run, "mismatched identity", "the repair is named");
+    assert!(install.binary_is_original(), "the main binary is untouched");
+}
+
+#[test]
 fn update_refuses_a_cargo_managed_binary() {
     let server = Server::start();
-    server.publish(&format!("v{NEXT}"), None, None);
+    server.publish(&format!("v{NEXT}"), None, None, false, None);
     let install = Install::new(&[".cargo", "bin"]);
 
     let run = install.run(&server, &["update"]);

@@ -61,11 +61,12 @@ pub fn credentials_text(credentials: &[CredentialView]) -> String {
     let mut output = String::new();
     for credential in credentials {
         output.push_str(&format!(
-            "{} — {} (provider: {}, inject as: {}, status: {})\n",
+            "{} — {} (provider: {}, usages: {}, inject as: {}, status: {})\n",
             credential.summary.name,
             credential.description,
             credential.summary.provider,
-            credential.inject_as,
+            credential.usages.join(", "),
+            credential.inject_as.as_deref().unwrap_or("none"),
             credential.summary.status
         ));
     }
@@ -158,6 +159,7 @@ pub fn credentials_json(version: i64, credentials: &[CredentialView]) -> JsonVal
             "status": credential.summary.status.json_token(),
             "description": credential.description,
             "inject_as": credential.inject_as,
+            "usages": credential.usages,
         })).collect::<Vec<_>>(),
     })
 }
