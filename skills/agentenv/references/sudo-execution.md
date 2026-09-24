@@ -102,6 +102,8 @@ sudo, SSH key, agent, and password stages, streams, statuses, cancellation,
 disconnects, sudoers policy variations, and refusal cases. The native macOS
 OpenSSH client passed its lab against that destination. macOS local sudo
 remains unverified.
-Historically, Windows SSH execution was unavailable because the native client boundary is
-not implemented; confidential password IPC and native Windows OpenSSH behavior
-are also unverified. Native Windows local sudo is unsupported.
+Windows SSH execution uses the native Win32 OpenSSH client with a private
+named-pipe resolver and a one-shot askpass broker. Consult
+`docs/design/windows-port.md` and the native Windows CI results for measured
+client compatibility. MSYS/Cygwin clients, Windows ProxyJump and native Windows
+local sudo/UAC remain unsupported.
