@@ -122,9 +122,15 @@ def serve(listener, host_key, peer, errors):
 
 def run_case(directory, method, trusted=True, correct=True):
     host_key = paramiko.ECDSAKey.generate()
-    client_key = paramiko.ECDSAKey.generate()
     key_path = directory / "client-key"
-    client_key.write_private_key_file(str(key_path))
+    key_path.unlink(missing_ok=True)
+    key_path.with_suffix(".pub").unlink(missing_ok=True)
+    # Use the native writer: unlike a POSIX mode bit on a Python-created file,
+    # ssh-keygen establishes the Windows private-key ACL required by ssh.exe.
+    keygen = Path(os.environ["SystemRoot"]) / "System32/OpenSSH/ssh-keygen.exe"
+    subprocess.run([str(keygen), "-q", "-t", "ecdsa", "-b", "256", "-N", "", "-f", str(key_path)],
+                   stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=15)
+    client_key = paramiko.ECDSAKey.from_private_key_file(str(key_path))
     known = directory / "known-hosts"
     known.write_text(f"{ALIAS} {host_key.get_name()} {host_key.get_base64()}\n" if trusted else "", encoding="utf-8")
     marker = directory / "lookup-marker"
@@ -185,7 +191,7 @@ method = "{method}"
     output = result.stdout + result.stderr
     assert SYNTHETIC.encode() not in output and value.encode() not in output, "fixture value leaked"
     expected_success = trusted and correct
-    assert (result.returncode == 0) == expected_success, f"native client status {result.returncode}: {result.stderr.decode(errors='replace')}"
+    assert (result.returncode == 0) == expected_success, f"native client status {result.returncode} (key offers={peer.public_keys}): {result.stderr.decode(errors='replace')}"
     assert not errors and not thread.is_alive(), "fixture server did not close cleanly"
     assert marker.exists() == (trusted and method == "password"), "unexpected credential lookup"
     assert peer.passwords == (1 if trusted and method == "password" else 0), "password was retried or not received"
