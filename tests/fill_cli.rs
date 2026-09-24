@@ -411,7 +411,17 @@ fn keychain_credential_goes_through_the_resolver_fill_stage() {
 
     let unset_fixture = Fixture::new(CONFIG);
     let missing = unset_fixture.fill("filled", &debug, &["vault_token"]);
-    assert_exit(&missing, 4, "a missing keychain item is a credential error");
+    if cfg!(unix) {
+        assert_exit(&missing, 4, "a missing keychain item is a credential error");
+    } else {
+        // Off Unix the keychain is never consulted: the command refuses
+        // before lookup because the confidential resolver is unavailable.
+        assert_exit(
+            &missing,
+            8,
+            "keychain credentials are refused before lookup off Unix",
+        );
+    }
     assert!(missing.stdout.is_empty());
     assert!(unset_fixture.delivered().is_none());
 }
