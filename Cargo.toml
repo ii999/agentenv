@@ -26,6 +26,14 @@ tempfile = "3"
 thiserror = "2"
 zeroize = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "net", "io-util", "io-std", "sync", "time", "signal"] }
+# The credential-fill CDP backend speaks the Chrome DevTools Protocol over a
+# loopback WebSocket; no TLS feature is enabled because remote endpoints are
+# out of scope until a connection-credential design exists.
+# Dependencies log through the `log` facade; tungstenite traces frame
+# payloads. No logger is installed, and these features make that permanent.
+log = { version = "0.4", default-features = false, features = ["max_level_off", "release_max_level_off"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 toml = { version = "1", features = ["preserve_order"] }
 toml_edit = "0.25"
 ureq = "3"

@@ -2,7 +2,7 @@ use std::ffi::OsString;
 
 use crate::config::env_value;
 use crate::credential::shallow::env_status;
-use crate::credential::{CapturedSecret, Provider, Secret, Status};
+use crate::credential::{CapturedSecret, ConfidentialError, Provider, Secret, Status};
 use crate::error::AppError;
 
 pub(crate) struct EnvProvider {
@@ -34,6 +34,12 @@ impl Provider for EnvProvider {
             ))
         })?;
         captured_from_os(value, &self.credential_name, &self.variable)
+    }
+
+    /// Environment values are read in the calling process; the confidential
+    /// resolver never serves them.
+    fn resolve_confidential(&self, _line_oriented: bool) -> Result<Secret, ConfidentialError> {
+        Err(ConfidentialError::Execution)
     }
 
     fn store(&self, _value: Secret) -> Result<(), AppError> {

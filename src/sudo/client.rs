@@ -62,7 +62,7 @@ mod unix {
     };
     use super::*;
     use crate::config::CredentialDef;
-    use crate::credential::resolver::{self, AuthenticationStage};
+    use crate::credential::resolver::{self, ResolutionStage};
     use crate::credential::Secret;
     use std::future::Future;
     use std::io::Read;
@@ -251,7 +251,7 @@ mod unix {
                             resolver::resolve(
                                 &executable,
                                 &credential,
-                                AuthenticationStage::SshPassword,
+                                ResolutionStage::SshPassword,
                                 255,
                                 auth_timeout,
                             )
@@ -439,7 +439,7 @@ mod unix {
                 resolver::resolve(
                     &executable,
                     &credential,
-                    AuthenticationStage::Sudo,
+                    ResolutionStage::Sudo,
                     limit,
                     auth_timeout,
                 )

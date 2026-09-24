@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use agentenv::config::{Config, Profile, SudoTransport};
-use agentenv::credential::resolver::{self, AuthenticationStage};
+use agentenv::credential::resolver::{self, ResolutionStage};
 use agentenv::error::AppError;
 use agentenv::path::single_entry_name;
 use agentenv::sudo::{self, ExecutionRequest, LocalOptions, ProcessIo, SUDO_PASSWORD_LIMIT};
@@ -188,7 +188,7 @@ fn run(
     let auth_timeout = options.auth_timeout;
     let runtime = runtime()?;
     let (cancel, cancellation) = sudo::cancellation_channel();
-    install_signal_forwarder(&runtime, cancel)?;
+    super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
     let outcome = runtime.block_on(sudo::execute_local(
         request,
         options,
@@ -198,7 +198,7 @@ fn run(
             resolver::resolve(
                 &executable,
                 &credential,
-                AuthenticationStage::Sudo,
+                ResolutionStage::Sudo,
                 SUDO_PASSWORD_LIMIT,
                 auth_timeout,
             )
@@ -221,7 +221,7 @@ fn remote(
 ) -> Result<Output, AppError> {
     let runtime = runtime()?;
     let (cancel, cancellation) = sudo::cancellation_channel();
-    install_signal_forwarder(&runtime, cancel)?;
+    super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
     let result = runtime.block_on(sudo::client::execute(
         config,
         target,
@@ -271,46 +271,6 @@ fn remote(
     Ok(Output::success(stdout, String::new()))
 }
 
-#[cfg(unix)]
-fn install_signal_forwarder(
-    runtime: &tokio::runtime::Runtime,
-    cancel: tokio::sync::watch::Sender<i32>,
-) -> Result<(), AppError> {
-    runtime.block_on(async move {
-        let mut interrupt =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                .map_err(|_| signal_error())?;
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .map_err(|_| signal_error())?;
-        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
-            .map_err(|_| signal_error())?;
-        tokio::spawn(async move {
-            let signal = tokio::select! {
-                _ = interrupt.recv() => libc::SIGINT,
-                _ = terminate.recv() => libc::SIGTERM,
-                _ = hangup.recv() => libc::SIGHUP,
-            };
-            let _ = cancel.send(signal);
-        });
-        Ok(())
-    })
-}
-
-#[cfg(not(unix))]
-fn install_signal_forwarder(
-    runtime: &tokio::runtime::Runtime,
-    cancel: tokio::sync::watch::Sender<i32>,
-) -> Result<(), AppError> {
-    runtime.spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = cancel.send(2);
-        }
-    });
-    Ok(())
-}
-
-#[cfg(unix)]
 fn signal_error() -> AppError {
     AppError::SudoExecution(
         "signal-unavailable: could not install sudo cancellation handlers".to_owned(),

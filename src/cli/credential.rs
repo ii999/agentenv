@@ -49,7 +49,10 @@ fn reject_json_for_credential_action(json: bool, action: &str) -> Result<(), App
     Ok(())
 }
 
-fn credential_for<'a>(config: &'a Config, name: &str) -> Result<&'a CredentialDef, AppError> {
+pub(super) fn credential_for<'a>(
+    config: &'a Config,
+    name: &str,
+) -> Result<&'a CredentialDef, AppError> {
     config.credential(name).ok_or_else(|| {
         let defined = config
             .credentials

@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: frames</title></head>
+<body data-page="frames">
+  <h1>Frame fixture</h1>
+  <input id="outer" type="text" value="outer-initial">
+  <div id="not-a-frame">a div, not an iframe</div>
+  <!-- Same origin child: same renderer process. -->
+  <iframe id="same" src="{{SELF}}/pages/frame-inner.html?frame=same" width="600" height="200"></iframe>
+  <!-- Cross-origin child: a separate site, so an out-of-process iframe. -->
+  <iframe id="cross" src="{{OTHER}}/pages/frame-inner.html?frame=cross" width="600" height="200"></iframe>
+  <script src="/fixture.js"></script>
+</body>
+</html>

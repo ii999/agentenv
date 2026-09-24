@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use agentenv::config::{CredentialDef, CredentialUsage, Provider};
-use agentenv::credential::resolver::{resolve, AuthenticationStage};
+use agentenv::credential::resolver::{resolve, ResolutionStage};
 use agentenv::credential::CapturedSecret;
 
 fn definition(script: &str) -> CredentialDef {
@@ -26,7 +26,7 @@ async fn lookup(
     resolve(
         Path::new(env!("CARGO_BIN_EXE_agentenv")),
         definition,
-        AuthenticationStage::Sudo,
+        ResolutionStage::Sudo,
         255,
         timeout,
     )

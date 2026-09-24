@@ -66,7 +66,7 @@ Unsupported capabilities fail explicitly rather than switching transport.
 - `docs/design/credential-fill.md` is a separate, unimplemented plan. Share
   its proposed restricted provider I/O seam if that implementation exists by
   the time this work starts; do not duplicate it or depend on fill delivery.
-  Its proposed exit code 8 remains reserved for filling.
+  Its proposed exit codes 8 and 11 remain reserved for filling.
 
 Ordinary `run` continues to mean transparent environment injection. It does
 not detect sudo, inspect terminal output for password prompts, or rewrite
@@ -760,8 +760,8 @@ In particular, exit 1 is not reliably classifiable as a wrong password.
 
 Return normal sudo/target exit codes unchanged. Preserve existing agentenv
 preflight codes 1-5 and 127. Allocate code 9 for owned execution/protocol
-failures and 10 for lost/uncertain completion; code 8 belongs to the separate
-fill plan. Prefix owned stderr diagnostics with stable `sudo-execution:` reason
+failures and 10 for lost/uncertain completion; codes 8 and 11 belong to the
+separate fill plan. Prefix owned stderr diagnostics with stable `sudo-execution:` reason
 identifiers. Target codes can collide with these values, so numeric status
 alone is not a complete classification. No command retries follow from codes.
 

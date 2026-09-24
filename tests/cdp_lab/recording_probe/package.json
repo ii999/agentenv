@@ -1,0 +1,9 @@
+{
+  "name": "agentenv-cdp-lab-recording-probe",
+  "private": true,
+  "type": "module",
+  "description": "Probe: which recorder states a second CDP client can observe without mutating them",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

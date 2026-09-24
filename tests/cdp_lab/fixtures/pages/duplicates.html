@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fixture: duplicates and states</title>
+  <style>
+    #hidden { display: none; }
+    #invisible { visibility: hidden; }
+    #zero { width: 0; height: 0; padding: 0; border: 0; }
+    #offscreen { position: absolute; left: -5000px; }
+  </style>
+</head>
+<body data-page="duplicates">
+  <h1>Duplicate selectors and element states</h1>
+  <input id="first" class="password" type="password">
+  <input id="second" class="password" type="password">
+  <input id="unique" type="text">
+  <input id="hidden" type="text">
+  <input id="invisible" type="text">
+  <input id="zero" type="text">
+  <input id="offscreen" type="text">
+  <input id="disabled" type="text" disabled>
+  <fieldset disabled>
+    <legend>Disabled group</legend>
+    <input id="in-disabled-fieldset" type="text">
+  </fieldset>
+  <input id="aria-disabled" type="text" aria-disabled="true">
+  <input id="readonly" type="text" readonly value="fixed">
+  <div id="aria-readonly" contenteditable="true" role="textbox" aria-readonly="true">aria readonly editable</div>
+  <script src="/fixture.js"></script>
+</body>
+</html>

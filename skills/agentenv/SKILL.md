@@ -7,8 +7,10 @@ description: >-
   contexts, or CI settings; when a command requires an API key or other
   secret; when the user asks to save configuration or register a credential;
   when a configured local or SSH sudo target must run a privileged command;
-  or when project instructions mention agentenv. Credentials are delivered
-  through bounded consumer-specific channels and are never printed.
+  when a login form or API-key field in a browser you are automating needs
+  a stored credential; or when project instructions mention agentenv.
+  Credentials are delivered through bounded consumer-specific channels and
+  are never printed.
 ---
 
 # agentenv
@@ -39,6 +41,9 @@ reading the config file directly.
   substitute another credential.
 - Read the config through the CLI, not by opening the TOML file, so
   profile selection, credential indirection, and validation apply.
+- After `credential fill` writes a value into a browser field, do not read
+  that field back, evaluate its value, or take a screenshot that shows it.
+  The fill result is the only thing you may report.
 
 ## Reading configuration
 
@@ -203,6 +208,59 @@ services:
 `${OPENAI_API_KEY}` interpolation is also supported by Compose. Do not use an
 `env_file:` containing secrets; it persists credentials in a file.
 
+## Filling a credential into a browser field
+
+Use `credential fill` when a page you are driving needs a stored credential
+in one input field. It writes the value through the browser's debugging
+protocol; you keep navigating and submitting with your own browser tool.
+
+```bash
+agentenv credential fill --capabilities --json
+agentenv credential fill <name> --backend cdp --endpoint http://127.0.0.1:<port> \
+    --page-url <exact page URL> --selector '<css of the one input>' --json
+```
+
+Steps:
+
+1. Confirm `--capabilities` lists the `cdp` backend as available. Your
+   browser must expose a loopback Chrome DevTools Protocol endpoint (a
+   Chromium started with `--remote-debugging-port` and a non-default
+   `--user-data-dir`, or the endpoint your browser tool already uses). If
+   there is none, say so; do not launch a browser or paste the value.
+2. Navigate to the page with your browser tool, then pass the page's exact
+   URL and a CSS selector that matches only the target input. Add
+   `--page-match origin-path` when the URL carries volatile query
+   parameters, `--frame-selector` for each iframe on the way to the field,
+   and `--context-index` if the same URL is open in several contexts.
+3. Close DevTools on that tab and keep tracing, screencasts, HAR, and video
+   recording off while filling; agentenv fails only on the open DevTools
+   window because the other recorders cannot be detected.
+4. Run the command. Success prints only
+   `{"version":1,"backend":"cdp","effect":"field-filled"}`; the field's
+   previous content was replaced and the page received normal input events.
+   Continue with your own tool to submit.
+
+Only credentials that permit `environment` usage can be filled; the value
+must be a single line of at most 8,192 bytes without control, line-separator,
+or bidirectional-control characters (`value-unsupported` otherwise). A
+command provider runs without a terminal and its one trailing newline is
+stripped; empty, NUL, or non-UTF-8 provider output is a credential error
+(exit 4). The whole operation, including a keychain authorization dialog on
+first access, runs under `--timeout-ms` (default 30,000); raise it when the
+user must click through such a dialog. `credential fill` does not verify the
+field, submit the form, or log in; report the effect, not a success you did
+not observe.
+
+Failure reasons on stderr (`credential-fill: <reason>: <message>`). Exit 8,
+nothing changed: `backend-unavailable`, `permission`, `connect-failed`,
+`version-unsupported`, `recording-conflict`, `context-absent`, `page-absent`,
+`page-ambiguous`, `frame-absent`, `frame-ambiguous`, `frame-invalid`,
+`target-absent`, `target-ambiguous`, `target-hidden`, `target-disabled`,
+`target-readonly`, `target-unfillable`, `target-changed`,
+`value-unsupported`, `timeout`, `cancelled`. Exit 11, the field may hold the
+value: `timeout`, `cancelled`, or `delivery-failed` after the value was sent,
+and `cleanup-unconfirmed` after a delivered value.
+
 ## Privileged execution
 
 When the request uses a configured `sudo-target`, read
@@ -224,8 +282,10 @@ authentication credential.
 | 5 | Project trust-state failure | Run `agentenv project status`; use `allow` or `revoke` as indicated |
 | 6 | Project requirements unsatisfied or uncheckable (`project status` only) | Read the status report and repair the reported requirement or profile selection |
 | 7 | `update` failed, or replaced the binary but left an agent skill unrefreshed | Relay the diagnostic; rerun `agentenv update --force` once the cause is fixed |
+| 8 | `credential fill` failed before anything was changed (`credential-fill: <reason>:`) | Fix what the reason names: the endpoint, page URL, frame chain, selector, an open DevTools window, or the credential's value; a `cancelled` or `timeout` reason may simply be retried |
 | 9 | Owned sudo execution, protocol, or helper failure | Relay the diagnostic; repair the named prerequisite before retrying |
 | 10 | Sudo completion could not be confirmed, locally or over SSH | Do not retry; report that the command may have run |
+| 11 | `credential fill` failed after the field may have changed | Do not retry automatically; tell the user the field may hold a partial or complete value and let them inspect it |
 | 127 | `run` target could not be executed | The target command is missing, not agentenv |
 
 Diagnostics never echo secret values, so it is safe to relay them to the

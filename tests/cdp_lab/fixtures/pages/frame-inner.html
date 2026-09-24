@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: inner frame</title></head>
+<body data-page="frame-inner" data-frame="inner">
+  <input id="inner-password" type="password" value="inner-initial">
+  <!-- Nested child on the opposite origin again: an OOPIF inside an OOPIF
+       when this frame is itself cross-origin to the top page. -->
+  <iframe id="nested" src="{{OTHER}}/pages/frame-leaf.html" width="400" height="80"></iframe>
+  <script src="/fixture.js"></script>
+</body>
+</html>

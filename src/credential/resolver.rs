@@ -3,25 +3,90 @@
 //! The resolver never returns secret bytes on process stdout. Its process group
 //! also owns command-provider descendants, so cancellation revokes their channel
 //! and kills/reaps the resolver without waiting for an OS credential API.
+//!
+//! Each caller names a resolution stage. The stage fixes the credential usage
+//! it may consume, the byte limit, and the value validation applied on both
+//! sides of the channel: authentication stages accept single-line values of
+//! at most 255 bytes; the fill stage accepts single-line values of at most
+//! [`FILL_VALUE_LIMIT`](crate::credential::FILL_VALUE_LIMIT) bytes.
 
+use std::fmt;
 use std::path::Path;
 use std::time::Duration;
 
-use super::Secret;
+use serde::{Deserialize, Serialize};
+
+use super::{Secret, SecretDomainError, FILL_VALUE_LIMIT};
 use crate::config::{CredentialDef, CredentialUsage};
 use crate::error::AppError;
 
-#[derive(Clone, Copy)]
-pub enum AuthenticationStage {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResolutionStage {
     Sudo,
     SshPassword,
+    Fill,
 }
 
-impl AuthenticationStage {
+impl ResolutionStage {
     fn usage(self) -> CredentialUsage {
         match self {
             Self::Sudo => CredentialUsage::Sudo,
             Self::SshPassword => CredentialUsage::SshPassword,
+            Self::Fill => CredentialUsage::Environment,
+        }
+    }
+
+    fn max_limit(self) -> usize {
+        match self {
+            Self::Sudo | Self::SshPassword => 255,
+            Self::Fill => FILL_VALUE_LIMIT,
+        }
+    }
+
+    fn validate(self, secret: &Secret, limit: usize) -> Result<(), SecretDomainError> {
+        match self {
+            Self::Sudo | Self::SshPassword => secret.validate_authentication(limit),
+            Self::Fill => secret.validate_fill(limit),
+        }
+    }
+}
+
+/// Why a resolution produced no value. Variants carry no candidate bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolveError {
+    /// The definition does not permit the stage's usage, or the request is
+    /// outside the stage's limits.
+    NotPermitted,
+    /// The provider failed, produced nothing, or the channel broke.
+    Provider,
+    /// The provider produced a value the stage cannot accept.
+    Value,
+    /// The deadline expired before a value arrived.
+    Timeout,
+    /// The confidential resolver is unavailable on this platform.
+    Unavailable,
+}
+
+impl fmt::Display for ResolveError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotPermitted => "the credential does not permit this use",
+            Self::Provider => "the credential provider failed",
+            Self::Value => "the credential value is not supported for this use",
+            Self::Timeout => "the credential lookup deadline expired",
+            Self::Unavailable => "the confidential resolver is unavailable on this platform",
+        })
+    }
+}
+
+impl From<ResolveError> for AppError {
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::Unavailable => AppError::Credential(
+                "confidential resolver is unavailable on this platform".to_owned(),
+            ),
+            _ => failure(),
         }
     }
 }
@@ -33,30 +98,48 @@ fn failure() -> AppError {
     )
 }
 
-/// Resolves one authorized authentication value. Dropping this future cancels
-/// the owned resolver; callers retain ownership of response deadlines.
+/// Resolves one authorized value. Dropping this future cancels the owned
+/// resolver; callers retain ownership of response deadlines.
 pub async fn resolve(
     executable: &Path,
     definition: &CredentialDef,
-    stage: AuthenticationStage,
+    stage: ResolutionStage,
     limit: usize,
     deadline: Duration,
 ) -> Result<Secret, AppError> {
-    if !definition.permits(stage.usage()) || !(1..=255).contains(&limit) || deadline.is_zero() {
-        return Err(failure());
+    resolve_detailed(executable, definition, stage, limit, deadline)
+        .await
+        .map_err(AppError::from)
+}
+
+/// [`resolve`] with a typed error, for callers that report value rejection
+/// separately from provider failure.
+pub async fn resolve_detailed(
+    executable: &Path,
+    definition: &CredentialDef,
+    stage: ResolutionStage,
+    limit: usize,
+    deadline: Duration,
+) -> Result<Secret, ResolveError> {
+    if !definition.permits(stage.usage())
+        || !(1..=stage.max_limit()).contains(&limit)
+        || deadline.is_zero()
+    {
+        return Err(ResolveError::NotPermitted);
     }
     #[cfg(unix)]
     {
-        tokio::time::timeout(deadline, unix::resolve(executable, definition, limit))
-            .await
-            .map_err(|_| failure())?
+        tokio::time::timeout(
+            deadline,
+            unix::resolve(executable, definition, stage, limit),
+        )
+        .await
+        .map_err(|_| ResolveError::Timeout)?
     }
     #[cfg(not(unix))]
     {
         let _ = (executable, definition, deadline);
-        Err(AppError::Credential(
-            "confidential resolver is unavailable on this platform".to_owned(),
-        ))
+        Err(ResolveError::Unavailable)
     }
 }
 
@@ -90,15 +173,19 @@ mod unix {
 
     use super::*;
     use crate::config::Provider;
-    use crate::credential::{provider_for_with_io, CapturedSecret, ResolutionIo};
+    use crate::credential::{provider_for, CapturedSecret, ConfidentialError};
 
-    const MAGIC: &[u8; 5] = b"AGER\x01";
+    const MAGIC: &[u8; 5] = b"AGER\x02";
     const MAX_REQUEST: usize = 65536;
+    const STATUS_OK: u8 = 0;
+    const STATUS_PROVIDER: u8 = 1;
+    const STATUS_VALUE: u8 = 2;
 
     #[derive(Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Request {
         provider: ProviderRequest,
+        stage: ResolutionStage,
         limit: usize,
     }
 
@@ -125,21 +212,27 @@ mod unix {
     pub(super) async fn resolve(
         executable: &Path,
         definition: &CredentialDef,
+        stage: ResolutionStage,
         limit: usize,
-    ) -> Result<Secret, AppError> {
+    ) -> Result<Secret, ResolveError> {
         let provider = match &definition.provider {
             Provider::Keychain { service, account } => ProviderRequest::Keychain {
                 service: service.clone(),
                 account: account.clone(),
             },
             Provider::Command { argv } => ProviderRequest::Command { argv: argv.clone() },
-            Provider::Env { .. } => return Err(failure()),
+            Provider::Env { .. } => return Err(ResolveError::NotPermitted),
         };
-        let request = serde_json::to_vec(&Request { provider, limit }).map_err(|_| failure())?;
+        let request = serde_json::to_vec(&Request {
+            provider,
+            stage,
+            limit,
+        })
+        .map_err(|_| ResolveError::Provider)?;
         if request.len() > MAX_REQUEST {
-            return Err(failure());
+            return Err(ResolveError::NotPermitted);
         }
-        let (parent, child) = UnixStream::pair().map_err(|_| failure())?;
+        let (parent, child) = UnixStream::pair().map_err(|_| ResolveError::Provider)?;
         let child_fd = child.as_raw_fd();
         let mut command = Command::new(executable);
         command
@@ -149,7 +242,7 @@ mod unix {
             .stderr(Stdio::null())
             .process_group(0);
         // Preserve provider environment compatibility while disabling owned
-        // diagnostic/debug hooks. No password is added to this environment.
+        // diagnostic/debug hooks. No secret is added to this environment.
         for name in [
             "RUST_LOG",
             "RUST_BACKTRACE",
@@ -171,39 +264,62 @@ mod unix {
                 Ok(())
             });
         }
-        let _resolver = Resolver(command.spawn().map_err(|_| failure())?);
+        let _resolver = Resolver(command.spawn().map_err(|_| ResolveError::Provider)?);
         drop(child);
-        parent.set_nonblocking(true).map_err(|_| failure())?;
-        let mut channel = tokio::net::UnixStream::from_std(parent).map_err(|_| failure())?;
-        channel.write_all(MAGIC).await.map_err(|_| failure())?;
+        parent
+            .set_nonblocking(true)
+            .map_err(|_| ResolveError::Provider)?;
+        let mut channel =
+            tokio::net::UnixStream::from_std(parent).map_err(|_| ResolveError::Provider)?;
+        channel
+            .write_all(MAGIC)
+            .await
+            .map_err(|_| ResolveError::Provider)?;
         channel
             .write_u32(request.len() as u32)
             .await
-            .map_err(|_| failure())?;
-        channel.write_all(&request).await.map_err(|_| failure())?;
+            .map_err(|_| ResolveError::Provider)?;
+        channel
+            .write_all(&request)
+            .await
+            .map_err(|_| ResolveError::Provider)?;
         let mut response = [0u8; 5];
         channel
             .read_exact(&mut response)
             .await
-            .map_err(|_| failure())?;
+            .map_err(|_| ResolveError::Provider)?;
         if &response != MAGIC {
-            return Err(failure());
+            return Err(ResolveError::Provider);
         }
-        let size = channel.read_u16().await.map_err(|_| failure())? as usize;
+        match channel
+            .read_u8()
+            .await
+            .map_err(|_| ResolveError::Provider)?
+        {
+            STATUS_OK => {}
+            STATUS_VALUE => return Err(ResolveError::Value),
+            _ => return Err(ResolveError::Provider),
+        }
+        let size = channel
+            .read_u16()
+            .await
+            .map_err(|_| ResolveError::Provider)? as usize;
         if size == 0 || size > limit {
-            return Err(failure());
+            return Err(ResolveError::Provider);
         }
         let mut bytes = Zeroizing::new(vec![0; size]);
         channel
             .read_exact(&mut bytes)
             .await
-            .map_err(|_| failure())?;
+            .map_err(|_| ResolveError::Provider)?;
+        // The resolver validated the bytes; a value that no longer parses is
+        // a resolver failure, not a rejected value.
         let secret = CapturedSecret::new(std::mem::take(&mut *bytes))
             .into_secret()
-            .map_err(|_| failure())?;
-        secret
-            .validate_authentication(limit)
-            .map_err(|_| failure())?;
+            .map_err(|_| ResolveError::Provider)?;
+        stage
+            .validate(&secret, limit)
+            .map_err(|_| ResolveError::Value)?;
         Ok(secret)
     }
 
@@ -280,7 +396,8 @@ mod unix {
         let mut metadata = vec![0; length];
         channel.read_exact(&mut metadata).map_err(|_| failure())?;
         let request: Request = serde_json::from_slice(&metadata).map_err(|_| failure())?;
-        if !(1..=255).contains(&request.limit) {
+        let stage = request.stage;
+        if !(1..=stage.max_limit()).contains(&request.limit) {
             return Err(failure());
         }
         let provider = match request.provider {
@@ -291,24 +408,28 @@ mod unix {
             _ => return Err(failure()),
         };
         let definition = CredentialDef {
-            name: "authentication".to_owned(),
+            name: "resolution".to_owned(),
             description: String::new(),
             provider,
             inject_as: None,
-            usages: vec![CredentialUsage::Sudo],
+            usages: vec![stage.usage()],
         };
-        let secret = provider_for_with_io(
-            &definition,
-            ResolutionIo::Confidential {
-                max_bytes: request.limit,
-            },
-        )
-        .resolve()
-        .map_err(|_| failure())?;
-        secret
-            .validate_authentication(request.limit)
-            .map_err(|_| failure())?;
+        // The fill stage keeps the line-oriented value semantics environment
+        // credentials have under ordinary resolution; authentication stages
+        // keep raw bytes and reject line endings through their validation.
+        let line_oriented = stage == ResolutionStage::Fill;
+        let secret = match provider_for(&definition).resolve_confidential(line_oriented) {
+            Ok(secret) => secret,
+            Err(ConfidentialError::Execution) => {
+                return reply_status(&mut channel, STATUS_PROVIDER)
+            }
+            Err(ConfidentialError::Value) => return reply_status(&mut channel, STATUS_VALUE),
+        };
+        if stage.validate(&secret, request.limit).is_err() {
+            return reply_status(&mut channel, STATUS_VALUE);
+        }
         channel.write_all(MAGIC).map_err(|_| failure())?;
+        channel.write_all(&[STATUS_OK]).map_err(|_| failure())?;
         channel
             .write_all(&(secret.as_str().len() as u16).to_be_bytes())
             .map_err(|_| failure())?;
@@ -316,5 +437,11 @@ mod unix {
             .write_all(secret.as_str().as_bytes())
             .map_err(|_| failure())?;
         Ok(())
+    }
+
+    fn reply_status(channel: &mut UnixStream, status: u8) -> Result<(), AppError> {
+        channel.write_all(MAGIC).map_err(|_| failure())?;
+        channel.write_all(&[status]).map_err(|_| failure())?;
+        Err(failure())
     }
 }

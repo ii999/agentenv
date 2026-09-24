@@ -57,6 +57,8 @@ pub enum SecretDomainError {
     InvalidUtf8,
     #[error("the value is not supported for authentication")]
     InvalidAuthentication,
+    #[error("the value is not a single line within the filling limit")]
+    InvalidFill,
 }
 
 impl CapturedSecret {
@@ -101,6 +103,24 @@ impl Secret {
                 .any(|byte| matches!(byte, 0 | b'\r' | b'\n'))
         {
             return Err(SecretDomainError::InvalidAuthentication);
+        }
+        Ok(())
+    }
+
+    /// Checks a value destined for a single-line input field: at most `limit`
+    /// bytes, no control characters (so nothing is interpreted as a key), no
+    /// Unicode line or paragraph separator, and no bidirectional override or
+    /// isolate. Spaces, punctuation, and other Unicode are preserved exactly.
+    pub fn validate_fill(&self, limit: usize) -> Result<(), SecretDomainError> {
+        let rejected = |character: char| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+                )
+        };
+        if limit == 0 || self.0.len() > limit || self.0.chars().any(rejected) {
+            return Err(SecretDomainError::InvalidFill);
         }
         Ok(())
     }
@@ -151,6 +171,43 @@ mod tests {
             .into_secret()
             .expect("a normal value is accepted");
         assert_eq!(secret.as_str(), "hunter2");
+    }
+
+    #[test]
+    fn fill_validation_accepts_single_lines_within_the_limit() {
+        let accepted = [
+            "  spaced  ",
+            "pässwörd-日本語-🔑-\"q\"-<b>&amp;</b>-\\",
+            "a",
+        ];
+        for value in accepted {
+            let secret = CapturedSecret::new(value.as_bytes().to_vec())
+                .into_secret()
+                .expect("a normal value is accepted");
+            assert!(secret.validate_fill(8192).is_ok(), "{value:?}");
+            assert!(secret.validate_fill(value.len()).is_ok());
+            assert!(secret.validate_fill(value.len() - 1).is_err());
+        }
+        for value in [
+            "a\nb",
+            "a\rb",
+            "a\tb",
+            "a\u{1b}b",
+            "a\u{7f}b",
+            "a\u{85}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+        ] {
+            let secret = CapturedSecret::new(value.as_bytes().to_vec())
+                .into_secret()
+                .expect("control characters are validated later");
+            assert!(matches!(
+                secret.validate_fill(8192),
+                Err(SecretDomainError::InvalidFill)
+            ));
+        }
     }
 
     #[test]

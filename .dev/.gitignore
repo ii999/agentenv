@@ -2,3 +2,4 @@
 /work/*/state.json
 /work/
 !/work/*/rounds/*/evidence/*.log
+/work/*/runtime/

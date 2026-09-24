@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Fixture: navigate</title></head>
+<body data-page="navigate">
+  <h1>Navigates after a delay</h1>
+  <input id="password" type="password" value="before-navigation">
+  <script src="/fixture.js"></script>
+  <script>
+    // ?after=<ms> schedules a same-document-replacing navigation so a client
+    // that prepared its target before the timer must fail revalidation.
+    const after = Number(new URLSearchParams(location.search).get('after') || '0');
+    if (after > 0) setTimeout(() => { location.href = '/pages/navigated.html'; }, after);
+  </script>
+</body>
+</html>
