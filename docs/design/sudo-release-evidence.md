@@ -15,14 +15,18 @@ release gap. It is not supported by inference from a related passing case.
 | `tests/sudo_execution_lab/run.py --release` | sudoers policy variations, SSH refusal cases, and passwordless remote cancellation (16 cases) | Same container; release-specific sudoers and additional loopback sshd instances |
 | `tests/sudo_macos_lab/run.py` | Native macOS client against the Linux destination (8 cases) | macOS 27.0 arm64, OpenSSH_10.3p1 (LibreSSL 3.3.6); destination published only on 127.0.0.1 |
 | `cargo test --features test-keychain` | Protocol, transport, client, resolver, config, askpass, and local-engine contracts | Fake sudo, SSH, and provider processes; no real authentication |
+| `tests/windows_credentials.rs` and `tests/windows_lab/ssh.py` (CI `windows-latest`) | Native named-pipe resolver and bound askpass boundary; native `OpenSSH_for_Windows` client and askpass against a loopback protocol fixture | GitHub `windows-latest`; the fixture stands in for the remote helper, so no Unix sudo is involved |
 
 The Linux and macOS lab runs recorded here used Docker 29.5.2 on arm64 and
 debug builds (stripped, without debuginfo, since 2026-09-24) with the
 `test-keychain` feature, not release artifacts. All
 accounts, passwords, keys, host keys, and sudoers rules are synthetic and belong
 to disposable containers or temporary directories. The CI `sudo-integration`
-job is configured to run the three Linux lab entry points on `ubuntu-latest`
-(amd64); no CI run is recorded here yet.
+job runs the three Linux lab entry points on `ubuntu-latest` (amd64), again
+with debug builds. Its run for `ef4875f` on 2026-09-24 passed
+(<https://github.com/ii999/agentenv/actions/runs/36028642446/job/107731482816>)
+and is the amd64 Linux evidence for the rows below; the `windows-latest` job
+of the same run passed the Windows fixtures listed above.
 
 ## Contract coverage
 
@@ -43,7 +47,7 @@ job is configured to run the three Linux lab entry points on `ubuntu-latest`
 | IPC isolation | Four concurrent local and four concurrent remote invocations each succeed; a login-time banner on protocol stdout fails before any sudo lookup for a password-requiring command | Mismatched session identifiers and malformed, truncated, oversized, duplicate, and out-of-order frames; a helper stream closing right after Start reports completion unknown | Per-invocation output and credential separation under concurrency; wrong local broker peer and symlink or socket substitution are enforced in code without a targeted test; a helper crash before Ready or after a password reply |
 | Resource limits | Output over 2 MiB per stream | Bounded credit over more than 1 MiB; thousands of one-byte frames within the byte window; control not starved by blocked streams; resolver child reaped on timeout; a broken local stdout reports completion unknown | A stalled invocation blocking another is not tested; broken pipes in a real lab |
 | Helper deployment (`helper-deployment.md`) | First installation from the bundle into an absent directory (`0755`, user-owned, no temporary file, no credential lookup); execution through the deployed helper; `up-to-date` rerun with unchanged mtime; `--force` reinstall; upgrade over an older helper with `--from`; a wrong source refused by the destination identity check; an occupied path refused; a login-shell banner refused before any write; saved-password login uses three sessions and no sudo lookup | Path grammar and file-name rule; remote command templates executed under every installed login shell (fresh install, wrong identity, truncated upload, non-program, stale temporary file, forged `absent`, symlink and directory occupation); strict preflight parsing; decision table; install status classification; `--from` bounds; bundle identity gate; named release asset lookup, checksum, malformed and duplicate refusal against a loopback release server; cancellation of a pending source; route reuse; CLI flow through a fake `ssh` including `ssh-connect-failed` without remediation and install failures that precede the upload; the `agentenv update` reminder | Release-asset source against a real destination (the lab has no network); x86_64 and macOS destinations; a `--serve` session that outlives an upgrade; a connection cut during upload; Windows client |
-| Compatibility and packaging | sudo 1.9.16p2 with and without `use_pty`; locally, `requiretty` rejected without a PTY fallback; native macOS OpenSSH client | Update installs both companions with the main binary and refuses missing or mismatched companions without replacing it | Native macOS sudo; other Linux distributions and sudo versions; Windows OpenSSH client and named-pipe askpass; `requiretty` over SSH (no PTY is requested, enforced in code without a targeted test) |
+| Compatibility and packaging | sudo 1.9.16p2 with and without `use_pty`; locally, `requiretty` rejected without a PTY fallback; native macOS OpenSSH client | Update installs both companions with the main binary and refuses missing or mismatched companions without replacing it | Native macOS sudo; other Linux distributions and sudo versions; Windows OpenSSH client and named-pipe askpass against a real destination; `requiretty` over SSH (no PTY is requested, enforced in code without a targeted test) |
 
 Under `!env_reset`, the lab observed the local askpass routing variables in
 the target environment. This is the documented boundary in the design: the
@@ -53,13 +57,14 @@ environment policy controls whether a target sees it.
 ## Release gaps
 
 These gaps block advertising the affected platforms. They do not affect the
-measured arm64 Linux destination and arm64 Linux/macOS client combinations
-above.
+measured arm64 and amd64 Linux destinations and the arm64 Linux, amd64 Linux,
+and arm64 macOS client combinations above.
 
-1. **Windows SSH client.** The Windows confidential resolver, named-pipe login
-   askpass, and native OpenSSH behavior are not implemented or measured.
-   Windows builds report SSH sudo execution as unsupported and never fall back
-   to a weaker channel.
+1. **Windows SSH client against a real destination.** The Windows confidential
+   resolver, named-pipe login askpass, and native OpenSSH client are implemented
+   (`windows-port.md`) and measured in CI against a loopback protocol fixture
+   only. No Windows client has run against a real Linux destination with sudo.
+   Windows local sudo and UAC elevation remain out of scope.
 2. **Native macOS sudo.** Local execution on macOS compiles and passes fake-sudo
    tests, but real macOS sudo, PAM, and prompt behavior have not run in an
    isolated macOS account or VM. The macOS evidence above covers only the SSH
@@ -74,11 +79,10 @@ above.
 5. **Untested adversaries.** The cases the table marks as "enforced in code
    without a targeted test" have neither real nor deterministic coverage.
    Excess jump hops have a deterministic parser test only.
-6. **Shipped architectures and build.** The recorded runs used arm64 debug
-   builds with `test-keychain`. The shipped x86_64 Linux asset (client and
-   helper destination) and the x86_64 macOS client have no recorded run. A
-   passing amd64 `sudo-integration` CI run must be recorded here before Linux
-   support is advertised; x86_64 macOS remains unmeasured.
+6. **Shipped build and x86_64 macOS.** Every recorded run used debug builds
+   with `test-keychain`; the arm64 runs are local, the amd64 Linux run is the CI
+   `sudo-integration` job recorded above. No release artifact has a recorded
+   lab run on any target, and the x86_64 macOS client remains unmeasured.
 7. **Helper deployment from a release.** Deployment has installed the helper
    from the local bundle and from a file on the arm64 Linux destination only.
    The release-asset source is verified against a loopback release server, not
