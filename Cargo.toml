@@ -45,9 +45,12 @@ ureq = "3"
 name = "test-probe"
 path = "tests/fixtures/bin/probe.rs"
 
+# Release executables ship prebuilt; whole-program optimization trades build
+# time for smaller, faster binaries and does not affect `cargo build`.
 [profile.release]
 strip = true
-lto = "thin"
+lto = "fat"
+codegen-units = 1
 
 [features]
 test-keychain = []
