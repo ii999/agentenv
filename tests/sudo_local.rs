@@ -700,6 +700,34 @@ use_agent = false
         bin
     }
 
+    /// The real helper as an upload source. Linux debug builds carry more
+    /// than 64 MiB of debug information, above the deployment bound, so the
+    /// copy is stripped when the tool exists; the stripped helper still
+    /// reports its identity and serves.
+    fn upload_source(directory: &std::path::Path) -> Option<std::path::PathBuf> {
+        let source = directory.join("source-helper");
+        fs::copy(
+            assert_cmd::cargo::cargo_bin("agentenv-sudo-helper"),
+            &source,
+        )
+        .expect("helper copied");
+        let limit = 64 * 1024 * 1024;
+        if fs::metadata(&source).expect("metadata").len() > limit {
+            let stripped = std::process::Command::new("strip")
+                .arg(&source)
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false);
+            if !stripped || fs::metadata(&source).expect("metadata").len() > limit {
+                eprintln!(
+                    "skipping: the debug helper exceeds the upload bound and cannot be stripped"
+                );
+                return None;
+            }
+        }
+        Some(source)
+    }
+
     fn run_deploy(
         config: &std::path::Path,
         bin: &std::path::Path,
@@ -799,7 +827,9 @@ use_agent = false
         let helper_path = directory.path().join("libexec/agentenv-sudo-helper");
         let config = ssh_config(directory.path(), &helper_path);
         let bin = fake_ssh(directory.path());
-        let real_helper = assert_cmd::cargo::cargo_bin("agentenv-sudo-helper");
+        let Some(real_helper) = upload_source(directory.path()) else {
+            return;
+        };
         let real = real_helper.to_str().expect("UTF-8 path");
         let identity = format!(
             "agentenv-sudo-helper {PROTOCOL_VERSION} {}",
@@ -988,7 +1018,9 @@ use_agent = false
         let helper_path = directory.path().join("libexec/agentenv-sudo-helper");
         let config = ssh_config(directory.path(), &helper_path);
         let bin = fake_ssh(directory.path());
-        let real_helper = assert_cmd::cargo::cargo_bin("agentenv-sudo-helper");
+        let Some(real_helper) = upload_source(directory.path()) else {
+            return;
+        };
         let real = real_helper.to_str().expect("UTF-8 path");
 
         // ssh exiting 255 before any output is a connection or login

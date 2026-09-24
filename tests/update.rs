@@ -253,6 +253,7 @@ impl Install {
         command
             .current_dir(&self.home)
             .env(home_name, &self.home)
+            .env("APPDATA", self.home.join("AppData").join("Roaming"))
             .env("AGENTENV_RELEASE_BASE_URL", &server.base_url)
             .env("TEST_PROBE_VERSION", NEXT)
             .args(args);
@@ -347,7 +348,17 @@ fn update_names_the_ssh_sudo_targets_whose_helpers_need_redeployment() {
     let server = Server::start();
     server.publish(&format!("v{CURRENT}"), Some("skill"), None, true, None);
     let install = Install::new(&["bin"]);
-    let config_dir = install.home.join(".config").join("agentenv");
+    // The default configuration location the executable resolves for HOME
+    // on Unix and for APPDATA on Windows.
+    let config_dir = if cfg!(windows) {
+        install
+            .home
+            .join("AppData")
+            .join("Roaming")
+            .join("agentenv")
+    } else {
+        install.home.join(".config").join("agentenv")
+    };
     fs::create_dir_all(&config_dir).expect("config dir");
     let config_file = config_dir.join("config.toml");
     fs::write(
