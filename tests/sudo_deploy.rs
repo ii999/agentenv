@@ -775,6 +775,7 @@ fn destination_for(target: &'static str) -> Destination {
     }
 }
 
+#[cfg(unix)]
 const UNREACHABLE_RELEASES: &str = "http://127.0.0.1:9/releases";
 
 #[tokio::test]
@@ -793,6 +794,8 @@ async fn file_source_requires_a_nonempty_regular_file() {
     assert_eq!(bytes.name, good.display().to_string());
     let empty = root.path().join("empty");
     std::fs::write(&empty, b"").unwrap();
+    // Only Unix adds the FIFO case below.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut rejected = vec![
         ("empty", empty),
         ("directory", root.path().to_path_buf()),
