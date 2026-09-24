@@ -21,8 +21,24 @@ prebuilt binaries and a `SHA256SUMS` checksum file for:
 | --- | --- |
 | macOS (Apple silicon) | `agentenv-<tag>-aarch64-apple-darwin.tar.gz` |
 | macOS (Intel) | `agentenv-<tag>-x86_64-apple-darwin.tar.gz` |
-| Linux (x86_64, glibc) | `agentenv-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (x86_64, glibc 2.28+) | `agentenv-<tag>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (aarch64, glibc 2.28+) | `agentenv-<tag>-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows (x86_64) | `agentenv-<tag>-x86_64-pc-windows-msvc.zip` |
+
+The Linux executables are built against glibc 2.28 and run on RHEL, AlmaLinux
+and Rocky Linux 8, Debian 10, Ubuntu 20.04, Amazon Linux 2023, and later
+releases. Distributions based on musl, such as Alpine, build from source. Every
+release runs each executable once before publishing and installs the published
+release on every platform afterwards; the Linux x86_64 installation runs on a
+glibc 2.28 system.
+
+Each asset carries a signed [build provenance
+attestation](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds)
+that ties it to the release workflow run. With the GitHub CLI installed:
+
+```bash
+gh attestation verify agentenv-<tag>-<target>.tar.gz --repo ii999/agentenv
+```
 
 ### Install script
 
@@ -364,9 +380,10 @@ credential store, Python, or Node.js. Deployment only ever happens through
 download, or replace the remote helper, and a mismatch fails before the sudo
 password is resolved while naming the deployment command. Hosts that the
 client cannot reach directly, or that require a change-managed copy, take the
-standalone release asset `agentenv-sudo-helper-<tag>-<target>` through their
-own deployment path: verify its checksum, place it at `helper_path`, make it
-executable, and run `--check`.
+standalone release asset `agentenv-sudo-helper-<tag>-<target>` (x86_64 or
+aarch64 Linux, or macOS; the Linux helper needs glibc 2.28 or newer) through
+their own deployment path: verify its checksum, place it at `helper_path`,
+make it executable, and run `--check`, or pass it to `--deploy-helper --from`.
 
 ### Authentication and failure limits
 

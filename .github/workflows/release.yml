@@ -1,41 +1,67 @@
 name: Release
 
+# A tag push builds, verifies, publishes and then installs a release. A manual
+# run performs the same build and verification for every target without
+# publishing, so the pipeline can be exercised from a branch before a tag.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Every Linux executable must load on this glibc or newer: RHEL, AlmaLinux
+  # and Rocky 8, Debian 10, Ubuntu 20.04, Amazon Linux 2023 and later. The
+  # remote sudo helper runs on servers that are rarely current, so the Linux
+  # builds run in manylinux_2_28 containers and the gate below enforces it.
+  GLIBC_FLOOR: "2.28"
 
 jobs:
-  check-version:
-    name: Check tag against crate version
+  version:
+    name: Resolve the release version
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-      - name: Verify tag matches Cargo.toml version
+      - name: Verify the tag against Cargo.toml
+        id: resolve
         run: |
           crate_version=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "agentenv") | .version')
-          tag_version=${GITHUB_REF_NAME#v}
-          if [ "$crate_version" != "$tag_version" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$crate_version" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${crate_version}" >&2
             exit 1
           fi
+          echo "tag=v${crate_version}" >> "$GITHUB_OUTPUT"
+          echo "version=${crate_version}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build (${{ matrix.target }})
-    needs: check-version
+    needs: version
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      RELEASE_TARGET: ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            container: quay.io/pypa/manylinux_2_28_x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            container: quay.io/pypa/manylinux_2_28_aarch64
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: macos-latest
@@ -51,28 +77,70 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --bin agentenv --bin agentenv-sudo-helper --bin agentenv-ssh-askpass --target ${{ matrix.target }}
-      - name: Package
-        shell: bash
+        run: >-
+          cargo build --release --locked
+          --bin agentenv --bin agentenv-sudo-helper --bin agentenv-ssh-askpass
+          --target "$RELEASE_TARGET"
+      # Every executable runs once and must report the release version, so a
+      # mislabeled or broken build never reaches the release. Linux builds must
+      # also stay within the glibc floor and link nothing beyond libc.
+      - name: Verify the built executables
         run: |
-          staging="agentenv-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir "$staging"
-          suffix=
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            suffix=.exe
-          fi
+          set -euo pipefail
+          dir="target/${RELEASE_TARGET}/release"
+          suffix=""
+          case "$RELEASE_TARGET" in *windows*) suffix=.exe ;; esac
+          expect() {
+            local actual
+            actual=$("$dir/$1$suffix" "$2")
+            if [ "$actual" != "$3" ]; then
+              echo "$1 reports '$actual' instead of '$3'" >&2
+              exit 1
+            fi
+            echo "$1: $actual"
+          }
+          expect agentenv --version "agentenv ${RELEASE_VERSION}"
+          expect agentenv-sudo-helper --identity "agentenv-sudo-helper 1 ${RELEASE_VERSION}"
+          expect agentenv-ssh-askpass --identity "agentenv-ssh-askpass 1 ${RELEASE_VERSION}"
+          case "$RELEASE_TARGET" in *linux*) ;; *) exit 0 ;; esac
           for bin in agentenv agentenv-sudo-helper agentenv-ssh-askpass; do
-            cp "target/${{ matrix.target }}/release/${bin}${suffix}" "$staging/"
+            highest=$(readelf --dyn-syms --wide "$dir/$bin" \
+              | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sed 's/^GLIBC_//' | sort -uV | tail -n 1)
+            newest=$(printf '%s\n%s\n' "$GLIBC_FLOOR" "$highest" | sort -V | tail -n 1)
+            if [ "$newest" != "$GLIBC_FLOOR" ]; then
+              echo "$bin requires glibc $highest, above the $GLIBC_FLOOR floor" >&2
+              exit 1
+            fi
+            unexpected=$(ldd "$dir/$bin" | awk '{print $1}' \
+              | grep -vE '^(/|statically|linux-vdso|libc\.|libm\.|libgcc_s\.|libpthread\.|libdl\.|librt\.)' || true)
+            if [ -n "$unexpected" ]; then
+              echo "$bin links shared libraries outside the baseline: $unexpected" >&2
+              exit 1
+            fi
+            echo "$bin: glibc $highest, dynamic libraries within the baseline"
           done
-          cp README.md "$staging/"
+      - name: Package
+        run: |
+          set -euo pipefail
+          staging="agentenv-${RELEASE_TAG}-${RELEASE_TARGET}"
+          mkdir "$staging"
+          suffix=""
+          case "$RELEASE_TARGET" in *windows*) suffix=.exe ;; esac
+          for bin in agentenv agentenv-sudo-helper agentenv-ssh-askpass; do
+            cp "target/${RELEASE_TARGET}/release/${bin}${suffix}" "$staging/"
+          done
+          cp README.md LICENSE "$staging/"
           cp -R skills "$staging/"
-          if [[ "${{ matrix.target }}" == *windows* ]]; then
-            7z a "${staging}.zip" "$staging"
-          else
-            tar czf "${staging}.tar.gz" "$staging"
-            cp "target/${{ matrix.target }}/release/agentenv-sudo-helper" \
-              "agentenv-sudo-helper-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          fi
+          case "$RELEASE_TARGET" in
+            *windows*)
+              7z a "${staging}.zip" "$staging"
+              ;;
+            *)
+              tar czf "${staging}.tar.gz" "$staging"
+              cp "target/${RELEASE_TARGET}/release/agentenv-sudo-helper" \
+                "agentenv-sudo-helper-${RELEASE_TAG}-${RELEASE_TARGET}"
+              ;;
+          esac
       - uses: actions/upload-artifact@v4
         with:
           name: agentenv-${{ matrix.target }}
@@ -84,8 +152,13 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: build
+    if: github.ref_type == 'tag'
+    needs: [version, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -95,7 +168,61 @@ jobs:
         run: |
           cd artifacts
           sha256sum -- * > SHA256SUMS
+      # Signed provenance ties every asset, including SHA256SUMS, to this
+      # workflow run; `gh attestation verify` checks it offline of trust in
+      # the download path.
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: artifacts/*
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
+
+  # The documented install paths run against the published release on every
+  # supported platform. The x86_64 Linux case runs on a glibc 2.28 system, the
+  # floor the Linux builds are gated against.
+  verify-install:
+    name: Verify install (${{ matrix.name }})
+    if: github.ref_type == 'tag'
+    needs: [version, release]
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    env:
+      RELEASE_TAG: ${{ needs.version.outputs.tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64, glibc 2.28
+            os: ubuntu-latest
+            container: almalinux:8
+          - name: Linux aarch64
+            os: ubuntu-24.04-arm
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
+    steps:
+      - name: Install with install.sh and check for updates
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v tar >/dev/null || ! command -v gzip >/dev/null; then
+            dnf -y -q install tar gzip
+          fi
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/install.sh" \
+            | bash -s -- --version "$RELEASE_TAG" --no-skill --dir "$RUNNER_TEMP/agentenv-bin"
+          "$RUNNER_TEMP/agentenv-bin/agentenv" update --check --version "$RELEASE_TAG"
+      - name: Install with install.ps1 and check for updates
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-RestMethod "https://raw.githubusercontent.com/$env:GITHUB_REPOSITORY/$env:GITHUB_REF_NAME/install.ps1" `
+            -OutFile install.ps1
+          pwsh -NoProfile -File install.ps1 -Version $env:RELEASE_TAG -NoSkill -InstallDir "$env:RUNNER_TEMP\agentenv-bin"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP\agentenv-bin\agentenv.exe" update --check --version $env:RELEASE_TAG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -51,9 +51,23 @@ case "$os/$arch" in
     Darwin/arm64) target="aarch64-apple-darwin" ;;
     Darwin/x86_64) target="x86_64-apple-darwin" ;;
     Linux/x86_64) target="x86_64-unknown-linux-gnu" ;;
+    Linux/aarch64) target="aarch64-unknown-linux-gnu" ;;
     *) fail "no prebuilt binary for $os/$arch; build from source with 'cargo build --release'" ;;
 esac
 readonly target
+
+# The Linux executables are built against glibc 2.28. Refuse here with a clear
+# reason instead of leaving the loader to fail after the download.
+readonly glibc_floor="2.28"
+if [[ "$os" == Linux ]]; then
+    if ldd --version 2>&1 | grep -qi musl; then
+        fail "the Linux release binaries need glibc $glibc_floor or newer and this system uses musl; build from source with 'cargo build --release'"
+    fi
+    glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')" || glibc=""
+    if [[ -n "$glibc" && "$(printf '%s\n%s\n' "$glibc_floor" "$glibc" | sort -V | head -n 1)" != "$glibc_floor" ]]; then
+        fail "the Linux release binaries need glibc $glibc_floor or newer and this system has glibc $glibc; build from source with 'cargo build --release'"
+    fi
+fi
 
 if [[ -z "$version" ]]; then
     version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
@@ -95,11 +109,11 @@ for binary in "${binaries[@]}"; do
     [[ -f "$extracted/$binary" ]] \
         || fail "$asset is incomplete: missing $binary; install a complete release bundle"
 done
-[[ "$($extracted/agentenv --version)" == "agentenv $release_version" ]] \
+[[ "$("$extracted"/agentenv --version)" == "agentenv $release_version" ]] \
     || fail "$asset contains a mismatched agentenv executable"
-[[ "$($extracted/agentenv-sudo-helper --identity)" == "agentenv-sudo-helper 1 $release_version" ]] \
+[[ "$("$extracted"/agentenv-sudo-helper --identity)" == "agentenv-sudo-helper 1 $release_version" ]] \
     || fail "$asset contains a mismatched sudo helper"
-[[ "$($extracted/agentenv-ssh-askpass --identity)" == "agentenv-ssh-askpass 1 $release_version" ]] \
+[[ "$("$extracted"/agentenv-ssh-askpass --identity)" == "agentenv-ssh-askpass 1 $release_version" ]] \
     || fail "$asset contains a mismatched SSH askpass helper"
 
 mkdir -p "$install_dir"
