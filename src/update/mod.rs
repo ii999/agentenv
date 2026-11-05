@@ -180,13 +180,7 @@ pub fn apply(
     for root in &status.skills {
         match &extracted.skill {
             Some(source) => match install::replace_skill(root, source) {
-                Ok(()) => {
-                    write_progress(
-                        progress,
-                        format!("Refreshed the agent skill at {}", root.display()),
-                    )?;
-                    skills.push(root.clone());
-                }
+                Ok(()) => skills.push(root.clone()),
                 Err(error) => skill_failures.push(SkillFailure {
                     path: root.clone(),
                     error: error.to_string(),

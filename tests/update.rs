@@ -326,6 +326,15 @@ fn update_replaces_the_binary_and_installed_skills_only() {
         );
     }
     assert_eq!(read(&install.skill(&[".agents", "skills"])), "new skill");
+    let skill_root = install.home.join(".agents").join("skills").join("agentenv");
+    let skill_root = skill_root.display().to_string();
+    assert_eq!(
+        run.stdout.matches(&skill_root).count() + run.stderr.matches(&skill_root).count(),
+        1,
+        "the refreshed skill is reported exactly once:\nstdout: {}\nstderr: {}",
+        run.stdout,
+        run.stderr
+    );
     assert!(
         !install.skill(&[".claude", "skills"]).exists(),
         "a skill root that was never installed stays absent"
