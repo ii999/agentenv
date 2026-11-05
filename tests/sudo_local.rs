@@ -621,6 +621,11 @@ mod deployment {
     ) -> std::path::PathBuf {
         let config = directory.join("agentenv.toml");
         let marker = directory.join("provider-ran");
+        // Deployment checks validate sudo without executing it. Use a regular
+        // fixture file because host installations may use alternatives symlinks.
+        let sudo = directory.join("sudo");
+        fs::write(&sudo, "#!/bin/sh\nexit 99\n").expect("fake sudo written");
+        fs::set_permissions(&sudo, fs::Permissions::from_mode(0o700)).expect("sudo mode");
         fs::write(
             &config,
             format!(
@@ -641,7 +646,7 @@ transport = "local"
 credential = "credential://admin"
 auth_user = "{account}"
 run_as = "root"
-sudo_path = "/usr/bin/sudo"
+sudo_path = "{sudo}"
 [profiles.work.admin]
 description = "Loopback SSH target."
 kind = "sudo-target"
@@ -650,7 +655,7 @@ transport = "ssh"
 credential = "credential://admin"
 auth_user = "{account}"
 run_as = "root"
-sudo_path = "/usr/bin/sudo"
+sudo_path = "{sudo}"
 [profiles.work.admin.sudo.ssh]
 mode = "explicit"
 hostname = "127.0.0.1"
@@ -666,6 +671,7 @@ use_agent = false
 "#,
                 marker.display(),
                 account = account_name(),
+                sudo = sudo.display(),
                 known_hosts = directory.join("known_hosts").display(),
                 helper = helper_path.display(),
                 key = directory.join("fixture_key").display(),
