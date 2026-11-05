@@ -464,11 +464,13 @@ fn cancellation_during_helper_identity_reaps_helper_without_starting_sudo() {
     let sudo_marker = directory.path().join("sudo-started");
     let helper = directory.path().join("helper");
     let sudo_path = directory.path().join("sudo");
+    // Publish the PID atomically so observing the marker cannot cancel the
+    // helper between shell redirection creating the file and printf filling it.
     fs::write(
         &helper,
         format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$$\" > '{}'\nexec /bin/sleep 30\n",
-            helper_pid.display()
+            "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" > '{pid}.tmp'\nmv '{pid}.tmp' '{pid}'\nexec /bin/sleep 30\n",
+            pid = helper_pid.display()
         ),
     )
     .expect("write helper");
