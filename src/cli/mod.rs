@@ -184,14 +184,27 @@ pub enum CredentialCommand {
     List,
     /// Resolve a credential without printing its value.
     Check { name: String },
-    /// Store a keychain credential from a terminal prompt or standard input.
-    Set { name: String },
+    /// Store a keychain credential through a local dialog, terminal, or stdin.
+    Set {
+        name: String,
+        /// Select a local input interface; omitted keeps terminal/stdin detection.
+        #[arg(long, value_enum, value_name = "MODE")]
+        input: Option<CredentialInput>,
+    },
     /// Add a credential definition to the config file.
     Add(CredentialAddArgs),
     /// Replace a credential definition's permitted usages without reading its value.
     Update(CredentialUpdateArgs),
     /// Deliver a credential into a browser or desktop destination without printing it.
     Fill(fill::CredentialFillArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CredentialInput {
+    /// Open a local desktop window and wait for Save or Cancel.
+    Dialog,
+    /// Open the editable terminal interface; requires terminal stdin.
+    Terminal,
 }
 
 #[derive(Debug, Args)]
@@ -511,8 +524,8 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             command: CredentialCommand::Check { name },
         }) => credential::check(&config, &name, invocation.json),
         Command::Credential(CredentialArgs {
-            command: CredentialCommand::Set { name },
-        }) => credential::set(&config, &name, invocation.json),
+            command: CredentialCommand::Set { name, input },
+        }) => credential::set(&config, &name, input, invocation.json),
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Fill(args),
         }) => fill::execute(&config, args, invocation.json),

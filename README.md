@@ -309,7 +309,8 @@ agentenv credential set prod_account
 agentenv credential update prod_account --usage sudo --usage ssh-password
 ```
 
-`credential set` uses hidden local input. Run it directly at a terminal. Do not
+`credential set` opens a terminal editor with input hidden by default. Run it
+directly at a terminal. Do not
 pass its value as an argument or environment variable. Authentication
 credentials have no `inject_as`; the env provider and `?as=` overrides are not
 allowed for authentication use.
@@ -662,6 +663,8 @@ Credential commands are:
 agentenv credential list --json
 agentenv credential check <name>
 agentenv credential set <name>
+agentenv credential set <name> --input dialog --json
+agentenv credential set <name> --input terminal
 agentenv credential add <name> --description "<text>" --provider env \
     --env-var <NAME> --inject-as <ENV>
 agentenv credential add <name> --description "<text>" --provider keychain \
@@ -695,13 +698,80 @@ refreshes installed agent skills; see [Update](#update).
 `credential list` performs only a shallow status check and does not read a
 secret store or execute a provider command. `credential check` resolves one
 credential and reports availability without printing its value. Run
-`credential set` directly to enter a keychain credential at its hidden terminal
-prompt; do not put the value in argv, an environment variable, chat, a command
+`credential set` directly to enter a keychain credential in its terminal editor;
+do not put the value in argv, an environment variable, chat, a command
 pipe, or a file. Environment and command credentials are managed by their external
 systems and cannot be set by this command. `credential add` writes a
 credential definition to the config file — never a value; define the
 credential first, then reference it from entries (`credential://<name>`) and,
 for the keychain provider, store its value with `credential set`.
+
+For Agent-guided entry, run `credential set <name> --input dialog --json`
+without a PTY. This opens a local desktop window and waits until entry finishes.
+The window shows the credential name; the definition's description is the
+placeholder text of the empty input field. It supports masked multiline input,
+a show/hide toggle inside the field, editing, paste from the keyboard shortcut
+or the field's context menu, and retry after a failed save. Enter inserts a
+newline; click Save or press Cmd+Enter on macOS, Ctrl+Enter elsewhere. Spaces
+and line endings from the clipboard are preserved. Escape, Cancel, or window
+closure cancels entry. The window closes automatically after a confirmed save.
+On macOS 26 and later the window uses the system Liquid Glass material, and
+earlier macOS releases use the system window vibrancy material.
+
+The Agent must wait for the process result without reading the window,
+clipboard, or screenshots of live input. The entered value, its length, and
+fingerprints never appear in the command's completion output. Showing the
+value is a local visual preview; screen recording or another process with
+screen access can capture it. Accessibility text remains masked. A graphical
+session is required on the machine running the command; desktop startup
+failure returns an error and never falls back to stdin. Linux desktop input
+requires X11 or Wayland, OpenGL, and XKB runtime libraries; ordinary CLI commands
+do not initialize those desktop services.
+
+Dialog completion uses these results:
+
+| Status | Exit code | Meaning |
+| --- | --- | --- |
+| `stored` | 0 | The platform credential store confirmed the write. |
+| `cancelled` | 130, or 128 plus the received signal | Entry ended without a confirmed write. |
+| `failed` | 4 | The dialog could not complete; `reason` identifies the failure. |
+
+For example, a successful result is
+`{"version":1,"credential":"company_llm","input":"dialog","status":"stored"}`.
+Failure reasons are `desktop-unavailable`, `keyboard-unavailable` (Linux),
+`dialog-failed`, `store-failed`, and `store-unconfirmed`. The last means a write
+may have occurred without confirmation; inspect the store before retrying.
+An in-progress save finishes before cancellation returns, and a confirmed write
+still reports `stored`. Configuration and argument errors happen before the
+dialog opens and use the ordinary CLI error codes and stderr diagnostics,
+without a JSON completion object. `--json` for `credential set` requires
+`--input dialog`.
+
+The terminal editor shows masked characters and a live character and byte count.
+Use the arrow keys, Home/End, Backspace, and Delete to edit. Home/End move within
+the current line; Ctrl+Home/End or Ctrl+A/E reach the start/end of the value.
+Ctrl+U clears the input. F2 or Ctrl+R toggles visibility. Revealed control
+characters, line breaks, and backslashes use escaped notation; their stored
+bytes are unchanged. The editor uses the terminal directly, including when
+standard output or standard error is redirected.
+
+Press Ctrl+S to save, or Esc/Ctrl+C to cancel. Enter inserts a newline and never
+saves, so a multiline paste cannot submit a partial value. Terminals that send
+bracketed paste events also show a paste confirmation; other terminals still
+show the live input count. Pasted content is preserved as delivered by the
+terminal, including spaces and trailing line breaks. The terminal or clipboard
+host may itself transform pasted text before agentenv receives it.
+
+Validation and storage failures leave the value editable in the same session.
+Correct the input or the store problem, then press Ctrl+S to retry without
+re-entering the value. Saving hides any revealed preview. Cancellation before
+saving leaves the stored value unchanged; a synchronous store operation already
+in progress must finish before its outcome can be reported. A successful save
+confirms storage, not acceptance by an external service. Nonterminal input keeps
+its existing behavior when `--input` is omitted: read stdin to EOF and remove
+one trailing LF or CRLF. Explicit `--input terminal` requires a terminal and
+refuses tool pipes.
+
 `credential update` replaces only the permitted-purpose metadata and validates
 the whole file before writing; it never resolves or changes the saved value.
 `credential fill` delivers a credential into a browser field; see
@@ -872,9 +942,12 @@ platform credential store — and unrestricted network access. Credential
 resolution is unchanged by `--pure`: a `command` provider's subprocess keeps
 the full parent environment.
 
-`credential set` is the deliberate exception: it writes the entered value to
-the selected platform credential store. No other command prints or persists
-that value.
+`credential set` writes the entered value to the selected platform credential
+store. Its terminal editor hides input by default; F2 or Ctrl+R deliberately
+reveals the entered value in the terminal. Terminal recording or screen capture
+can retain that preview, and hiding it again cannot erase those recordings.
+Other commands never print a resolved credential, and no command writes a
+credential value to the configuration file.
 
 The write commands (`init`, `set`, `unset`, `credential add`) widen the CLI's
 surface deliberately: the config file, which was always hand-editable, is now
