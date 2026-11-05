@@ -3,3 +3,5 @@
 /work/
 !/work/*/rounds/*/evidence/*.log
 /work/*/runtime/
+/runtime/
+/work/*/attempts/

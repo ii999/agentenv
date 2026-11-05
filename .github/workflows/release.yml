@@ -130,6 +130,7 @@ jobs:
             cp "target/${RELEASE_TARGET}/release/${bin}${suffix}" "$staging/"
           done
           cp README.md LICENSE "$staging/"
+          cp -R licenses "$staging/"
           cp -R skills "$staging/"
           case "$RELEASE_TARGET" in
             *windows*)

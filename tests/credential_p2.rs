@@ -8,20 +8,12 @@
 mod helpers;
 
 use std::fs;
-#[cfg(unix)]
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::sync::mpsc;
-#[cfg(unix)]
-use std::time::{Duration, Instant};
 
 use helpers::{
     assert_exit, assert_mentions, assert_omits, command_with_project_discovery, run_ac, Run,
     SENTINELS,
 };
-#[cfg(unix)]
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -240,125 +232,6 @@ fn credential_actions_reject_json_output() {
             "the unsupported flag is explained",
         );
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn interactive_set_does_not_echo_the_typed_secret() {
-    const TYPED_VALUE: &str = "pty-secret-49b8e";
-    let config = ConfigFile::new(&keychain_and_env_config());
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("a pseudo-terminal is available");
-    let binary = assert_cmd::cargo::cargo_bin("agentenv");
-    let mut command = CommandBuilder::new(binary);
-    command.env_clear();
-    if let Some(path) = std::env::var_os("PATH") {
-        command.env("PATH", path);
-    }
-    command.cwd(
-        config
-            .path()
-            .parent()
-            .expect("the credential config has a parent directory"),
-    );
-    command.env("AGENTENV_FILE", config.path());
-    command.env("AGENTENV_TEST_KEYCHAIN", config.store_path());
-    command.env("AGENTENV_NO_PROJECT", "1");
-    command.args(["credential", "set", "openai_personal"]);
-
-    let mut child = pty
-        .slave
-        .spawn_command(command)
-        .expect("the credential command starts in a pseudo-terminal");
-    drop(pty.slave);
-
-    let (sender, receiver) = mpsc::channel();
-    let mut reader = pty
-        .master
-        .try_clone_reader()
-        .expect("the pseudo-terminal is readable");
-    std::thread::spawn(move || {
-        let mut buffer = [0_u8; 256];
-        while let Ok(read) = reader.read(&mut buffer) {
-            if read == 0 || sender.send(buffer[..read].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
-
-    let prompt_deadline = Instant::now() + Duration::from_secs(3);
-    let mut transcript = Vec::new();
-    while Instant::now() < prompt_deadline {
-        match receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(chunk) => {
-                transcript.extend_from_slice(&chunk);
-                if String::from_utf8_lossy(&transcript).contains("Credential value:") {
-                    break;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    assert!(
-        String::from_utf8_lossy(&transcript).contains("Credential value:"),
-        "credential set did not prompt before the test timeout; terminal output: {}",
-        String::from_utf8_lossy(&transcript)
-    );
-
-    let settle_deadline = Instant::now() + Duration::from_millis(100);
-    while Instant::now() < settle_deadline {
-        match receiver.recv_timeout(Duration::from_millis(10)) {
-            Ok(chunk) => transcript.extend_from_slice(&chunk),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    let mut writer = pty
-        .master
-        .take_writer()
-        .expect("the pseudo-terminal is writable");
-    writer
-        .write_all(format!("{TYPED_VALUE}\n").as_bytes())
-        .expect("the typed value is written");
-    writer.flush().expect("the typed value is flushed");
-    drop(writer);
-
-    let status = child.wait().expect("credential set exits");
-    drop(pty.master);
-    let output_deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < output_deadline {
-        match receiver.recv_timeout(Duration::from_millis(50)) {
-            Ok(chunk) => transcript.extend_from_slice(&chunk),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-
-    let terminal_output = String::from_utf8_lossy(&transcript);
-    assert!(status.success(), "credential set failed: {terminal_output}");
-    assert!(
-        !terminal_output.contains(TYPED_VALUE),
-        "credential set echoed the typed value in the terminal stream: {terminal_output}"
-    );
-
-    let check = run_ac(
-        config.path(),
-        &[(
-            "AGENTENV_TEST_KEYCHAIN",
-            config.store_path().to_str().expect("test paths are UTF-8"),
-        )],
-        &["credential", "check", "openai_personal"],
-    );
-    assert_exit(&check, 0, "the interactively stored secret resolves");
-    assert_omits(&check, TYPED_VALUE, "check never prints the stored secret");
 }
 
 fn keychain_and_env_config() -> String {

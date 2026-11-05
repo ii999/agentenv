@@ -7,7 +7,11 @@ license = "MIT"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 keyring = "4"
-rpassword = "7"
+crossterm = { version = "0.29", default-features = false, features = ["events", "windows"] }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "system_fonts", "accesskit", "clipboard", "x11", "wayland"] }
+egui-winit = { version = "0.37", default-features = false, features = ["clipboard"] }
 # `update` replaces the running executable in place (self-replace), compares
 # release tags (semver), downloads over HTTPS with bundled roots (ureq), and
 # unpacks the platform archive (flate2 + tar on Unix, zip on Windows).
@@ -65,8 +69,20 @@ libc = "0.2"
 flate2 = "1"
 tar = "0.4"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# The credential dialog places a system glass backdrop behind its window. These
+# are the AppKit binding versions eframe already links on macOS.
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSGlassEffectView", "NSGraphics", "NSResponder", "NSView", "NSVisualEffectView"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Desktop libraries load only when a dialog opens; headless CLI executables
+# retain the release pipeline's libc-only dynamic-link baseline.
+winit = { version = "0.30.13", default-features = false, features = ["wayland-dlopen", "wayland-csd-adwaita"] }
+xkbcommon-dl = "0.4.2"
+
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_StationsAndDesktops", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 zip = { version = "8", default-features = false, features = ["deflate"] }
 

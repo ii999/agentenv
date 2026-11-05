@@ -1,5 +1,8 @@
 //! Execution of the credential runtime commands (`credential check` and
-//! `credential set`), including the hidden-input path for `credential set`.
+//! `credential set`), including interactive and piped input.
+
+mod dialog;
+mod terminal;
 
 use std::io::{self, IsTerminal, Read};
 
@@ -7,7 +10,7 @@ use agentenv::config::{Config, CredentialDef, Provider};
 use agentenv::credential::{provider_for, CapturedSecret, Secret};
 use agentenv::error::AppError;
 
-use super::Output;
+use super::{CredentialInput, Output};
 
 pub(super) fn check(config: &Config, name: &str, json: bool) -> Result<Output, AppError> {
     reject_json_for_credential_action(json, "check")?;
@@ -20,8 +23,15 @@ pub(super) fn check(config: &Config, name: &str, json: bool) -> Result<Output, A
     })
 }
 
-pub(super) fn set(config: &Config, name: &str, json: bool) -> Result<Output, AppError> {
-    reject_json_for_credential_action(json, "set")?;
+pub(super) fn set(
+    config: &Config,
+    name: &str,
+    input: Option<CredentialInput>,
+    json: bool,
+) -> Result<Output, AppError> {
+    if input != Some(CredentialInput::Dialog) {
+        reject_json_for_credential_action(json, "set")?;
+    }
     let credential = credential_for(config, name)?;
     if !matches!(&credential.provider, Provider::Keychain { .. }) {
         return Err(AppError::Usage(format!(
@@ -31,8 +41,16 @@ pub(super) fn set(config: &Config, name: &str, json: bool) -> Result<Output, App
             name
         )));
     }
-    let secret = read_secret_for_set()?;
-    provider_for(credential).store(secret)?;
+    if input == Some(CredentialInput::Dialog) {
+        return Ok(dialog::edit_and_store(credential).output(name, json));
+    }
+    if io::stdin().is_terminal() {
+        return terminal::edit_and_store(credential);
+    }
+    if input == Some(CredentialInput::Terminal) {
+        return Err(AppError::Usage("terminal input needs an interactive terminal; run the command at a terminal or use '--input dialog' on a local desktop".into()));
+    }
+    provider_for(credential).store(read_piped_secret()?)?;
     Ok(Output {
         stdout: format!("Credential '{name}' stored.\n"),
         stderr: String::new(),
@@ -70,24 +88,13 @@ pub(super) fn credential_for<'a>(
     })
 }
 
-fn read_secret_for_set() -> Result<Secret, AppError> {
-    let bytes = if io::stdin().is_terminal() {
-        read_terminal_secret()
-            .map_err(|error| {
-                AppError::Usage(format!(
-                    "could not read the credential value: {error}; retry 'agentenv credential set <name>'"
-                ))
-            })?
-            .into_bytes()
-    } else {
-        let mut bytes = Vec::new();
-        io::stdin().read_to_end(&mut bytes).map_err(|error| {
-            AppError::Usage(format!(
-                "could not read credential input: {error}; pipe a value and retry 'agentenv credential set <name>'"
-            ))
-        })?;
-        bytes
-    };
+fn read_piped_secret() -> Result<Secret, AppError> {
+    let mut bytes = Vec::new();
+    io::stdin().read_to_end(&mut bytes).map_err(|error| {
+        AppError::Usage(format!(
+            "could not read credential input: {error}; pipe a value and retry 'agentenv credential set <name>'"
+        ))
+    })?;
     CapturedSecret::new(bytes)
         .strip_one_trailing_newline()
         .into_secret()
@@ -96,18 +103,4 @@ fn read_secret_for_set() -> Result<Secret, AppError> {
             "credential value is invalid: {error}; provide a non-empty UTF-8 value and retry 'agentenv credential set <name>'"
         ))
     })
-}
-
-#[cfg(unix)]
-fn read_terminal_secret() -> io::Result<String> {
-    let config = rpassword::ConfigBuilder::new()
-        .input_file_path("/dev/stdin")
-        .output_writer(io::stderr())
-        .build();
-    rpassword::prompt_password_with_config("Credential value: ", config)
-}
-
-#[cfg(not(unix))]
-fn read_terminal_secret() -> io::Result<String> {
-    rpassword::prompt_password("Credential value: ")
 }

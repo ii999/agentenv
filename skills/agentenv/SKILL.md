@@ -172,7 +172,7 @@ agentenv credential add <name> --description "<text>" --provider keychain \
     --service <service> --account <account> --inject-as <ENV>
 agentenv credential add <name> --description "<text>" --provider command \
     --argv <arg> [--argv <arg> ...] --inject-as <ENV>
-agentenv credential set <name>           # store a keychain value at a hidden prompt
+agentenv credential set <name> --input dialog --json  # open local entry; wait for its result
 ```
 
 Order for a new credential: `credential add` the definition, then for the
@@ -181,9 +181,30 @@ from an entry field as `credential://<name>`. Env and command credentials
 get their values from their external systems; `credential set` does not
 apply to them.
 
-`credential set` reads the value from a hidden terminal prompt, so prefer
-asking the user to run it themselves. Never ask them to send the value in
-chat or place it in argv, an environment variable, a command pipe, or a file.
+For local keychain entry, launch `credential set <name> --input dialog --json`
+without a PTY. Tell the user to enter the value in the local window and save.
+Keep the command running and wait for its completion, including across tool
+session yields; an open window is not a completed save. Never inspect, capture,
+read, or automate the live entry window or clipboard. The user enters and
+checks the value there, and the command returns only completion metadata.
+
+Continue the dependent task only after exit 0 and JSON `status: "stored"`.
+`status: "cancelled"` means entry ended without a confirmed save; report it
+and leave the dependent action stopped. `status: "failed"` includes a
+nonsecret `reason`; report the diagnostic. `store-unconfirmed` means a write
+may have occurred, so do not claim the previous value is unchanged or retry
+automatically. Startup/configuration errors can exit before JSON is emitted;
+handle a nonzero exit or missing result as failure. A save already in progress
+finishes before the command returns; a confirmed write reports `stored` even
+if the user requested closure during that write.
+
+The dialog needs a graphical session on the machine running agentenv. On a
+remote or headless host, explain that limitation and have the user run
+`agentenv credential set <name> --input terminal` themselves in that host's
+terminal, then confirm completion. Do not substitute an Agent-owned PTY or
+stdin pipe. Never ask for the value in chat or place it in argv, an environment
+variable, a command pipe, or a file. Terminal input supports a local reveal
+toggle, so its screen output must remain outside the Agent's tools.
 
 Prefer `keychain` or `command` providers for local use; `env` exposes the
 value to every process inheriting the environment and suits CI.
