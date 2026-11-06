@@ -29,8 +29,8 @@ jobs:
         run: cargo fmt --check
       - name: Clippy (default features)
         run: cargo clippy --all-targets -- -D warnings
-      - name: Clippy (test-keychain)
-        run: cargo clippy --all-targets --features test-keychain -- -D warnings
+      - name: Clippy (test-support)
+        run: cargo clippy --all-targets --features test-support -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -47,12 +47,12 @@ jobs:
       # creates and removes one uniquely named synthetic Credential Manager entry.
       - name: Run tests
         id: native_tests
-        run: cargo test --features test-keychain
+        run: cargo test --features test-support
       - name: Windows lint (both provider configurations)
         if: runner.os == 'Windows'
         run: |
           cargo clippy --all-targets -- -D warnings
-          cargo clippy --all-targets --features test-keychain -- -D warnings
+          cargo clippy --all-targets --features test-support -- -D warnings
       - name: Native Windows OpenSSH loopback fixture
         if: runner.os == 'Windows'
         run: |
@@ -74,8 +74,11 @@ jobs:
       # disposable containers. The job never modifies the runner's sudo policy.
       - name: Measure installed sudo and OpenSSH behavior
         run: bash tests/sudo_lab/run.sh --output-dir "$RUNNER_TEMP/sudo-compatibility"
+      # The lab's pinned Rust image builds into target/lab with the Cargo
+      # registry mounted; rust-cache keeps both between runs, so only changed
+      # crates compile instead of every dependency inside Docker.
       - name: Build and verify local sudo execution
-        run: python3 tests/sudo_execution_lab/run.py
+        run: python3 tests/sudo_execution_lab/run.py --cached-build
       - name: Verify SSH login and remote sudo execution
         run: >-
           docker run --rm --network none

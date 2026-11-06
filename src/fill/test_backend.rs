@@ -1,6 +1,6 @@
 //! A scripted destination for integration tests of the fill command.
 //!
-//! Compiled only with the `test-keychain` feature in debug builds, like the
+//! Compiled only with the `test-support` feature in debug builds, like the
 //! test credential store. The behavior is selected by
 //! `AGENTENV_FILL_TEST_BEHAVIOR`; a delivered value is written to the file
 //! named by `AGENTENV_FILL_TEST_SINK` so a test can inspect what its own

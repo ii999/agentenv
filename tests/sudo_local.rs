@@ -1,4 +1,7 @@
-#![cfg(unix)]
+// The suite runs the `test-probe` binary, which builds only with `test-support`.
+#![cfg(all(unix, feature = "test-support"))]
+
+mod helpers;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -10,28 +13,10 @@ use std::time::Duration;
 use agentenv::credential::CapturedSecret;
 use agentenv::sudo::{self, ExecutionRequest, LocalOptions, ProcessIo, PROTOCOL_VERSION};
 use assert_cmd::Command;
-
-fn account_name() -> String {
-    let output = std::process::Command::new("/usr/bin/id")
-        .arg("-un")
-        .output()
-        .expect("id is available");
-    String::from_utf8(output.stdout)
-        .expect("account is UTF-8")
-        .trim_end()
-        .to_owned()
-}
+use helpers::{account_name, fake_sudo};
 
 fn helper_path() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_agentenv-sudo-helper"))
-}
-
-fn fake_sudo(source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let path = directory.path().join("sudo");
-    fs::write(&path, source).expect("write fake sudo");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("chmod fake sudo");
-    (directory, path)
 }
 
 fn run_agentenv(config: &std::path::Path, arguments: &[&str]) -> std::process::Output {
@@ -246,7 +231,7 @@ exec "$@"
     };
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&calls);
-    let (_cancel, cancellation) = sudo::cancellation_channel();
+    let (_cancel, cancellation) = agentenv::cancel::channel();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let outcome = runtime
         .block_on(sudo::execute_local(
@@ -290,7 +275,7 @@ exec "$@"
     let (_directory, sudo_path) = fake_sudo(valid);
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&calls);
-    let (_cancel, cancellation) = sudo::cancellation_channel();
+    let (_cancel, cancellation) = agentenv::cancel::channel();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let outcome = runtime
         .block_on(sudo::execute_local(
@@ -330,7 +315,7 @@ exit 1
     let (_wrong_directory, wrong_sudo) = fake_sudo(wrong);
     let wrong_calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&wrong_calls);
-    let (_cancel, cancellation) = sudo::cancellation_channel();
+    let (_cancel, cancellation) = agentenv::cancel::channel();
     let outcome = runtime
         .block_on(sudo::execute_local(
             ExecutionRequest::new("/usr/bin/true", Vec::new(), None).expect("request"),
@@ -376,7 +361,7 @@ exit 94
     let (_directory, sudo_path) = fake_sudo(script);
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&calls);
-    let (_cancel, cancellation) = sudo::cancellation_channel();
+    let (_cancel, cancellation) = agentenv::cancel::channel();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let outcome = runtime
         .block_on(sudo::execute_local(
@@ -428,8 +413,8 @@ fn prequeued_cancellation_starts_neither_helper_sudo_nor_provider() {
     options.helper_path = helper;
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&calls);
-    let (cancel, cancellation) = sudo::cancellation_channel();
-    cancel.send(libc::SIGTERM).expect("queue cancellation");
+    let (cancel, cancellation) = agentenv::cancel::channel();
+    cancel.cancel(libc::SIGTERM);
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let outcome = runtime
         .block_on(sudo::execute_local(
@@ -487,7 +472,7 @@ fn cancellation_during_helper_identity_reaps_helper_without_starting_sudo() {
     options.setup_timeout = Duration::from_secs(10);
     let calls = Arc::new(AtomicUsize::new(0));
     let resolver_calls = Arc::clone(&calls);
-    let (cancel, cancellation) = sudo::cancellation_channel();
+    let (cancel, cancellation) = agentenv::cancel::channel();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let (outcome, ()) = runtime.block_on(async {
         tokio::join!(
@@ -510,7 +495,7 @@ fn cancellation_during_helper_identity_reaps_helper_without_starting_sudo() {
             async {
                 for _ in 0..200 {
                     if helper_pid.exists() {
-                        cancel.send(libc::SIGTERM).expect("cancel helper check");
+                        cancel.cancel(libc::SIGTERM);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -544,7 +529,7 @@ fn cancel_after_start(
     started: &std::path::Path,
 ) -> Result<sudo::ExecutionOutcome, agentenv::error::AppError> {
     let (_directory, sudo_path) = fake_sudo(source);
-    let (cancel, cancellation) = sudo::cancellation_channel();
+    let (cancel, cancellation) = agentenv::cancel::channel();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
     let (outcome, ()) = runtime.block_on(async {
         tokio::join!(
@@ -566,7 +551,7 @@ fn cancel_after_start(
             async {
                 for _ in 0..500 {
                     if started.exists() {
-                        cancel.send(libc::SIGTERM).expect("cancel sudo");
+                        cancel.cancel(libc::SIGTERM);
                         return;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -603,7 +588,8 @@ fn sudo_that_survives_the_forwarded_signal_is_completion_unconfirmed() {
     assert!(
         matches!(
             outcome,
-            Err(agentenv::error::AppError::SudoCompletionUnconfirmed(_))
+            Err(agentenv::error::AppError::Sudo(ref error))
+                if error.completion() == agentenv::sudo::Completion::Unconfirmed
         ),
         "escalation must not be reported as a confirmed termination"
     );

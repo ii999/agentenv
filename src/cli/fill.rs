@@ -61,7 +61,7 @@ pub enum FillBackendKind {
     /// Focused desktop input.
     Desktop,
     /// Scripted destination for the integration tests (debug builds only).
-    #[cfg(all(feature = "test-keychain", debug_assertions))]
+    #[cfg(all(feature = "test-support", debug_assertions))]
     Test,
 }
 
@@ -71,7 +71,7 @@ impl FillBackendKind {
             Self::Cdp => "cdp",
             Self::Playwright => "playwright",
             Self::Desktop => "desktop",
-            #[cfg(all(feature = "test-keychain", debug_assertions))]
+            #[cfg(all(feature = "test-support", debug_assertions))]
             Self::Test => "test",
         }
     }
@@ -112,15 +112,6 @@ pub(super) fn execute(
 
     let definition = credential_for(config, name)?;
     fill::check_fillable(definition)?;
-    if !fill::resolver_available(definition) {
-        return Err(FillError::new(
-            Reason::BackendUnavailable,
-            format!(
-                "credential '{name}' needs the confidential resolver, which is unavailable on this platform; use an env credential"
-            ),
-        )
-        .into());
-    }
 
     let executable = std::env::current_exe().map_err(|_| {
         AppError::Fill(
@@ -178,7 +169,7 @@ fn run_selected(
             ),
         )
         .into()),
-        #[cfg(all(feature = "test-keychain", debug_assertions))]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         FillBackendKind::Test => {
             let mut backend =
                 fill::test_backend::TestBackend::from_environment().ok_or_else(|| {
@@ -207,17 +198,12 @@ fn run_backend<B: Backend>(
         .map_err(|_| {
             AppError::Fill("backend-unavailable: could not initialize the fill runtime".to_owned())
         })?;
-    let (cancel, mut cancellation) = tokio::sync::watch::channel(0);
+    let (cancel, mut cancellation) = agentenv::cancel::channel();
     super::signals::install_signal_forwarder(&runtime, cancel, || {
         AppError::Fill("backend-unavailable: could not install cancellation handlers".to_owned())
     })?;
     let cancelled = async move {
-        while cancellation.changed().await.is_ok() {
-            if *cancellation.borrow() != 0 {
-                return;
-            }
-        }
-        std::future::pending::<()>().await;
+        cancellation.requested().await;
     };
     runtime.block_on(fill::run(
         backend, definition, executable, timeout, cancelled,
@@ -298,7 +284,7 @@ fn validate_backend_arguments(
             forbid(args.context_index.is_some(), "--context-index")?;
             forbid(args.browser.is_some(), "--browser")?;
         }
-        #[cfg(all(feature = "test-keychain", debug_assertions))]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         FillBackendKind::Test => {}
     }
     Ok(())
@@ -340,7 +326,6 @@ fn capabilities(args: &CredentialFillArgs, json: bool) -> Result<Output, AppErro
             },
         ),
     ];
-    let resolver_confidential = cfg!(any(unix, windows));
     if json {
         let mut table = serde_json::Map::new();
         for (name, compiled, available, detail) in backends {
@@ -352,7 +337,7 @@ fn capabilities(args: &CredentialFillArgs, json: bool) -> Result<Output, AppErro
         let document = serde_json::json!({
             "version": 1,
             "backends": table,
-            "resolver": { "confidential": resolver_confidential },
+            "resolver": { "confidential": true },
         });
         return Ok(Output::success(
             serde_json::to_string(&document).map_err(|_| {
@@ -374,13 +359,6 @@ fn capabilities(args: &CredentialFillArgs, json: bool) -> Result<Output, AppErro
             }
         ));
     }
-    text.push_str(&format!(
-        "confidential resolver: {}\n",
-        if resolver_confidential {
-            "available"
-        } else {
-            "unavailable on this platform; only env credentials can be filled"
-        }
-    ));
+    text.push_str("confidential resolver: available\n");
     Ok(Output::success(text, String::new()))
 }

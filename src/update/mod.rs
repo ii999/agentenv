@@ -204,7 +204,7 @@ pub fn apply(
 }
 
 /// The version compiled into this binary.
-pub fn current_version() -> Version {
+fn current_version() -> Version {
     Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo.toml carries a semver version")
 }
 

@@ -27,11 +27,13 @@ const MAX_PREFLIGHT_LINE_BYTES: usize = 256;
 
 /// The identity the destination must report for this client build.
 pub fn expected_identity() -> String {
-    format!(
-        "agentenv-sudo-helper {} {}",
-        super::PROTOCOL_VERSION,
-        env!("CARGO_PKG_VERSION")
-    )
+    identity_for(env!("CARGO_PKG_VERSION"))
+}
+
+/// The identity line, without its newline, that the helper of release
+/// `version` reports for `--identity`.
+pub fn identity_for(version: impl std::fmt::Display) -> String {
+    format!("agentenv-sudo-helper {} {version}", super::PROTOCOL_VERSION)
 }
 
 /// One deployment failure class. Every failure leaves the configured path
@@ -76,11 +78,14 @@ impl Reason {
     }
 
     pub fn error(self, detail: impl AsRef<str>) -> AppError {
-        AppError::SudoExecution(format!(
-            "helper-deploy-{}: {}; helper_path holds the previous helper, the newly verified one, or nothing, so rerunning is safe",
-            self.code(),
-            detail.as_ref()
-        ))
+        super::SudoError::new(
+            super::Reason::Deploy(self),
+            format!(
+                "{}; helper_path holds the previous helper, the newly verified one, or nothing, so rerunning is safe",
+                detail.as_ref()
+            ),
+        )
+        .into()
     }
 }
 

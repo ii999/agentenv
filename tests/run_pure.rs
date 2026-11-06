@@ -6,13 +6,15 @@
 //! base, so pure invocations carry them with `--keep` — which also keeps the
 //! escape hatch itself under permanent test.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use helpers::{assert_exit, assert_mentions, run_ac, SENTINEL_NESTED, SENTINEL_PLAIN};
-use tempfile::TempDir;
+use helpers::{assert_exit, assert_mentions, run_ac, Workspace, SENTINEL_NESTED, SENTINEL_PLAIN};
 
 const RUNNER_CONFIG: &str = r#"
 version = 1
@@ -66,40 +68,6 @@ value = "two"
 SHARED_TARGET = "value"
 "#;
 
-struct Workspace {
-    directory: TempDir,
-}
-
-impl Workspace {
-    fn new() -> Self {
-        Self {
-            directory: TempDir::new().expect("a temporary workspace is created"),
-        }
-    }
-
-    fn path(&self, name: &str) -> PathBuf {
-        self.directory.path().join(name)
-    }
-
-    fn stage_config(&self, content: &str) -> PathBuf {
-        let path = self.path("config.toml");
-        fs::write(&path, content).expect("the test config is written");
-        restrict_permissions(&path);
-        path
-    }
-}
-
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .unwrap_or_else(|error| panic!("failed to restrict {}: {error}", path.display()));
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}
-
 fn probe() -> String {
     assert_cmd::cargo::cargo_bin("test-probe")
         .to_str()
@@ -125,7 +93,7 @@ fn pure_carries_base_keeps_and_injections_and_nothing_else() {
     let workspace = Workspace::new();
     let config = workspace.stage_config(RUNNER_CONFIG);
     let report = workspace.path("probe-report");
-    let home = workspace.directory.path().display().to_string();
+    let home = workspace.root().display().to_string();
     let probe = probe();
 
     let run = run_ac(

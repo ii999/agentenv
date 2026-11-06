@@ -6,11 +6,11 @@ mod keychain;
 pub mod resolver;
 mod secret;
 mod shallow;
-#[cfg(all(feature = "test-keychain", debug_assertions))]
+#[cfg(all(feature = "test-support", debug_assertions))]
 mod test_store;
 
-#[cfg(all(feature = "test-keychain", not(debug_assertions)))]
-compile_error!("the test-keychain feature is restricted to debug builds");
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("the test-support feature is restricted to debug builds");
 
 pub use secret::{CapturedSecret, Secret, SecretDomainError};
 pub use shallow::{shallow_status, Status};

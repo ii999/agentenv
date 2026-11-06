@@ -1,6 +1,7 @@
 //! Native Windows private-channel and process-lifetime regression coverage.
 //! Every value and process belongs to a disposable synthetic fixture.
-#![cfg(windows)]
+// The suite runs the `test-probe` binary, which builds only with `test-support`.
+#![cfg(all(windows, feature = "test-support"))]
 
 use agentenv::config::{CredentialDef, CredentialUsage, Provider};
 use agentenv::credential::resolver::{resolve_detailed, ResolutionStage, ResolveError};

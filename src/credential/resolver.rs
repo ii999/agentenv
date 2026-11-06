@@ -67,8 +67,6 @@ pub enum ResolveError {
     Value,
     /// The deadline expired before a value arrived.
     Timeout,
-    /// The confidential resolver is unavailable on this platform.
-    Unavailable,
 }
 
 impl fmt::Display for ResolveError {
@@ -78,19 +76,13 @@ impl fmt::Display for ResolveError {
             Self::Provider => "the credential provider failed",
             Self::Value => "the credential value is not supported for this use",
             Self::Timeout => "the credential lookup deadline expired",
-            Self::Unavailable => "the confidential resolver is unavailable on this platform",
         })
     }
 }
 
 impl From<ResolveError> for AppError {
-    fn from(error: ResolveError) -> Self {
-        match error {
-            ResolveError::Unavailable => AppError::Credential(
-                "confidential resolver is unavailable on this platform".to_owned(),
-            ),
-            _ => failure(),
-        }
+    fn from(_error: ResolveError) -> Self {
+        failure()
     }
 }
 
@@ -148,11 +140,6 @@ pub async fn resolve_detailed(
         .await
         .map_err(|_| ResolveError::Timeout)?
     }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (executable, definition, deadline);
-        Err(ResolveError::Unavailable)
-    }
 }
 
 /// Called before public CLI parsing. Only the fixed internal invocation is
@@ -169,8 +156,6 @@ pub fn internal_entry() -> Option<i32> {
     return Some(if unix::serve().is_ok() { 0 } else { 9 });
     #[cfg(windows)]
     return Some(if windows::serve().is_ok() { 0 } else { 9 });
-    #[cfg(not(any(unix, windows)))]
-    Some(9)
 }
 
 use crate::config::Provider;

@@ -31,7 +31,7 @@ const TOGGLE_INSET: f32 = 6.0;
 
 pub(super) struct Dialog {
     session: Rc<RefCell<Session>>,
-    cancellation: tokio::sync::watch::Receiver<i32>,
+    cancellation: agentenv::cancel::Cancellation,
     clipboard: Option<platform::Clipboard>,
     paste_requested: bool,
     composing: bool,
@@ -47,7 +47,7 @@ impl Dialog {
     pub fn new(
         creation: &eframe::CreationContext<'_>,
         session: Rc<RefCell<Session>>,
-        cancellation: tokio::sync::watch::Receiver<i32>,
+        cancellation: agentenv::cancel::Cancellation,
     ) -> std::io::Result<Self> {
         let glass = platform::install_backdrop(creation);
         theme::install(&creation.egui_ctx, glass);
@@ -310,8 +310,7 @@ impl eframe::App for Dialog {
     fn logic(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         let mut session = self.session.borrow_mut();
         session.poll();
-        let signal = *self.cancellation.borrow();
-        if signal != 0 {
+        if let Some(signal) = self.cancellation.pending() {
             session.cancel(signal);
         }
         if context.input(|input| input.viewport().focused == Some(false)) {
@@ -474,7 +473,7 @@ mod tests {
             inject_as: Some("FIXTURE_VALUE".into()),
             usages: vec![CredentialUsage::Environment],
         })));
-        let (_, cancellation) = tokio::sync::watch::channel(0);
+        let cancellation = agentenv::cancel::Cancellation::never();
         let dialog = Dialog {
             session,
             cancellation,

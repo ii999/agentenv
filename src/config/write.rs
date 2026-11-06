@@ -5,7 +5,7 @@
 //! Every mutation follows one path: load and pre-validate the current file,
 //! apply the mutation to a `toml_edit` document (comments, blank lines, and
 //! key order are preserved; replaced values keep their decor), re-validate
-//! the serialized result with [`validate::validate`], and atomically replace
+//! the serialized result with [`validate::decode`], and atomically replace
 //! the file only when validation passes. A refused mutation leaves the file
 //! byte-identical.
 //!
@@ -13,12 +13,16 @@
 //! and no user-supplied value is echoed; paths, credential names, and
 //! `credential://` reference strings may appear.
 
+use crate::fs_atomic::Stage;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
-use super::model::{is_valid_credential_name, is_valid_env_name, CredentialUsage};
+use super::model::{
+    check_env_provider, check_inject_as, is_valid_credential_name, is_valid_env_name,
+    CredentialUsage, UsageListCheck, UsageRuleViolation,
+};
 use super::validate;
 use super::Config;
 use crate::error::{AppError, Violation};
@@ -389,42 +393,58 @@ pub fn credential_update(
     ))
 }
 
+/// Checks a usage selection against the credential usage rules before the
+/// file is touched, reporting the first broken rule in CLI terms.
 fn validate_usage_selection(
     usages: &[CredentialUsage],
     inject_as: Option<&str>,
     provider: &ProviderSpec,
 ) -> Result<(), AppError> {
-    if usages.is_empty() {
+    let mut list = UsageListCheck::default();
+    for usage in usages {
+        list.add(*usage).map_err(usage_rule_error)?;
+    }
+    if let (_, Some(rule)) = list.finish() {
+        return Err(usage_rule_error(rule));
+    }
+    if let Some(rule) = check_inject_as(usages, inject_as.is_some()) {
+        return Err(usage_rule_error(rule));
+    }
+    // Past the inject_as rule, a target is present only with environment use.
+    if inject_as.is_some_and(|name| !is_valid_env_name(name)) {
         return Err(AppError::Usage(
-            "at least one --usage is required".to_owned(),
+            "--inject-as is not a valid environment variable name (expected [A-Za-z_][A-Za-z0-9_]*)"
+                .to_owned(),
         ));
     }
-    for (index, usage) in usages.iter().enumerate() {
-        if usages[..index].contains(usage) {
-            return Err(AppError::Usage(format!(
-                "--usage {} was specified more than once",
-                usage.token()
-            )));
+    if matches!(provider, ProviderSpec::Env { .. }) {
+        if let Some(rule) = check_env_provider(usages) {
+            return Err(usage_rule_error(rule));
         }
     }
-    let environment = usages.contains(&CredentialUsage::Environment);
-    if environment && usages.len() != 1 {
-        return Err(AppError::Usage(
-            "--usage environment cannot be combined with authentication usages".to_owned(),
-        ));
-    }
-    match (environment, inject_as) {
-        (true, Some(name)) if !is_valid_env_name(name) => return Err(AppError::Usage("--inject-as is not a valid environment variable name (expected [A-Za-z_][A-Za-z0-9_]*)".to_owned())),
-        (true, None) => return Err(AppError::Usage("--usage environment requires --inject-as <ENV>".to_owned())),
-        (false, Some(_)) => return Err(AppError::Usage("--inject-as is available only with --usage environment".to_owned())),
-        _ => {}
-    }
-    if !environment && matches!(provider, ProviderSpec::Env { .. }) {
-        return Err(AppError::Usage(
-            "the env provider cannot be used for sudo or SSH password authentication".to_owned(),
-        ));
-    }
     Ok(())
+}
+
+/// Phrases a broken usage rule in terms of the credential command flags.
+fn usage_rule_error(rule: UsageRuleViolation) -> AppError {
+    AppError::Usage(match rule {
+        UsageRuleViolation::Empty => "at least one --usage is required".to_owned(),
+        UsageRuleViolation::Duplicate { usage, .. } => {
+            format!("--usage {} was specified more than once", usage.token())
+        }
+        UsageRuleViolation::EnvironmentCombined => {
+            "--usage environment cannot be combined with authentication usages".to_owned()
+        }
+        UsageRuleViolation::InjectAsMissing => {
+            "--usage environment requires --inject-as <ENV>".to_owned()
+        }
+        UsageRuleViolation::InjectAsForbidden => {
+            "--inject-as is available only with --usage environment".to_owned()
+        }
+        UsageRuleViolation::EnvProviderAuthentication => {
+            "the env provider cannot be used for sudo or SSH password authentication".to_owned()
+        }
+    })
 }
 
 fn insert_usages(definition: &mut Table, usages: &[CredentialUsage]) {
@@ -487,11 +507,7 @@ impl LoadedDocument {
             )
         })?;
         let root = super::parse_config(&resolved_path, &text)?;
-        let violations = validate::validate(&root);
-        if !violations.is_empty() {
-            return Err(AppError::Config(violations));
-        }
-        let config = Config::from_validated(&root);
+        let config = validate::decode(&root).map_err(AppError::Config)?;
         let document = text.parse::<DocumentMut>().map_err(|error| {
             // The text already parsed as TOML above; a divergence between the
             // two parsers is surfaced explicitly, without echoing source.
@@ -524,10 +540,7 @@ impl LoadedDocument {
     fn validate_and_persist(self) -> Result<(), AppError> {
         let text = self.document.to_string();
         let root = super::parse_config(&self.resolved_path, &text)?;
-        let violations = validate::validate(&root);
-        if !violations.is_empty() {
-            return Err(AppError::Config(violations));
-        }
+        validate::decode(&root).map_err(AppError::Config)?;
         atomic_replace(&self.resolved_path, &text, self.mode)
     }
 }
@@ -844,129 +857,43 @@ fn file_mode(path: &Path) -> Result<Option<u32>, AppError> {
     }
 }
 
-/// Atomically replaces `path` with `content`: a 0600 temporary file in the
-/// same directory, content write, permission carry-over, fsync, rename,
-/// directory fsync (AC-001.3, AC-001.4).
+/// Atomically replaces `path` with `content` through an owner-only
+/// temporary file in the same directory, carrying over `mode` (AC-001.3,
+/// AC-001.4).
 fn atomic_replace(path: &Path, content: &str, mode: Option<u32>) -> Result<(), AppError> {
-    let failure = |message: String| config_error(path.display().to_string(), message);
-    let directory = path
-        .parent()
-        .ok_or_else(|| failure("the config path has no parent directory".to_owned()))?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| failure("the config path has no file name".to_owned()))?;
-    // PID plus a nanosecond timestamp: unique per attempt, so a leftover from
-    // a killed process never blocks future writes.
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let temp_path = directory.join(format!(
-        ".{file_name}.agentenv-tmp-{}-{unique}",
-        std::process::id()
-    ));
-
-    let result = write_temp_and_rename(path, &temp_path, directory, content, mode);
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    result
-}
-
-fn write_temp_and_rename(
-    path: &Path,
-    temp_path: &Path,
-    directory: &Path,
-    content: &str,
-    mode: Option<u32>,
-) -> Result<(), AppError> {
-    use std::io::Write;
-
-    let failure = |message: String| config_error(path.display().to_string(), message);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(temp_path).map_err(|error| {
-        let hint = if error.kind() == std::io::ErrorKind::AlreadyExists {
-            "; a leftover temporary file from an interrupted write may exist - remove it and retry"
-        } else {
-            ""
+    crate::fs_atomic::replace(path, content.as_bytes(), mode).map_err(|failure| {
+        let error = &failure.error;
+        let message = match failure.stage {
+            Stage::NoParent => "the config path has no parent directory".to_owned(),
+            Stage::NoFileName => "the config path has no file name".to_owned(),
+            Stage::Create if error.kind() == std::io::ErrorKind::AlreadyExists => format!(
+                "cannot create a temporary file for the write: {error}; a leftover temporary file from an interrupted write may exist - remove it and retry"
+            ),
+            Stage::Create => format!("cannot create a temporary file for the write: {error}"),
+            Stage::Write => format!("cannot write the updated config file: {error}"),
+            Stage::Permissions => format!("cannot preserve config-file permissions: {error}"),
+            Stage::Flush => format!("cannot flush the updated config file: {error}"),
+            Stage::Rename => format!("cannot replace the config file: {error}"),
         };
-        failure(format!(
-            "cannot create a temporary file for the write: {error}{hint}"
-        ))
-    })?;
-    file.write_all(content.as_bytes())
-        .map_err(|error| failure(format!("cannot write the updated config file: {error}")))?;
-    #[cfg(unix)]
-    if let Some(mode) = mode {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(mode))
-            .map_err(|error| {
-                failure(format!("cannot preserve config-file permissions: {error}"))
-            })?;
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    file.sync_all()
-        .map_err(|error| failure(format!("cannot flush the updated config file: {error}")))?;
-    drop(file);
-    fs::rename(temp_path, path)
-        .map_err(|error| failure(format!("cannot replace the config file: {error}")))?;
-    // Deliberately best-effort: the renamed file's contents are already
-    // durable, and a failed directory fsync can only delay the rename's
-    // metadata reaching disk after a crash - it cannot corrupt either file,
-    // so it does not fail an otherwise-complete write.
-    #[cfg(unix)]
-    if let Ok(dir) = fs::File::open(directory) {
-        let _ = dir.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = directory;
-    Ok(())
+        config_error(path.display().to_string(), message)
+    })
 }
 
 /// Creates a brand-new file with exact 0600 bits on Unix (SPEC-004), fsyncs
 /// it and its directory.
 fn write_new_file(path: &Path, content: &str) -> Result<(), AppError> {
-    use std::io::Write;
-
-    let failure = |message: String| config_error(path.display().to_string(), message);
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|error| failure(format!("cannot create the config file: {error}")))?;
-    #[cfg(unix)]
-    {
-        // Applied explicitly so the umask can neither widen nor narrow the
-        // result (AC-004.1).
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .map_err(|error| failure(format!("cannot set config-file permissions: {error}")))?;
-    }
-    file.write_all(content.as_bytes())
-        .map_err(|error| failure(format!("cannot write the config file: {error}")))?;
-    file.sync_all()
-        .map_err(|error| failure(format!("cannot flush the config file: {error}")))?;
-    drop(file);
-    #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        if let Ok(dir) = fs::File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
+    crate::fs_atomic::create_new(path, content.as_bytes()).map_err(|failure| {
+        let error = &failure.error;
+        let message = match failure.stage {
+            Stage::NoParent | Stage::NoFileName | Stage::Create => {
+                format!("cannot create the config file: {error}")
+            }
+            Stage::Permissions => format!("cannot set config-file permissions: {error}"),
+            Stage::Write => format!("cannot write the config file: {error}"),
+            Stage::Flush | Stage::Rename => format!("cannot flush the config file: {error}"),
+        };
+        config_error(path.display().to_string(), message)
+    })
 }
 
 #[cfg(test)]

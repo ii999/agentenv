@@ -10,7 +10,7 @@ use agentenv::config::{Config, SudoTransport};
 use agentenv::error::AppError;
 use agentenv::update::{self, Options, Outcome, Report, Status};
 
-use super::Output;
+use super::{json_line, Output};
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
@@ -209,8 +209,4 @@ fn report_json(report: &Report, redeployments: &[HelperRedeployment]) -> Value {
             }))
             .collect::<Vec<_>>(),
     })
-}
-
-fn json_line(value: Value) -> String {
-    serde_json::to_string(&value).expect("update JSON views are serializable") + "\n"
 }

@@ -252,31 +252,34 @@ impl<E: Fn(&str) -> Option<String>> MatchSearch<'_, E> {
             // references at any depth (SPEC-AS-030).
             let in_reserved_inject = entry_level && key == "inject";
             let child_scan_refs = scan_references && !in_reserved_inject && key != "description";
-            let field = field_from_value(
-                self.config,
-                prefix,
-                prefix_addressable,
-                key,
-                value,
-                self.env,
-                child_scan_refs,
-            );
             let matches_name = contains(self.needle, key);
             let matches_value = matches!(
                 value,
                 Value::String(text) if contains(self.needle, text)
             );
+            // The field view covers the whole subtree, so it is built only
+            // for a match rather than at every ancestor level.
             if matches_name || matches_value {
+                let field = field_from_value(
+                    self.config,
+                    prefix,
+                    prefix_addressable,
+                    key,
+                    value,
+                    self.env,
+                    child_scan_refs,
+                );
                 self.matches.push(Match {
                     profile: self.profile.to_owned(),
-                    path: field.path.clone(),
-                    key: field.key.clone(),
-                    kind: MatchKind::Field(field.value.clone()),
+                    path: field.path,
+                    key: field.key,
+                    kind: MatchKind::Field(field.value),
                 });
             }
             if let Value::Table(inner) = value {
                 if !in_reserved_inject {
-                    self.collect(&path, inner, child_scan_refs, false, field.path.is_some());
+                    let addressable = prefix_addressable && is_addressable_key(key);
+                    self.collect(&path, inner, child_scan_refs, false, addressable);
                 }
             }
         }

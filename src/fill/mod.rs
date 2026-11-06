@@ -18,7 +18,7 @@ pub mod cdp;
 mod delivery;
 #[cfg(windows)]
 pub mod desktop;
-#[cfg(all(feature = "test-keychain", debug_assertions))]
+#[cfg(all(feature = "test-support", debug_assertions))]
 pub mod test_backend;
 
 pub use delivery::Delivery;
@@ -264,12 +264,6 @@ pub fn check_fillable(definition: &CredentialDef) -> Result<(), AppError> {
     }]))
 }
 
-/// Whether this platform can resolve keychain and command credentials for
-/// filling. Env credentials are always resolvable in-process.
-pub fn resolver_available(definition: &CredentialDef) -> bool {
-    matches!(definition.provider, Provider::Env { .. }) || cfg!(any(unix, windows))
-}
-
 /// Runs one filling operation end to end.
 ///
 /// `executable` is the agentenv binary used for the confidential resolver.
@@ -286,16 +280,6 @@ pub async fn run<B: Backend>(
     cancel: impl Future<Output = ()>,
 ) -> Result<Outcome, AppError> {
     check_fillable(definition)?;
-    if !resolver_available(definition) {
-        return Err(FillError::new(
-            Reason::BackendUnavailable,
-            format!(
-                "credential '{}' needs the confidential resolver, which is unavailable on this platform; use an env credential",
-                definition.name
-            ),
-        )
-        .into());
-    }
     let delivery = Delivery::new(Deadline::start(timeout.min(MAX_TIMEOUT)));
     let result = {
         let operation = operate(backend, definition, executable, &delivery);
@@ -481,14 +465,6 @@ async fn resolve_value(
             "credential '{}' could not be resolved; run 'agentenv credential check {}' to diagnose the provider",
             definition.name, definition.name
         ))),
-        Err(ResolveError::Unavailable) => Err(FillError::new(
-            Reason::BackendUnavailable,
-            format!(
-                "credential '{}' needs the confidential resolver, which is unavailable on this platform; use an env credential",
-                definition.name
-            ),
-        )
-        .into()),
     }
 }
 

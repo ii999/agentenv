@@ -110,7 +110,7 @@ pub(super) fn edit_and_store(definition: &CredentialDef) -> Completion {
     else {
         return Completion::Failed(Failure::DialogFailed);
     };
-    let (cancel, cancellation) = tokio::sync::watch::channel(0);
+    let (cancel, cancellation) = agentenv::cancel::channel();
     if install_signal_forwarder(&runtime, cancel, || {
         AppError::Credential("could not initialize dialog cancellation".into())
     })

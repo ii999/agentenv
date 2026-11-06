@@ -45,9 +45,11 @@ ureq = "3"
 # The target process for the `run` integration tests. It reports the child
 # environment the injection runner builds, which no library API can expose:
 # `run` replaces agentenv with its target. See tests/fixtures/bin/probe.rs.
+# It builds only with `test-support`, so `cargo install` never ships it.
 [[bin]]
 name = "test-probe"
 path = "tests/fixtures/bin/probe.rs"
+required-features = ["test-support"]
 
 # Release executables ship prebuilt; whole-program optimization trades build
 # time for smaller, faster binaries and does not affect `cargo build`.
@@ -57,12 +59,12 @@ lto = "fat"
 codegen-units = 1
 
 [features]
-test-keychain = []
+# Debug-only test hooks: the file-backed credential store, the scripted fill
+# backend, the fill timing hook, and the `test-probe` binary.
+test-support = []
 
 [dev-dependencies]
 assert_cmd = "2"
-predicates = "3"
-tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

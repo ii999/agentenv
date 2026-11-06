@@ -9,11 +9,17 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+pub use error::{Completion, Reason, SudoError};
+
 use crate::error::AppError;
 
+pub mod askpass_channel;
 pub mod client;
 pub mod deploy;
+mod error;
 pub mod protocol;
+/// The remote helper runs only on Unix destinations.
+#[cfg(unix)]
 pub mod remote;
 pub mod ssh;
 pub mod ssh_askpass;
@@ -26,6 +32,9 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const SUDO_PASSWORD_LIMIT: usize = 255;
 pub const DEFAULT_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_AUTH_TIMEOUT: Duration = Duration::from_secs(60);
+/// Upper bound for the setup and authentication timeouts, enforced by the
+/// CLI, the client, and the remote helper.
+pub const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// One validated, immutable command invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,13 +126,8 @@ impl ProcessIo {
     }
 }
 
-/// A cancellation receiver. A changed positive Unix signal number requests
-/// forwarding that signal to the owned sudo process group.
-pub type Cancellation = tokio::sync::watch::Receiver<i32>;
-
-pub fn cancellation_channel() -> (tokio::sync::watch::Sender<i32>, Cancellation) {
-    tokio::sync::watch::channel(0)
-}
+/// A requested signal is forwarded to the owned sudo process group.
+pub use crate::cancel::Cancellation;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionOutcome {
@@ -164,8 +168,8 @@ impl LocalOptions {
         }
         if self.setup_timeout.is_zero()
             || self.auth_timeout.is_zero()
-            || self.setup_timeout > Duration::from_secs(300)
-            || self.auth_timeout > Duration::from_secs(300)
+            || self.setup_timeout > MAX_TIMEOUT
+            || self.auth_timeout > MAX_TIMEOUT
         {
             return Err(AppError::Usage(
                 "sudo setup and authentication timeouts must be between 1 and 300 seconds"
@@ -184,9 +188,10 @@ pub async fn check_local(options: &LocalOptions) -> Result<(), AppError> {
 
 #[cfg(not(unix))]
 pub async fn check_local(_options: &LocalOptions) -> Result<(), AppError> {
-    Err(AppError::SudoExecution(
-        "unsupported-platform: local sudo is unavailable on this platform".to_owned(),
-    ))
+    Err(AppError::from(SudoError::new(
+        Reason::UnsupportedPlatform,
+        "local sudo is unavailable on this platform",
+    )))
 }
 
 /// Runs one local sudo command. The resolver is called at most once and only
@@ -219,16 +224,23 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<crate::credential::Secret, AppError>>,
 {
-    Err(AppError::SudoExecution(
-        "unsupported-platform: local sudo is unavailable on this platform".to_owned(),
-    ))
+    Err(AppError::from(SudoError::new(
+        Reason::UnsupportedPlatform,
+        "local sudo is unavailable on this platform",
+    )))
+}
+
+/// A sudo failure before the command ran, as the crate-wide error.
+pub(crate) fn execution_error(reason: Reason, detail: &str) -> AppError {
+    SudoError::new(reason, detail).into()
 }
 
 pub fn companion_path(executable: &Path) -> Result<PathBuf, AppError> {
     let directory = executable.parent().ok_or_else(|| {
-        AppError::SudoExecution(
-            "helper-missing: agentenv executable has no parent directory".to_owned(),
-        )
+        AppError::from(SudoError::new(
+            Reason::HelperMissing,
+            "agentenv executable has no parent directory",
+        ))
     })?;
     Ok(directory.join(format!(
         "{}{}",

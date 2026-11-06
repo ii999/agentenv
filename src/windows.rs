@@ -55,12 +55,6 @@ pub(crate) fn random(bytes: &mut [u8]) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn nonce() -> io::Result<String> {
-    let mut bytes = [0; 24];
-    random(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
-}
-
 fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::last_os_error());
@@ -88,7 +82,7 @@ pub(crate) fn private_pipe(purpose: &str) -> io::Result<(String, NamedPipeServer
     let name = format!(
         r"\\.\pipe\agentenv-{purpose}-{}-{}",
         std::process::id(),
-        nonce()?
+        crate::random::nonce()?
     );
     let mut token = null_mut();
     // SAFETY: all output pointers refer to live storage; allocations below

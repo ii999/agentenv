@@ -407,7 +407,7 @@ fn unpack(archive: &Path, dir: &Path) -> Result<(), AppError> {
 
 /// Runs the extracted binary once and confirms it reports `version`, so a
 /// mislabeled or broken build never replaces the running one.
-pub fn verify_binary(binary: &Path, version: &Version) -> Result<(), AppError> {
+fn verify_binary(binary: &Path, version: &Version) -> Result<(), AppError> {
     let output = Command::new(binary)
         .arg("--version")
         .output()
@@ -433,11 +433,11 @@ pub fn verify_bundle(extracted: &Extracted, version: &Version) -> Result<(), App
     verify_binary(&extracted.binary, version)?;
     verify_identity(
         &extracted.sudo_helper,
-        &format!("agentenv-sudo-helper 1 {version}\n"),
+        &format!("{}\n", crate::sudo::deploy::identity_for(version)),
     )?;
     verify_identity(
         &extracted.ssh_askpass,
-        &format!("agentenv-ssh-askpass 1 {version}\n"),
+        &format!("{}\n", crate::sudo::ssh_askpass::identity_for(version)),
     )
 }
 

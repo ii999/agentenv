@@ -2,27 +2,18 @@
 //! limits, single-line validation, exact preservation, and cancellation.
 #![cfg(unix)]
 
+mod helpers;
+
 use std::path::Path;
 use std::time::Duration;
 
 use agentenv::config::{CredentialDef, CredentialUsage, Provider};
 use agentenv::credential::resolver::{resolve_detailed, ResolutionStage, ResolveError};
 use agentenv::credential::FILL_VALUE_LIMIT;
-
-fn definition(script: &str, usages: Vec<CredentialUsage>) -> CredentialDef {
-    CredentialDef {
-        name: "lab".into(),
-        description: "Synthetic filling fixture".into(),
-        inject_as: None,
-        usages,
-        provider: Provider::Command {
-            argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
-        },
-    }
-}
+use helpers::command_credential;
 
 fn fillable(script: &str) -> CredentialDef {
-    definition(script, vec![CredentialUsage::Environment])
+    command_credential(script, vec![CredentialUsage::Environment])
 }
 
 async fn fill_lookup(

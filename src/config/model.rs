@@ -5,10 +5,16 @@
 //! to a query passed the full SPEC-002 rule set, so downstream modules never
 //! re-check structure. Profiles, entries, and credentials keep config-file
 //! order (SPEC-021); the open-schema entry data stays in `toml::Table`s.
+//!
+//! The credential usage rules shared by config validation and the credential
+//! commands live here as well: [`UsageListCheck`], [`check_inject_as`], and
+//! [`check_env_provider`] decide them, and each caller phrases the resulting
+//! [`UsageRuleViolation`] in its own terms.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use toml::{Table, Value};
+use toml::Table;
 
 use crate::error::AppError;
 use crate::project::model::ProjectPin;
@@ -28,6 +34,10 @@ pub struct Profile {
     /// entry's own `description` and `inject` keys stay inside its table so
     /// `get <entry>.description` and `get <entry>` keep working.
     pub entries: Table,
+    /// The typed form of every `kind = "sudo-target"` entry, keyed by entry
+    /// name and decoded while the configuration loaded; the raw tables stay
+    /// in `entries`. Read through [`Config::sudo_target`].
+    pub(crate) sudo_targets: BTreeMap<String, SudoTarget>,
 }
 
 /// A credential provider and its closed-schema fields.
@@ -67,6 +77,102 @@ impl CredentialUsage {
             _ => None,
         }
     }
+}
+
+/// A broken credential usage rule. Config validation and the credential
+/// commands report these with their own paths and wording; the rules
+/// themselves are decided only by [`UsageListCheck`], [`check_inject_as`],
+/// and [`check_env_provider`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UsageRuleViolation {
+    /// The usage list has no items.
+    Empty,
+    /// The item at `index` repeats an earlier usage.
+    Duplicate {
+        index: usize,
+        usage: CredentialUsage,
+    },
+    /// Environment use is combined with an authentication usage.
+    EnvironmentCombined,
+    /// Environment use needs an injection target.
+    InjectAsMissing,
+    /// Authentication-only usages forbid an injection target.
+    InjectAsForbidden,
+    /// The env provider is used for an authentication usage.
+    EnvProviderAuthentication,
+}
+
+/// Applies the usage-list rules (at least one item, no repeated usage,
+/// environment use only on its own) one listed item at a time, so a caller
+/// can interleave its own per-item diagnostics in list order.
+#[derive(Debug, Default)]
+pub(crate) struct UsageListCheck {
+    usages: Vec<CredentialUsage>,
+    items: usize,
+}
+
+impl UsageListCheck {
+    /// Records the next listed usage. A repeat of an earlier usage is a
+    /// [`UsageRuleViolation::Duplicate`] and is not recorded again.
+    pub(crate) fn add(&mut self, usage: CredentialUsage) -> Result<(), UsageRuleViolation> {
+        let index = self.items;
+        self.items += 1;
+        if self.usages.contains(&usage) {
+            return Err(UsageRuleViolation::Duplicate { index, usage });
+        }
+        self.usages.push(usage);
+        Ok(())
+    }
+
+    /// Records a listed item that names no usage. It keeps later items'
+    /// indexes and makes the list non-empty, but takes part in no other rule.
+    pub(crate) fn skip(&mut self) {
+        self.items += 1;
+    }
+
+    /// Returns the distinct usages in list order and the whole-list rule
+    /// they break, if any: [`UsageRuleViolation::Empty`] or
+    /// [`UsageRuleViolation::EnvironmentCombined`].
+    pub(crate) fn finish(self) -> (Vec<CredentialUsage>, Option<UsageRuleViolation>) {
+        let violation = if self.items == 0 {
+            Some(UsageRuleViolation::Empty)
+        } else if self.usages.contains(&CredentialUsage::Environment)
+            && self
+                .usages
+                .iter()
+                .any(|usage| *usage != CredentialUsage::Environment)
+        {
+            Some(UsageRuleViolation::EnvironmentCombined)
+        } else {
+            None
+        };
+        (self.usages, violation)
+    }
+}
+
+/// The injection-target rule: environment use requires an `inject_as`
+/// target, and a credential without environment use must not have one.
+pub(crate) fn check_inject_as(
+    usages: &[CredentialUsage],
+    has_inject_as: bool,
+) -> Option<UsageRuleViolation> {
+    match (
+        usages.contains(&CredentialUsage::Environment),
+        has_inject_as,
+    ) {
+        (true, false) => Some(UsageRuleViolation::InjectAsMissing),
+        (false, true) => Some(UsageRuleViolation::InjectAsForbidden),
+        _ => None,
+    }
+}
+
+/// The env-provider rule: a credential read from an environment variable
+/// serves environment use only. Applies to env-provider credentials.
+pub(crate) fn check_env_provider(usages: &[CredentialUsage]) -> Option<UsageRuleViolation> {
+    usages
+        .iter()
+        .any(|usage| *usage != CredentialUsage::Environment)
+        .then_some(UsageRuleViolation::EnvProviderAuthentication)
 }
 
 impl Provider {
@@ -233,11 +339,11 @@ impl Config {
             .find(|credential| credential.name == name)
     }
 
-    /// Returns the typed sudo target for a marked entry. Configuration load
-    /// has already validated every field and reference used here.
+    /// Returns the typed sudo target for the `kind = "sudo-target"` entry
+    /// `name` of `profile`, decoded and validated when the configuration
+    /// loaded; `None` when the entry is absent or not a sudo target.
     pub fn sudo_target(&self, profile: &Profile, name: &str) -> Option<SudoTarget> {
-        let entry = profile.entries.get(name)?.as_table()?;
-        (entry.get("kind")?.as_str()? == "sudo-target").then(|| sudo_target_from_validated(entry))
+        profile.sudo_targets.get(name).cloned()
     }
 
     /// Resolves the active profile (SPEC-004): the `--profile` flag, else
@@ -303,235 +409,6 @@ impl Config {
             )))
         }
     }
-
-    /// Builds the typed model from a table that passed validation. Every
-    /// `expect` below encodes a validation invariant; a panic here means
-    /// `validate` and this builder disagree, which is a bug, not a config
-    /// error.
-    pub(crate) fn from_validated(root: &Table) -> Self {
-        let version = root
-            .get("version")
-            .and_then(Value::as_integer)
-            .expect("validated config has an integer version");
-        let default_profile = root
-            .get("default_profile")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let profiles = root
-            .get("profiles")
-            .and_then(Value::as_table)
-            .map(|profiles| {
-                profiles
-                    .iter()
-                    .map(|(name, value)| profile_from_validated(name, value))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let credentials = root
-            .get("credentials")
-            .and_then(Value::as_table)
-            .map(|credentials| {
-                credentials
-                    .iter()
-                    .map(|(name, value)| credential_from_validated(name, value))
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self {
-            version,
-            default_profile,
-            profiles,
-            credentials,
-        }
-    }
-}
-
-fn profile_from_validated(name: &str, value: &Value) -> Profile {
-    let table = value.as_table().expect("validated profile is a table");
-    let description = table
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("validated profile has a string description");
-    let mut entries = table.clone();
-    entries.remove("description");
-    Profile {
-        name: name.to_owned(),
-        description: description.to_owned(),
-        entries,
-    }
-}
-
-fn credential_from_validated(name: &str, value: &Value) -> CredentialDef {
-    let table = value.as_table().expect("validated credential is a table");
-    let description = table
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("validated credential has a string description");
-    let inject_as = table
-        .get("inject_as")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let usages = table.get("usages").map_or_else(
-        || vec![CredentialUsage::Environment],
-        |value| {
-            value
-                .as_array()
-                .expect("validated usages is an array")
-                .iter()
-                .map(|item| {
-                    CredentialUsage::parse(item.as_str().expect("validated usage is a string"))
-                        .expect("validated usage token")
-                })
-                .collect()
-        },
-    );
-    let provider = match table
-        .get("provider")
-        .and_then(Value::as_str)
-        .expect("validated credential has a string provider")
-    {
-        "env" => Provider::Env {
-            name: table
-                .get("name")
-                .and_then(Value::as_str)
-                .expect("validated env credential has a string name")
-                .to_owned(),
-        },
-        "keychain" => Provider::Keychain {
-            service: table
-                .get("service")
-                .and_then(Value::as_str)
-                .expect("validated keychain credential has a string service")
-                .to_owned(),
-            account: table
-                .get("account")
-                .and_then(Value::as_str)
-                .expect("validated keychain credential has a string account")
-                .to_owned(),
-        },
-        "command" => Provider::Command {
-            argv: table
-                .get("argv")
-                .and_then(Value::as_array)
-                .expect("validated command credential has an argv array")
-                .iter()
-                .map(|item| {
-                    item.as_str()
-                        .expect("validated argv entry is a string")
-                        .to_owned()
-                })
-                .collect(),
-        },
-        other => unreachable!("validated provider is env, keychain, or command; got {other:?}"),
-    };
-    CredentialDef {
-        name: name.to_owned(),
-        description: description.to_owned(),
-        provider,
-        inject_as,
-        usages,
-    }
-}
-
-fn sudo_target_from_validated(entry: &Table) -> SudoTarget {
-    let sudo = entry["sudo"].as_table().expect("validated sudo table");
-    let credential = CredentialRef::parse(
-        sudo["credential"]
-            .as_str()
-            .expect("validated sudo credential"),
-    )
-    .expect("validated sudo reference");
-    let transport = match sudo["transport"].as_str().expect("validated transport") {
-        "local" => SudoTransport::Local,
-        "ssh" => {
-            let ssh = sudo["ssh"].as_table().expect("validated ssh table");
-            let auth = ssh["auth"].as_table().expect("validated ssh auth table");
-            let auth = match auth["method"].as_str().expect("validated auth method") {
-                "publickey" => SshAuth::PublicKey {
-                    identity_files: auth
-                        .get("identity_files")
-                        .and_then(Value::as_array)
-                        .map_or_else(Vec::new, |items| {
-                            items
-                                .iter()
-                                .map(|item| {
-                                    PathBuf::from(item.as_str().expect("validated identity path"))
-                                })
-                                .collect()
-                        }),
-                    use_agent: auth
-                        .get("use_agent")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                },
-                "password" => SshAuth::Password {
-                    credential: CredentialRef::parse(
-                        auth["credential"]
-                            .as_str()
-                            .expect("validated ssh credential"),
-                    )
-                    .expect("validated ssh reference"),
-                },
-                _ => unreachable!("validated auth method"),
-            };
-            let connection = match ssh["mode"].as_str().expect("validated ssh mode") {
-                "ssh-config" => SshConnection::Config {
-                    host_alias: ssh["host_alias"]
-                        .as_str()
-                        .expect("validated host alias")
-                        .to_owned(),
-                    config_file: ssh
-                        .get("config_file")
-                        .and_then(Value::as_str)
-                        .map(PathBuf::from),
-                },
-                "explicit" => SshConnection::Explicit {
-                    hostname: ssh["hostname"]
-                        .as_str()
-                        .expect("validated hostname")
-                        .to_owned(),
-                    user: ssh["user"].as_str().expect("validated user").to_owned(),
-                    port: u16::try_from(ssh["port"].as_integer().expect("validated port"))
-                        .expect("validated port range"),
-                },
-                _ => unreachable!("validated ssh mode"),
-            };
-            SudoTransport::Ssh(SshTarget {
-                host_key_alias: ssh["host_key_alias"]
-                    .as_str()
-                    .expect("validated host key alias")
-                    .to_owned(),
-                known_hosts_file: PathBuf::from(
-                    ssh["known_hosts_file"]
-                        .as_str()
-                        .expect("validated known hosts path"),
-                ),
-                helper_path: PathBuf::from(
-                    ssh["helper_path"].as_str().expect("validated helper path"),
-                ),
-                connection,
-                auth,
-            })
-        }
-        _ => unreachable!("validated transport"),
-    };
-    SudoTarget {
-        description: entry["description"]
-            .as_str()
-            .expect("validated description")
-            .to_owned(),
-        credential,
-        auth_user: sudo["auth_user"]
-            .as_str()
-            .expect("validated auth user")
-            .to_owned(),
-        run_as: sudo["run_as"]
-            .as_str()
-            .expect("validated run-as user")
-            .to_owned(),
-        sudo_path: PathBuf::from(sudo["sudo_path"].as_str().expect("validated sudo path")),
-        transport,
-    }
 }
 
 fn no_selection_error(profiles: &[Profile]) -> AppError {
@@ -574,6 +451,8 @@ pub(crate) fn is_valid_credential_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use toml::Value;
+
     use super::*;
 
     #[test]
@@ -651,6 +530,7 @@ mod tests {
                     name: (*name).to_owned(),
                     description: format!("the {name} profile"),
                     entries: Table::new(),
+                    sudo_targets: BTreeMap::new(),
                 })
                 .collect(),
             credentials: Vec::new(),
@@ -767,10 +647,10 @@ mod tests {
     }
 
     #[test]
-    fn from_validated_preserves_order_and_extracts_descriptions() {
+    fn decode_preserves_order_and_extracts_descriptions() {
         let root: Table = r#"
 version = 1
-default_profile = "work"
+default_profile = "zeta"
 
 [profiles.zeta]
 description = "the zeta profile"
@@ -796,9 +676,9 @@ inject_as = "C1"
 "#
         .parse()
         .expect("the fixture parses");
-        let config = Config::from_validated(&root);
+        let config = crate::config::validate::decode(&root).expect("the fixture is valid");
         assert_eq!(config.version, 1);
-        assert_eq!(config.default_profile.as_deref(), Some("work"));
+        assert_eq!(config.default_profile.as_deref(), Some("zeta"));
         assert_eq!(
             config
                 .profiles

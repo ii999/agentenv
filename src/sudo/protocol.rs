@@ -19,7 +19,6 @@ pub const MAX_STREAM_CHUNK_SIZE: usize = 32 * 1024;
 pub const MAX_SECRET_SIZE: usize = 255;
 pub const INITIAL_STREAM_CREDIT: usize = 128 * 1024;
 pub const MAX_STREAM_CREDIT: usize = INITIAL_STREAM_CREDIT;
-pub const MAX_QUEUED_DATA_PER_DIRECTION: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]

@@ -1,7 +1,7 @@
 //! `credential fill` and `credential fill --capabilities`: argument contract,
 //! purpose gate, exit codes, result shape, and value confinement, driven
 //! through the debug-only scripted test backend.
-#![cfg(feature = "test-keychain")]
+#![cfg(feature = "test-support")]
 
 mod helpers;
 

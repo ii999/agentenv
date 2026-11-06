@@ -48,7 +48,7 @@ pub(super) fn edit_and_store(credential: &CredentialDef) -> Result<Output, AppEr
         .enable_all()
         .build()
         .map_err(terminal_error)?;
-    let (cancel, cancellation) = tokio::sync::watch::channel(0);
+    let (cancel, cancellation) = agentenv::cancel::channel();
     install_signal_forwarder(&runtime, cancel, || {
         AppError::Usage(
             "could not install terminal input cancellation handlers; retry at a terminal".into(),
@@ -102,15 +102,14 @@ fn terminal_error(error: io::Error) -> AppError {
 fn run(
     terminal: &mut Terminal,
     credential: &CredentialDef,
-    cancellation: &tokio::sync::watch::Receiver<i32>,
+    cancellation: &agentenv::cancel::Cancellation,
 ) -> io::Result<Outcome> {
     let mut editor = Editor::new();
     let provider = provider_for(credential);
     let mut feedback = "Type or paste a value, then press Ctrl+S to save.".to_owned();
     terminal.render(credential, &editor, &feedback)?;
     loop {
-        let signal = *cancellation.borrow();
-        if signal != 0 {
+        if let Some(signal) = cancellation.pending() {
             return Ok(Outcome::Cancelled(signal));
         }
         let Some(input) = terminal.read(Duration::from_millis(50))? else {

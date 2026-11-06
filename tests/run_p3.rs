@@ -1,14 +1,16 @@
 //! Process-launch coverage for the non-conflict `run` criteria.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[cfg(unix)]
 use assert_cmd::cargo::CommandCargoExt;
-use helpers::{assert_exit, run_ac, SENTINEL_PLAIN};
-use tempfile::TempDir;
+use helpers::{assert_exit, run_ac, Workspace, SENTINEL_PLAIN};
 
 #[test]
 fn run_injects_credentials_and_plain_values_without_mutating_the_wrapper_environment() {
@@ -105,7 +107,7 @@ fn run_preserves_a_target_termination_signal() {
     let output = std::process::Command::cargo_bin("agentenv")
         .expect("agentenv is built")
         .env_clear()
-        .current_dir(workspace.directory.path())
+        .current_dir(workspace.root())
         .env("AGENTENV_NO_PROJECT", "1")
         .env("AGENTENV_FILE", config)
         .env("SOURCE_TOKEN", SENTINEL_PLAIN)
@@ -181,37 +183,3 @@ provider = "env"
 name = "SOURCE_TOKEN"
 inject_as = "OPENAI_API_KEY"
 "#;
-
-struct Workspace {
-    directory: TempDir,
-}
-
-impl Workspace {
-    fn new() -> Self {
-        Self {
-            directory: TempDir::new().expect("a temporary workspace is created"),
-        }
-    }
-
-    fn path(&self, name: &str) -> PathBuf {
-        self.directory.path().join(name)
-    }
-
-    fn stage_config(&self, content: &str) -> PathBuf {
-        let path = self.path("config.toml");
-        fs::write(&path, content).expect("the test config is written");
-        restrict_permissions(&path);
-        path
-    }
-}
-
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .expect("the test config permissions are restricted");
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}

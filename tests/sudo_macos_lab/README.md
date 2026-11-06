@@ -9,7 +9,7 @@ or modify user credentials, keychains, SSH configuration, or known-hosts files.
 Build `agentenv-sudo-execution:lab` with `tests/sudo_execution_lab/run.py`, then:
 
 ```sh
-cargo build --bins --features test-keychain
+cargo build --bins --features test-support
 python3 tests/sudo_macos_lab/run.py
 ```
 

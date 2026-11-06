@@ -1,144 +1,147 @@
 # Local and SSH sudo execution
 
-Windows implementation update: the native OpenSSH client, confidential
-resolver, and one-shot askpass channel are implemented. Windows local UAC
-elevation and Windows ProxyJump remain unsupported. Windows execution uses
-the same remote Unix helper protocol and failure semantics; this is not a
-Windows remote helper. See `docs/design/windows-port.md` for the current
-validation scope. Historical phase descriptions below remain design context.
-
-
-Status: implemented for macOS and Linux clients and Linux destinations, covering
-local sudo, SSH execution, and publickey and saved-password login. The Windows
-SSH client (confidential resolver and named-pipe login askpass) is deferred to a
-separate implementation, and Windows builds report SSH sudo execution as
-unsupported. Real-platform evidence covers arm64 Linux destinations with Linux
-and macOS SSH clients; native macOS local sudo and the x86_64 release builds
-remain unmeasured. Evidence and remaining gaps are recorded in
-`sudo-release-evidence.md` and `sudo-compatibility.md`. This document defines
-the design baseline and release criteria. It does not authorize deployment,
-password collection, sudoers changes, or execution on a user's hosts.
-
 ## Outcome and scope
 
-An agent selects a configured execution target and a command. agentenv obtains
-the target's sudo password from the local credential provider only when sudo
+An agent selects a configured execution target and a command. `agentenv` obtains
+the target's sudo password from the local credential provider only when `sudo`
 requests it, completes authentication, and streams the command's input and
 output. Password bytes never enter the agent's tool arguments or results.
-The same interface supports local execution and execution over SSH. SSH login
-can use existing keys or an explicitly selected locally stored password;
-login authentication and sudo authentication remain separate stages.
+The same interface supports local execution on Unix and remote execution over
+SSH from macOS, Linux, and Windows clients to Unix destinations. SSH login can
+use existing keys or an explicitly selected locally stored password; login
+authentication and sudo authentication remain separate stages.
 
-The first complete release supports noninteractive commands, binary stdin,
-separate stdout/stderr, concurrent invocations, an explicit run-as user, and
-observable exit status. Commands may run for a long time; streaming does not
-buffer their entire input or output. Each invocation runs one command once.
+The execution interface supports noninteractive commands, binary stdin,
+separate stdout and stderr streams, concurrent invocations, an explicit run-as
+user, and observable exit status. Commands may run for a long time; streaming
+does not buffer their entire input or output. Each invocation runs one command
+once.
 
-| Component | Initial supported scope |
+| Component | Supported scope |
 | --- | --- |
-| Local sudo | macOS and Linux with compatible sudo/askpass and conventional single-password authentication |
-| SSH client | macOS, Linux, and Windows with a supported OpenSSH executable |
-| SSH destination | macOS and Linux with compatible sudo and the matching unprivileged helper |
-| Password storage | Existing keychain provider; command provider with restricted resolution I/O |
-| SSH authentication | Explicit key/agent mode or saved-password mode; SSH-config aliases or fully explicit connection settings |
-| Command interface | UTF-8 argv without NUL; executable and optional cwd are absolute paths; stdin/stdout/stderr are arbitrary bytes |
+| Local sudo | macOS and Linux (`#[cfg(unix)]`) with compatible `sudo`/askpass and conventional single-password authentication; unavailable on Windows (`unsupported-platform`) |
+| SSH client | macOS, Linux, and Windows (native Win32 `OpenSSH_for_Windows_`; MSYS/Cygwin SSH clients are rejected with `ssh-client-unsupported`) |
+| SSH jump routes (`ProxyJump`) | `ssh-config` publickey mode on Linux clients with `OpenSSH_10.0`; rejected on other clients (`jump-client-unsupported`) and in `password` mode (`password-route-unsupported`); `explicit` mode reads no SSH configuration and has no jump route; custom `ProxyCommand` routes are rejected in every mode (`proxy-command-unsupported`) |
+| SSH destination | macOS (`Darwin/arm64`, `Darwin/x86_64`) and Linux (`Linux/x86_64`, `Linux/aarch64` with glibc >= 2.28) with compatible `sudo` and the matching unprivileged `agentenv-sudo-helper` binary |
+| Password storage | Keychain provider and command provider with confidential resolution I/O in an isolated resolver subprocess |
+| SSH authentication | Explicit `publickey` mode or saved `password` mode through `agentenv-ssh-askpass`; `ssh-config` aliases or `explicit` connection settings |
+| Command interface | UTF-8 argv without NUL; executable and optional `--cwd` are absolute POSIX paths; stdin, stdout, and stderr carry arbitrary bytes |
 
-Native Windows sudo/UAC, arbitrary interactive SSH sessions, nested automatic
-sudo interception, sudoedit, interactive shells, password changes, OTP/MFA,
-and general PAM conversations are outside this release. An explicit shell
-executable can still be the requested noninteractive command; it receives
-ordinary sudoers authorization and must not be introduced implicitly.
-PTY execution is a later, separate interface with terminal and resize tests.
-Unsupported capabilities fail explicitly rather than switching transport.
+Native Windows `sudo` or UAC elevation, Windows remote helper execution,
+arbitrary interactive SSH sessions, nested automatic sudo interception,
+`sudoedit`, interactive shells, password changes, OTP/MFA, and general PAM
+conversations are outside scope. An explicit shell executable can still be the
+requested noninteractive command; it receives ordinary sudoers authorization
+and is never introduced implicitly. Unsupported capabilities fail explicitly
+with stable reason codes rather than switching transport. See
+[sudo compatibility](sudo-compatibility.md) for measured platform behavior,
+[helper deployment](helper-deployment.md) for remote companion installation,
+[Windows port](windows-port.md) for Windows client validation, and
+[sudo release evidence](sudo-release-evidence.md) for the dated verification
+record.
 
-## Existing code and integration constraints
+## Codebase integration and boundaries
 
-- `src/credential/mod.rs` owns provider selection; reuse it rather than
-  creating separate sudo and SSH credential stores.
-- `src/credential/keychain.rs` already reads and writes platform credentials.
-  `src/cli/credential.rs` provides hidden local input through `credential set`.
-- `src/credential/secret.rs` prevents ordinary formatting and serialization,
-  but currently uses ordinary String/Vec storage without memory zeroization.
-- `src/credential/command.rs` inherits provider stdin/stderr. Its current
-  behavior is unsuitable for a confidential authentication exchange.
-- `src/config/model.rs` requires `inject_as` on every credential. The new
-  purpose restriction below needs coordinated model, validation, writer,
-  query, and CLI changes.
-- `src/runner.rs` discovers credential references recursively and injects
-  them into the target environment. It must refuse authentication credentials,
-  including references carrying an `?as=` override, before resolving any
-  provider or launching a target.
-- `src/cli/mod.rs` and `src/error.rs` own command and exit-code integration.
-  Add a dedicated CLI module rather than placing the execution state machine
-  in the dispatch function.
-- `docs/design/credential-fill.md` is a separate, unimplemented plan. Share
-  its proposed restricted provider I/O seam if that implementation exists by
-  the time this work starts; do not duplicate it or depend on fill delivery.
-  Its proposed exit codes 8 and 11 remain reserved for filling.
+- `src/credential/mod.rs` owns provider selection across `env`, `keychain`, and
+  `command` providers, exposing ordinary resolution for `run` and confidential
+  resolution (`resolve_confidential`) for authentication and fill callers.
+- `src/credential/keychain.rs` reads and writes platform credentials.
+  `src/cli/credential.rs` provides hidden local input through `credential set`
+  and purpose management through `credential add` and `credential update`.
+- `src/credential/secret.rs` stores secret bytes in zeroizing memory
+  (`Zeroizing<String>` and `Zeroizing<Vec<u8>>`), omits `Display` and
+  `Serialize`, redacts `Debug`, and enforces stage-specific validation:
+  authentication secrets allow 1 to 255 UTF-8 bytes without CR, LF, or NUL, and
+  fill secrets allow 1 to 8,192 UTF-8 bytes of single-line text.
+- `src/credential/command.rs` runs confidential command providers with null
+  stdin, discarded stderr, and a fixed zeroized capture buffer bounded by the
+  confidential ceiling plus overflow detection. Authentication stages preserve
+  raw output bytes without stripping trailing newlines (`line_oriented = false`).
+- `src/credential/resolver.rs` and `src/credential/resolver/windows.rs` run
+  keychain and command resolution in an isolated child process invoked via
+  `--agentenv-resolver`, enforcing stage-specific usage gates (`Sudo`,
+  `SshPassword`, and `Fill`), caller-owned deadlines, process-group or Job
+  Object termination on cancellation, and late-reply disposal.
+- `src/config/model.rs` defines `CredentialUsage` (`environment`, `sudo`,
+  `ssh-password`), requires `inject_as` only when `usages` is `["environment"]`,
+  forbids `inject_as` on authentication credentials, and validates
+  `kind = "sudo-target"` entries and their transport-specific `sudo` tables on
+  load and write.
+- `src/runner.rs` inspects every credential reference across all selected
+  entries before resolving any provider or spawning a child process. Any
+  reference to an authentication credential—including one carrying an `?as=`
+  override—fails preflight as a configuration error (exit code 2).
+- `src/cli/sudo.rs` and `src/error.rs` own CLI dispatch and exit-code mapping.
+  Exit code 9 reports owned `sudo-execution:` preflight, authentication, or
+  protocol failures before target start, and exit code 10 reports lost or
+  uncertain completion after execution may have started. Exit codes 8 and 11
+  belong to [credential filling](credential-fill.md).
 
-Ordinary `run` continues to mean transparent environment injection. It does
-not detect sudo, inspect terminal output for password prompts, or rewrite
-arbitrary SSH commands. Project files remain selection-only and cannot hold
-credentials or helper/SSH execution policy.
+Ordinary `run` continues to perform transparent environment injection. It does
+not detect `sudo`, inspect terminal output for password prompts, or rewrite
+arbitrary SSH commands. Project files (`.agentenv.toml`) remain selection-only
+and cannot define credentials or helper/SSH execution policy.
 
 ## Security and authorization model
 
 The protected boundary is normal-workflow password delivery: configuration
 contains references, credential resolution is local, and only the intended
-SSH-login or sudo authentication path receives its password bytes. There is no plaintext
-password in argv, environment variables, generated scripts, disk spools,
-diagnostics, process transcripts, or target stdin.
+SSH-login or sudo authentication path receives its password bytes. Plaintext
+passwords never appear in argv, environment variables, generated scripts, disk
+spools, diagnostics, process transcripts, or target stdin.
 
-This is not a sandbox against the invoking user, a malicious root process,
-a compromised SSH server, a malicious credential provider, or an agent with
-equivalent filesystem/process access deliberately extracting credentials.
-The remote host necessarily receives the password during authentication.
-Use distinct passwords for distinct accounts/hosts where possible.
+This mechanism is not a sandbox against the invoking user, a malicious root
+process, a compromised SSH server, a malicious credential provider, or an agent
+with equivalent filesystem or process access deliberately extracting
+credentials. The remote host necessarily receives the password during
+authentication. Operators should use distinct passwords for distinct accounts
+and hosts where possible.
 
 OS sudoers policy remains the authorization authority. The executor invokes
-sudo with the requested executable and argv directly; it never substitutes
-`sudo sh -c`, a privileged agentenv helper, or `sudo env` around that command.
-An account allowed arbitrary sudo effectively grants this automation that
-same authority. Credential-use restrictions and user-owned target definitions
-prevent mistakes; they are not an administrator-controlled command allowlist.
+`sudo` with the requested executable and argv directly; it never substitutes
+`sudo sh -c`, a privileged `agentenv` wrapper, or `sudo env` around that
+command. An account allowed arbitrary `sudo` effectively grants this automation
+that same authority. Credential-use restrictions and user-owned target
+definitions prevent accidental misuse; they are not an administrator-controlled
+command allowlist.
 
-Existing host/tool approval boundaries continue to apply. Neither a stored
-password nor a trusted `.agentenv.toml` authorizes an otherwise unauthorized
-administrative action. Runtime does not edit sudoers, disable host-key checks,
-install missing software, or create broad NOPASSWD rules.
+Host and tool approval boundaries continue to apply. Neither a stored password
+nor a trusted `.agentenv.toml` authorizes an otherwise unauthorized
+administrative action. The runtime never edits `sudoers`, disables host-key
+checks, installs missing system software, or creates `NOPASSWD` rules.
 
 The SSH configuration, known-hosts material, local provider, helper binary,
 and destination OS are trusted inputs. Login startup output and wire data are
-still parsed as untrusted bounded input. Owned components never log passwords;
-arbitrary target output remains target output and is not universally secret-
-redacted. A malicious target or server is outside this confidentiality claim.
+parsed as untrusted bounded input. Owned components never log passwords;
+arbitrary target output remains target output and is not secret-redacted. A
+malicious target or server is outside this confidentiality boundary.
 
 ## Architecture decision: separate authentication from command I/O
 
 | Approach | Benefit | Reason for selection or rejection |
 | --- | --- | --- |
-| Environment injection plus ad hoc `sudo -S` scripts | Small implementation and no remote installation | Password shares target stdin; unsafe when sudo does not consume it; every caller reimplements quoting, failure, and output handling |
-| Private password pipe plus privileged wrapper or preserved extra FD | Can separate data streams | Wrapper changes which executable sudoers authorizes; extra-FD preservation needs nondefault policy and is not portable |
-| Askpass plus per-invocation broker and remote companion | Preserves real-command authorization and independent stdin | Selected; requires a small remote executable and explicit wire/lifecycle contracts |
-| Persistent privileged service | Can enforce an independent authorization policy | Unnecessary root daemon, installation, and policy surface for this requirement |
+| Environment injection plus ad hoc `sudo -S` scripts | Small implementation and no remote installation | Password shares target stdin; unsafe when `sudo` does not consume it; every caller reimplements quoting, failure, and output handling |
+| Private password pipe plus privileged wrapper or preserved extra FD | Separates data streams | Wrapper changes which executable `sudoers` authorizes; extra-FD preservation needs nondefault `closefrom_override` policy and is not portable |
+| Askpass plus per-invocation broker and remote companion | Preserves real-command authorization and independent stdin | Selected; uses a small unprivileged companion executable and explicit wire and lifecycle contracts |
+| Persistent privileged service | Enforces an independent authorization policy | Introduces an unnecessary root daemon, installation surface, and policy engine |
 
-Use the same unprivileged Unix execution engine locally and on the remote
-host. An ephemeral Unix-domain socket connects sudo's askpass process to the
-engine. The local engine resolves a configured credential; the remote engine
-requests that one credential through the existing authenticated SSH session.
-No credential store is installed remotely.
+Local Unix execution and remote SSH execution share the same unprivileged Unix
+execution engine. An ephemeral Unix-domain socket connects `sudo`'s askpass
+process to the engine. The local engine resolves a configured credential
+through the local confidential resolver; the remote engine requests that one
+credential over the existing authenticated SSH session. No credential store is
+installed on the remote host.
 
-sudo supports askpass through `-A` and `SUDO_ASKPASS`; `-S` uses stdin. Its
-ordinary command execution closes extra descriptors, with policy restrictions
-on overriding that behavior. These mechanisms motivate the design above.
-[sudo manual](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudo.man.in)
-
-The askpass implementation itself also closes extra descriptors and runs as
-the invoking user. Consequently, the helper reconnects through a protected
-socket instead of relying on an inherited password FD.
+`sudo` supports askpass through `-A` and `SUDO_ASKPASS`, whereas `-S` reads
+from standard input. Ordinary command execution in `sudo` closes descriptors
+above stderr unless overridden by policy, and `sudo`'s askpass child also closes
+extra descriptors and runs as the invoking user. Connecting the askpass helper
+back to the broker through a mode-`0600` Unix socket in a mode-`0700` runtime
+directory avoids relying on inherited file descriptors.
+[sudo manual](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudo.man.in),
 [sudo askpass source](https://raw.githubusercontent.com/sudo-project/sudo/main/src/tgetpass.c)
 
-## Proposed CLI
+## CLI contract
 
 Target names in the examples below are illustrative.
 
@@ -148,63 +151,100 @@ agentenv --profile work sudo --with prod_admin -- /usr/bin/systemctl restart ngi
 agentenv sudo --with prod_admin --cwd /var/lib/example -- /usr/bin/tee config.json
 agentenv sudo --with prod_admin --plan --json -- /usr/bin/systemctl restart nginx
 agentenv sudo --with prod_admin --check --json
+agentenv sudo --with prod_admin --deploy-helper --json
+agentenv sudo --with prod_admin --deploy-helper --from ./dist/agentenv-sudo-helper --force
 ```
 
-- `--with` requires exactly one top-level target entry. Local versus SSH
-  behavior is determined by that entry, not inferred from the command.
-- Execution accepts one argv after `--`. There is no inline password,
-  credential override, destination override, arbitrary sudo-option passthrough,
-  or automatic shell interpolation. Change the target definition explicitly
-  when changing its account, credential, run-as identity, or host.
-- Profile and project selection retain the existing CLI precedence and trust
-  notices. Target selection is explicit; operators can use `--profile` and
-  `--no-project` to pin selection. `--plan` displays the resolved selection.
-- `--plan` validates configuration and arguments and prints the selected
-  profile, transport, endpoint, credential name, run-as user, cwd, and supplied
-  command. It performs no provider resolution, SSH connection, or `ssh -G`
-  execution. It is a plan, not proof of reachability or permission.
-- `--check` takes no command. It checks executable/helper availability,
-  identity, protocol compatibility, and broker prerequisites. Remote checks
-  connect through SSH and may resolve the selected SSH login password in
-  password mode, but never resolve a sudo password or run a privileged command.
-  Authentication compatibility remains unknown until an actual challenge;
-  `--check` must not claim successful sudo authentication.
-- Execution streams raw stdout/stderr and rejects global `--json`. Structured
-  output is limited to `--plan` and `--check`, which follow existing empty-
-  stdout-on-error behavior. No raw protocol events appear in user output.
-- Stdin belongs exclusively to the requested command. Local omission of
-  `--cwd` uses the caller's cwd; remote omission uses the SSH session's initial
-  directory, reported by the helper. `--cwd` is applied before spawning sudo
-  and therefore must be accessible to the invoking user. Root-only cwd changes
-  need a separately designed policy-aware extension.
-- Connection/setup and credential-response deadlines are finite. Use
-  `--connect-timeout-secs` (default 30) for connection through Ready, excluding
-  time spent servicing the one allowed SSH credential response, and
-  `--auth-timeout-secs` (default 60) from a validated PasswordRequest through
-  its response; positive overrides are bounded at 300 seconds. Local helper
-  setup uses the same setup bound. SSH password response uses the same
-  credential-response bound, with at most one response; other connection time
-  still consumes the setup budget. No authentication timer runs just because
-  sudo has been spawned: a long-running NOPASSWD target must not be mistaken
-  for stalled authentication. sudo retains its own authentication timeout.
-  These timers do not prove that authentication succeeded or that the target
-  started. There is no default whole-command timeout or automatic retry.
+- `--with <ENTRY>` is required and selects exactly one top-level
+  `kind = "sudo-target"` entry in the resolved profile. Local versus SSH
+  behavior comes from that target entry rather than the command.
+- Execution accepts one command argv after `--`. The executable path and
+  optional `--cwd <PATH>` must be absolute POSIX paths (`/` prefix, valid
+  UTF-8, no NUL bytes). There is no inline password, credential override,
+  destination override, arbitrary sudo-option passthrough, or automatic shell
+  interpolation.
+- Profile and project selection follow the standard CLI precedence and trust
+  notices (`--profile`, `--no-project`).
+- `--plan` requires a command after `--` and conflicts with `--check` and
+  `--deploy-helper`. It validates configuration and command arguments and
+  prints `profile`, `target`, `transport`, `endpoint` (`local`,
+  `ssh-config:<alias> (unresolved)`, or `<user>@<hostname>:<port>`),
+  `route_policy` (`local`, `unverified` for `ssh-config`, or `explicit` for
+  `explicit`), `credential`, `auth_user`, `run_as`, `cwd` (`null` in JSON or
+  `remote initial directory (unresolved)` in text when omitted on an SSH
+  target), and `command`. It performs no provider resolution, SSH connection, or
+  `ssh -G` evaluation.
+- `--check` takes no command and rejects `--cwd`, conflicting with `--plan` and
+  `--deploy-helper`. Locally, it verifies that the invoking Unix username
+  matches `auth_user`, that `sudo_path` and the companion
+  `agentenv-sudo-helper` are safe executables (regular non-symlink files owned
+  by root or the invoking user, executable, and not group- or world-writable),
+  that the companion's `--identity` line matches the main binary's build, and
+  that the private runtime directory and socket can be created. Over SSH, it
+  evaluates the route, connects (resolving the SSH login password once if
+  `method = "password"`), and completes the `Hello`/`Ready` check handshake, in
+  which the remote helper runs the same account, `sudo_path`, and companion
+  checks before answering. It emits a `sudo-check:` warning on stderr if
+  `helper_path` lies outside the `--deploy-helper` path grammar. `--check`
+  never resolves the sudo password or runs a privileged command.
+- `--deploy-helper` takes no command and rejects `--cwd`, conflicting with
+  `--plan` and `--check`. It requires an SSH target and supports optional
+  `--from <PATH>` (one local helper file of 1 byte to 64 MiB to upload instead
+  of the bundled companion or the release asset; requires `--deploy-helper`)
+  and `--force` (reinstalls even when the destination already reports this
+  build's identity; requires `--deploy-helper`). `--force` never overrides the
+  refusal of an occupied `helper_path`: a symlink, directory, or file that does
+  not report a helper identity fails with `helper-deploy-path-occupied`.
+  Deployment runs a read-only preflight over the target's prepared SSH route
+  (`uname -s`, `uname -m`, `getconf GNU_LIBC_VERSION`, and the state of
+  `helper_path`), selects the helper bytes locally (a downloaded release asset
+  must match its entry in the release's `SHA256SUMS`), streams them into a
+  sibling temporary file whose byte count and `--identity` output are checked
+  on the destination, renames it over `helper_path`, and runs the `--check`
+  handshake as acceptance. Full mechanics and reason codes are specified in
+  [helper-deployment.md](helper-deployment.md).
+- Execution streams raw binary stdout and stderr and rejects global `--json`
+  (`sudo execution does not support --json; use --plan --json, --check --json or --deploy-helper --json`).
+  Structured JSON output is supported on `--plan`, `--check`, and
+  `--deploy-helper`, which leave stdout empty on error.
+- Local execution refuses a terminal on stdin (`std::io::stdin().is_terminal()`
+  fails with exit code 1) because `sudo` runs in its own process group
+  (`process_group(0)`) and would be stopped by the kernel if a child attempted
+  to read from the controlling terminal. Callers that do not stream data pipe
+  `/dev/null` into stdin.
+- When `--cwd` is omitted locally, `sudo` inherits the caller's current
+  directory. When `--cwd` is omitted over SSH, the remote helper uses the SSH
+  session's initial directory reported in `Ready`. Because `--cwd` is applied before spawning `sudo`, it must be
+  accessible to the invoking unprivileged user.
+- Connection setup and credential-response deadlines are finite and configurable:
+  - `--connect-timeout-secs <SECONDS>` (default `30`, range `1..=300`) bounds
+    setup through `Ready`, excluding time spent waiting inside the local
+    credential resolver subprocess.
+  - `--auth-timeout-secs <SECONDS>` (default `60`, range `1..=300`) bounds each
+    credential resolution and response stage (one budget for the SSH login
+    password request if used, and one budget from a validated sudo
+    `PasswordRequest` through `PasswordResponse`).
+  No authentication timer runs merely because `sudo` has spawned, so a
+  long-running `NOPASSWD` command is never mistaken for stalled authentication.
+  There is no default whole-command execution timeout or automatic retry.
 
 ## Credential and target configuration
 
-Use TOML and the existing `credential://` reference syntax. Add an optional
-credential `usages` array. Omitted or `["environment"]` retains current
-behavior; `["sudo"]`, `["ssh-password"]`, or `["ssh-password", "sudo"]`
-explicitly permits those authentication consumers. Reject empty/duplicate/
-unknown usages and mixing `environment` with an authentication usage. Use one
-array contract so an account password can explicitly serve both stages.
+Configuration uses version-1 TOML and `credential://` references. The optional
+`usages` array on a credential definition controls which subsystems may resolve
+it:
 
-For authentication credentials, forbid `inject_as` and reference `?as=` overrides. Support
-keychain and command providers; reject the env provider for this use because
-the intended workflow does not start with a password in inherited environment.
-For environment credentials, retain required `inject_as`. `credential check`
-and keychain `credential set` continue to work for every usage. No read-value
-command is added.
+- Omitted or `["environment"]` permits ordinary environment injection (`run`)
+  and [credential filling](credential-fill.md), and requires `inject_as`.
+- `["sudo"]`, `["ssh-password"]`, or `["ssh-password", "sudo"]` permits the
+  named authentication stage(s) and forbids `inject_as` and reference `?as=`
+  overrides.
+- Empty arrays, duplicate entries, unknown usage names, and mixing
+  `environment` with an authentication usage are rejected at configuration load
+  and write.
+- Authentication credentials must use the `keychain` or `command` provider; the
+  `env` provider is rejected because authentication secrets must not start in
+  the inherited process environment.
 
 ```toml
 [credentials.local_sudo]
@@ -254,36 +294,48 @@ helper_path = "/home/deploy/.local/libexec/agentenv-sudo-helper"
 method = "publickey"
 ```
 
-The examples are fragments under an otherwise valid version-1 configuration;
-the profile still needs its existing description/default-selection fields.
-Local accounts and paths are illustrative, not discovered environment values.
+Setting `kind = "sudo-target"` on a profile entry opts it into closed-schema
+validation. Unmarked profile entries remain open-schema environment tables. A
+`sudo-target` entry allows only `description`, `kind`, and `sudo`, and its
+`sudo.credential` reference must target a defined credential whose `usages`
+include `sudo` without `?as=` query parameters. The `local` transport rejects
+an `ssh` subtable; the `ssh` transport requires it. `auth_user` must match the
+invoking local Unix username or remote SSH login account; `run_as` may differ
+and is passed to `sudo -u`.
 
-The `kind = "sudo-target"` marker opts an entry into typed validation. Keep
-unmarked entries open-schema. Validate the marked entry's description/kind/sudo
-shape and closed transport-specific sudo tables at configuration load/write.
-Require a credential permitting sudo use without alias query parameters.
-The local variant rejects SSH fields; the SSH variant requires them. `auth_user`
-must equal the actual invoking local account or remote SSH login account in
-this release. `run_as` may differ and is passed explicitly to sudo.
+Configuration validation applies three path grammars, each limited to 4,096
+bytes without control characters:
 
-Validate destination, user, port, absolute paths, and string bounds without
-echoing candidate secrets. Host/user option-injection strings, control
-characters in connection metadata, and ambiguous destinations are rejected.
-The initial SSH bootstrap path accepts only absolute paths with a conservative
-ASCII path grammar, without whitespace, shell metacharacters, `.`/`..` segments,
-or home expansion. Argv transmitted inside the protocol has no such shell
-restriction. Support a conventional POSIX-compatible remote login shell.
+- `sudo_path` is a destination executable: it must start with `/`; spaces and
+  other printable characters are accepted. At execution time the local engine
+  (or the remote helper) additionally requires a regular, non-symlink,
+  executable file owned by root or the invoking user and not group- or
+  world-writable (`sudo-unavailable` otherwise).
+- `helper_path` on SSH targets is inserted unquoted into the remote login-shell
+  command `<helper_path> --serve`, so it must start with `/`, be ASCII, and
+  contain no backslash, whitespace, shell metacharacter
+  (`` ' " ` $ ; & | < > * ? ( ) [ ] { } ! ``), or `.`/`..` segment. The
+  stricter `--deploy-helper` grammar additionally limits the path to 1,024
+  bytes of `[A-Za-z0-9._/+-]`, forbids empty segments and a trailing slash, and
+  requires the file name `agentenv-sudo-helper`, because the serving helper
+  starts the `agentenv-sudo-helper` beside itself as `sudo`'s askpass program.
+  `--check` warns about a configured path outside that grammar.
+- `known_hosts_file`, `config_file`, and `identity_files` are files read by the
+  local SSH client. Each must be non-empty and absolute in a portable sense: a
+  `/` prefix, a drive-letter path, or a UNC path is accepted regardless of the
+  client platform.
 
-Extend `credential add` with repeatable `--usage` and conditional `--inject-as` rules.
-The writer emits the normalized `usages` array for explicit usage selections.
-Add a narrowly scoped `credential update <name> --usage <purpose> ...` operation
-to replace permitted usages on an existing definition without resolving or
-rewriting its stored value. Authentication usages remove `inject_as`; selecting
-environment use requires an explicit `--inject-as`. Whole-file validation must
-reject incompatible references atomically. Report the changed purposes and
-injection availability, never a password. This permits an already saved sudo
-password to gain explicit SSH use without asking the user to enter it again.
-The setup sequence remains definition, hidden local input, then target entry:
+Host aliases, hostnames, usernames, `run_as`, and `host_key_alias` values must
+be non-empty, at most 255 bytes, and free of a leading `-`, whitespace, and
+control characters. Host names and aliases additionally reject `@`, `/`, and
+`\`; account names reject `@`, `:`, `/`, and `\`.
+
+`credential add` accepts repeatable `--usage <environment|sudo|ssh-password>`
+flags with conditional `--inject-as` validation, and `credential update <name>
+--usage ... [--inject-as ...]` updates permitted usages on an existing
+credential definition without reading or rewriting its stored secret. Whole-file
+validation rejects any change that would leave an existing profile entry or
+`sudo-target` referencing a credential with incompatible usages.
 
 ```text
 agentenv credential add prod_sudo --description "Production sudo password." \
@@ -291,84 +343,46 @@ agentenv credential add prod_sudo --description "Production sudo password." \
 agentenv credential set prod_sudo
 ```
 
-Create each complete target entry in one existing `set --type json` operation,
-including its description, kind, and sudo table. Individual incremental writes
-that expose an incomplete typed target fail whole-file validation. This avoids
-requiring a new target-management command solely for initial setup.
-
-Query output reports usages and an absent/null injection target for authentication
-credentials. Existing credential JSON fields remain present; document the new
-nullable `inject_as` and additive `usages` contract. `run --with` on any entry
-containing an authentication reference fails before all resolution, even in a mixed
-entry and even with a requested environment-name override. It never silently
-skips references. Direct filling must also reject authentication credentials if/when
-that feature exists; every consuming surface enforces purpose at its boundary.
-
-These are additive version-1 capabilities: old configurations need no rewrite,
-while older binaries reject new fields through their existing closed schema.
-Document the minimum feature release and upgrade-before-edit sequence. Do not
-change existing stored passwords or reinterpret old credentials as authentication-use
-based on their names. Purpose changes use the explicit validated update above;
-no automatic conversion occurs.
+Target entries are written atomically in a single `set --type json` operation
+containing `description`, `kind`, and `sudo`. `credential list` and query
+commands report `usages` and a nullable `inject_as` (`null` for authentication
+credentials).
 
 ## SSH configuration sources and credential matching
 
-The target entry is the explicit binding, not a search over stored passwords.
-`--with prod_admin` selects one profile entry, its SSH connection definition,
-its SSH authentication reference if needed, and its separate sudo reference.
-Do not match credentials by display name, IP alone, Keychain service/account
-labels, or fuzzy hostname rules. Multiple aliases can explicitly reference the
-same credential; multiple accounts on one host remain different targets.
+The selected `sudo-target` entry explicitly binds the SSH connection source,
+optional SSH login credential, and sudo credential. Credentials are never
+matched by display name, IP address, keychain labels, or hostname heuristics.
 
-The two connection modes are mutually exclusive:
+The two SSH connection modes are mutually exclusive:
 
 | Mode | Connection source | Validation and behavior |
 | --- | --- | --- |
-| `ssh-config` | `host_alias` selects an OpenSSH Host name; optional absolute `config_file` selects a specific file | Let OpenSSH evaluate Host/Include/Match; do not reimplement the parser. Omit `config_file` to use normal user/system config precedence. HostName/User/Port come from that evaluation. |
-| `explicit` | Required hostname, user, port, host-key binding, and authentication fields in agentenv | Invoke OpenSSH with `-F none`, supplying the connection fields explicitly; read neither user nor system SSH configuration. No alias lookup or implicit route inheritance. |
+| `ssh-config` | `host_alias` selects an OpenSSH `Host` entry; optional absolute `config_file` selects a specific file | Evaluates `Host`/`Include`/`Match` through `ssh -G` (`-F <config_file>` when set); extracts effective `hostname`, `user`, `port`, and route policy. |
+| `explicit` | Required `hostname`, `user`, `port` (an integer from 1 through 65535; there is no default), `host_key_alias`, `known_hosts_file`, `helper_path`, and `auth` in `agentenv` | Invokes OpenSSH with `-F none` and explicit flags; reads neither user nor system SSH config files. |
 
-In `ssh-config` mode, execution and `--check` use a bounded `ssh -G` evaluation
-with the selected config source, capture its output internally, and extract
-the effective endpoint/user/port and relevant connection properties. `Match
-exec` can run local commands during this evaluation; this is trusted SSH
-configuration execution, not a side-effect-free parser. Never invoke it for
-`--plan`, which reports the alias and labels the effective endpoint unresolved.
+In `ssh-config` mode, execution, `--check`, and `--deploy-helper` run a bounded
+`ssh -G` evaluation before connecting. Because OpenSSH `Match exec` directives
+can run local commands during `ssh -G`, this step is never executed during
+`--plan`, which reports `ssh-config:<alias> (unresolved)` and
+`route_policy = "unverified"`.
 
-Compare the effective user with the target's required `auth_user` before
-allowing any password lookup. Pin the evaluated HostName/User/Port in the actual
-SSH launch so these fields cannot be silently reevaluated to another account.
-Keep the alias for remaining config selection. Do not expose duplicate
-agentenv hostname/user/port overrides in this mode: change the selected SSH
-config or choose explicit mode. The helper's later login-account check remains.
-SSH config and local trust files remain mutable same-user trusted inputs; this
-does not claim a snapshot or protection against malicious concurrent edits.
+`agentenv` compares the effective `user` from `ssh -G` against `auth_user`
+before resolving any password (`account-mismatch`), and pins `-l <user>`,
+`-p <port>`, and `-o HostName=<hostname>` on the spawned `ssh` command while
+passing
+`<host_alias>` as the destination token so remaining `ssh_config` directives
+continue to apply. In `explicit` mode, `user` must equal `auth_user` at
+configuration validation time.
 
-Authentication method is always explicit in agentenv and overrides inherited
-authentication preferences. Host-key controls always override ordinary SSH
-config. Thus an alias supplies connection details, not permission to switch
-credential, authentication method, or trusted server key. Key-mode ProxyJump
-is accepted only under the per-hop policy below. Arbitrary ProxyCommand is
-unsupported in this release; password mode rejects both ProxyJump and
-ProxyCommand before secret resolution.
+The authentication method is always explicit in `sudo.ssh.auth` and overrides
+inherited SSH preferences. Host-key verification is always pinned via
+`StrictHostKeyChecking=yes`, `HostKeyAlias=<host_key_alias>`,
+`UserKnownHostsFile=<known_hosts_file>`, `GlobalKnownHostsFile=none`,
+`UpdateHostKeys=no`, `VerifyHostKeyDNS=no`, and `KnownHostsCommand=none`.
 
-For example, this existing SSH configuration:
-
-```sshconfig
-Host prod
-    HostName 203.0.113.10
-    User deploy
-    Port 2222
-```
-
-matches `mode = "ssh-config", host_alias = "prod"`. agentenv's
-`sudo.credential` still chooses the sudo password, and `sudo.ssh.auth.credential`
-chooses the SSH password when password mode is selected. No password is written
-into `.ssh/config`. A user change to `User` that disagrees with `auth_user` fails
-before a password is released. Hostname/address changes remain subject to the
-target's pinned host-key trust; an alias string alone is not server identity.
-
-The following complete illustrative configuration needs no `.ssh/config` and
-explicitly shares one stored account password between SSH login and sudo:
+The following configuration uses `explicit` mode and shares one stored account
+password across both SSH login and `sudo`:
 
 ```toml
 version = 1
@@ -409,573 +423,506 @@ method = "password"
 credential = "credential://prod_account"
 ```
 
-The example host/address/account and local trust-file path are illustrative.
-Save this password once using an added definition permitting both usages and
-the existing hidden-input `credential set`. If the SSH and sudo passwords are
-different, use two definitions with `["ssh-password"]` and `["sudo"]` and
-reference each at its respective field. Never assume their values are equal
-and never fall back to the other credential after failure. Sharing a definition
-does not share authentication sessions or permit a second delivery in one stage.
-Rotating a shared stored value changes both uses; separate references rotate
-independently. Initial purpose selection is explicit at credential creation;
-an existing definition can gain both purposes with:
+When SSH login and `sudo` use different passwords, configure two credential
+definitions (`usages = ["ssh-password"]` and `usages = ["sudo"]`) and reference
+each at its respective field. `agentenv` never falls back from one credential
+to the other, and sharing a definition still enforces separate one-shot budgets
+for SSH login and `sudo`.
 
-```text
-agentenv credential update prod_account --usage ssh-password --usage sudo
-```
-
-This updates metadata only and does not fetch, copy, or replace the saved value.
-
-In explicit publickey mode, allow a typed list of absolute `identity_files`
-and an explicit `use_agent` boolean in the auth table. Disable implicit default
-identity files and use only the declared files and/or agent according to that
-selection; verify actual OpenSSH option behavior in the compatibility milestone.
-Password mode forbids these key-specific fields. Explicit mode initially has
-no jump-host/ProxyCommand fields; an explicit typed multi-hop design can follow.
-It must not silently consult `.ssh/config` to recover missing route information.
-
-`-F none` is the documented OpenSSH mechanism for skipping configuration files.
-This does not remove server identity checking or the need for a trusted host
-key. User public-key authentication and server host-key verification are
-different operations.
+In `ssh-config` mode, `method = "publickey"` accepts no further fields; keys and
+agent use come from the evaluated SSH configuration. In `explicit` mode,
+`publickey` requires `identity_files` (an array of absolute paths, empty when
+only the agent is used) and an explicit boolean `use_agent`, with at least one
+non-empty `identity_files` entry or `use_agent = true`. The client passes
+`IdentityFile=none` followed by each configured file; `use_agent = true` adds
+`IdentitiesOnly=no`, and `use_agent = false` adds `IdentitiesOnly=yes` and
+`IdentityAgent=none`. `password` mode requires `credential` (with
+`ssh-password` usage) and accepts no other field.
 [OpenSSH configuration selection](https://man.openbsd.org/ssh.1)
 
 ### Publickey jump-route policy
 
-OpenSSH implements ProxyJump by launching additional SSH processes. Its generated
-command does not propagate the outer client's `-o` restrictions, including
-BatchMode, authentication methods, host-key policy, and multiplexing controls.
+OpenSSH implements `ProxyJump` by spawning child `ssh` processes (`ssh -W
+'[host]:port' ...`) that do not inherit the outer client's `-o` command-line
+restrictions such as `BatchMode`, authentication methods, host-key policy, or
+multiplexing controls.
 [OpenSSH jump-command construction](https://github.com/openssh/openssh-portable/blob/master/ssh.c)
-Applying those restrictions only to the final-host client does not constrain
-the route.
 
-Retain native ProxyJump only for preconfigured routes whose effective per-hop
-settings already meet the required policy. This preserves existing key/agent
-selection without generating a second proxy-command framework or modifying
-the user's SSH files. Operators repair incompatible hop configuration explicitly.
-The final destination keeps the target entry's pinned host-key binding; each
-jump host needs its own verified trust material in the selected SSH configuration.
-Do not reuse the final destination's HostKeyAlias or trust identity for a hop.
+`agentenv` permits native `ProxyJump` only when all of the following hold:
 
-Before starting an owned SSH connection, evaluate every hop with bounded `ssh -G`
-using the same config-file selection, hop user/port overrides, and remaining
-jump chain that the supported OpenSSH client will use. Inspect the effective
-settings, not only literal Host blocks. The whole route shares the existing
-setup deadline and is limited to eight hops; reject cycles, malformed routes,
-and any route whose actual child invocation cannot be reproduced for validation.
-`--plan` still performs no `ssh -G`; it labels route policy unverified.
+1. The target uses `mode = "ssh-config"` and `method = "publickey"`. A jump
+   route with `method = "password"` fails with `password-route-unsupported`.
+   `explicit` mode runs OpenSSH with `-F none`, so no configuration can supply
+   a jump route there.
+2. The local client is Linux and `ssh -V` reports `OpenSSH_10.0`, where child
+   jump-command construction is verified
+   ([sudo compatibility](sudo-compatibility.md)). Any other client fails with
+   `jump-client-unsupported` before connecting.
+3. Before launching `ssh`, `agentenv` evaluates every hop of the jump chain
+   (one to eight hops; another count or malformed hop syntax fails with
+   `jump-route-invalid`) with `ssh -G`, using the same config file, the hop's
+   user and port overrides, the `-W` forwarding target, and the remaining `-J`
+   chain that OpenSSH constructs. Every hop must already satisfy this effective
+   policy in SSH configuration; a violation fails with `ssh-policy-rejected`:
+   - `batchmode yes`, `pubkeyauthentication yes`, `passwordauthentication no`,
+     `kbdinteractiveauthentication no`, `gssapiauthentication no`,
+     `hostbasedauthentication no`, `identitiesonly yes`, and
+     `preferredauthentications publickey`
+   - `stricthostkeychecking yes`, `updatehostkeys no`, `verifyhostkeydns no`,
+     `globalknownhostsfile none`, no `knownhostscommand`, and exactly one
+     explicit `userknownhostsfile`
+   - an explicit identity file or identity agent, and no security-key or
+     PKCS#11 provider
+   - `forwardagent no`, `forwardx11 no`, `forwardx11trusted no`,
+     `permitlocalcommand no`, `controlmaster no`, `controlpersist no`, no
+     `controlpath`, and either no configured local, remote, or dynamic
+     forwardings or `clearallforwardings yes`
+   - no `SendEnv` or `SetEnv` entry that could export the askpass routing
+     variables, and no nested route other than the remaining validated chain
 
-Every hop must have BatchMode enabled, publickey-only authentication, no
-password/keyboard-interactive/other authentication fallback, strict host-key
-checking, and explicit trusted known-hosts sources. Disable alternative dynamic
-key sources and automatic host-key updates, connection multiplexing/reuse,
-agent/X11 forwarding, and local command hooks. Configured forwarding beyond
-the required ProxyJump stream must be absent or provably cleared by the child's
-`-W` invocation. Trusted `Match exec` evaluation remains permitted under the
-existing configuration-source contract. Reject custom ProxyCommand routes;
-their arbitrary child processes cannot be covered by this policy.
-
-S0 freezes the effective-option predicates and exact child invocation semantics
-for each supported client, including Windows. S5a verifies both a conforming
-multi-hop route and rejection of a nonconforming inner hop before any connecting
-SSH process or credential lookup starts. If those semantics cannot be established
-for a client, jump routes are unavailable on that client; direct connections remain
-supported. Config files remain trusted same-user mutable inputs as documented
-above; this preflight is not a filesystem snapshot. No parent-only override or
-successful final-host handshake substitutes for the per-hop checks.
+A custom `ProxyCommand` on the destination or on any hop fails with
+`proxy-command-unsupported`. A hop endpoint (`<user>@<hostname>:<port>`) that
+repeats another hop or the final destination fails with `jump-cycle`, and a
+reused effective trust identity (`hostkeyalias`, or the hop's hostname, compared
+with the destination's `host_key_alias`) fails with `jump-trust-identity`. All
+of these checks complete before any network connection or secret resolution
+starts.
 
 ## Saved-password SSH login
 
-Support two explicit methods with no automatic cross-method fallback:
+SSH authentication supports two explicit methods with no cross-method fallback:
 
-| Method | OpenSSH policy | Credential handling |
+| Method | OpenSSH options enforced | Credential handling |
 | --- | --- | --- |
-| `publickey` | `BatchMode=yes`, publickey-only authentication, no password/keyboard-interactive fallback | Existing configured keys/agent; no SSH login credential reference |
-| `password` | `BatchMode=no`, `PreferredAuthentications=password`, `PasswordAuthentication=yes`, `PubkeyAuthentication=no`, `KbdInteractiveAuthentication=no`, `NumberOfPasswordPrompts=1` | Exactly one `ssh-password` reference through a private local askpass session |
+| `publickey` | `BatchMode=yes`, `PubkeyAuthentication=yes`, `PreferredAuthentications=publickey`, `PasswordAuthentication=no`, `KbdInteractiveAuthentication=no` | Configured keys/agent; no SSH login credential reference |
+| `password` | `BatchMode=no`, `PreferredAuthentications=password`, `PasswordAuthentication=yes`, `PubkeyAuthentication=no`, `KbdInteractiveAuthentication=no`, `NumberOfPasswordPrompts=1`, `IdentityAgent=none` (plus `IdentityFile=none` in `explicit` mode) | One `ssh-password` credential delivered through a private local `agentenv-ssh-askpass` session |
 
-Password mode also disables other login mechanisms and agent use. The server
-must accept SSH's password authentication method; a server requiring keys,
-keyboard-interactive, or multiple factors fails explicitly. A UI displaying
-"Password" does not establish that the underlying SSH method is `password`.
-Do not weaken server policy or infer that password mode can bypass it.
+Both methods also set `GSSAPIAuthentication=no` and
+`HostbasedAuthentication=no`.
 
-BatchMode disables password prompting. Forced askpass permits controlled local
-password entry without consuming SSH stdin. These are separate options; merely
-setting SSH_ASKPASS while leaving BatchMode enabled will not implement login.
+`BatchMode=yes` disables password prompting, whereas `BatchMode=no` combined
+with `SSH_ASKPASS` and `SSH_ASKPASS_REQUIRE=force` routes password reads to the
+askpass companion without using terminal or standard input. The server must
+accept the SSH `password` authentication method; servers requiring
+`keyboard-interactive` or multi-factor prompts fail explicitly.
 [OpenSSH authentication options](https://man.openbsd.org/ssh_config.5),
 [OpenSSH askpass behavior](https://man.openbsd.org/ssh.1)
 
-For password mode, the client starts a cross-platform local
-`agentenv-ssh-askpass` companion and a session broker bound to one SSH child,
-target, effective account, and credential reference. Set `SSH_ASKPASS` to its
-absolute executable path and `SSH_ASKPASS_REQUIRE=force` only in that child's
-environment. These variables carry no password. Use owner-protected local
-sockets on Unix and an equivalently scoped named-pipe ACL on Windows. The
-companion has no standalone credential-name lookup or print-secret operation.
+In `password` mode, the client starts a single-use local askpass broker bound
+to the spawned `ssh` child, target, effective account, and credential
+reference. Before opening the broker it requires the companion
+`agentenv-ssh-askpass` executable beside `agentenv` to print exactly
+`agentenv-ssh-askpass 1 <version>` for `--identity`. It then sets
+`SSH_ASKPASS` to that companion, `SSH_ASKPASS_REQUIRE=force`, and
+`DISPLAY=agentenv:0` in the child's environment and removes any inherited
+`SSH_ASKPASS_PROMPT`:
 
-The flow is host verification, SSH password request, local credential lookup,
-authentication-value validation, one private reply to OpenSSH, successful login,
-remote helper handshake, then the independent sudo flow. OpenSSH captures askpass
-stdout; it is never command
-stdin or user stdout. SSH's wire stdin remains exclusively the remote execution
-protocol. No `sshpass -p`, expect script, password environment variable, or
-simulated terminal input is used.
+- **Unix askpass IPC (`src/sudo/ssh_askpass.rs`):** The broker creates a
+  mode-`0700` runtime directory and a mode-`0600` Unix domain socket, passing
+  the socket path (`AGENTENV_SSH_SOCKET`) and a 192-bit random session marker
+  encoded as 48 hexadecimal characters (`AGENTENV_SSH_SESSION`) to `ssh`. On
+  connection, the broker verifies the peer UID against the current process
+  UID, and the companion reports its parent PID, which must equal the spawned
+  `ssh` PID.
+- **Windows askpass IPC (`src/sudo/ssh_askpass/windows.rs`, `src/windows.rs`):**
+  The broker creates a single-instance, local-only named pipe
+  (`\\.\pipe\agentenv-ssh-<pid>-<nonce>`) with `PIPE_REJECT_REMOTE_CLIENTS` and
+  a protected DACL granting access only to the current user SID
+  (`D:P(A;;GA;;;<sid>)`), passing the pipe name (`AGENTENV_SSH_PIPE`), the
+  broker PID (`AGENTENV_SSH_PARENT`), and the session marker
+  (`AGENTENV_SSH_SESSION`) to `ssh`. `agentenv-ssh-askpass.exe` opens the pipe
+  with `SECURITY_ANONYMOUS` impersonation. The broker verifies the client PID
+  (`GetNamedPipeClientProcessId`), checks that the client's canonical executable
+  image (`QueryFullProcessImageNameW`) matches the companion
+  `agentenv-ssh-askpass.exe`, and verifies that the client's parent PID equals
+  the spawned `ssh.exe` PID before accepting the request. After writing the
+  reply frame, the broker waits for a single `0x06` acknowledgement byte before
+  closing the pipe so Windows does not tear down the pipe while the client is
+  still reading.
 
-Strict host-key verification happens before login password delivery. Key
-confirmation must never be answered by the password helper. Reject
-`SSH_ASKPASS_PROMPT` confirm/notification modes, unknown prompt shapes for the
-tested client versions, and every request after the first. Bind prompt checking
-to the expected generated user/host prompt rather than searching for the word
-"password". The prompt is an additional guard; the enforced password-only
-method, fixed child/session, requested account, and host-key verification own
-the selection. Password expiry/change prompts fail; no new password is supplied.
-Clear inherited askpass hints/debug hooks and never forward raw prompt text.
+Strict host-key verification happens inside OpenSSH before `ssh` invokes
+`SSH_ASKPASS`. The askpass companion refuses any invocation with
+`SSH_ASKPASS_PROMPT` set (OpenSSH sets it for confirmation and notification
+prompts), the broker accepts only one connection (the Unix broker removes its
+socket after the first request, and the Windows pipe has a single instance),
+and the broker requires the session marker and the exact prompt string
+`"<user>@<host_key_alias>'s password: "` (OpenSSH formats the password prompt with `HostKeyAlias` when that option is
+pinned). Host-key confirmation prompts, passphrase prompts, and password-change
+prompts never match and never trigger credential lookup.
 [OpenSSH askpass implementation](https://raw.githubusercontent.com/openssh/openssh-portable/master/readpass.c)
 
-SSH lookup necessarily occurs before the remote helper's Ready message. That
-handshake gates sudo password release, not SSH login authentication. A missing
-helper may therefore be discovered after one successful SSH password login.
-One-shot budgets are separate: one SSH response and one sudo response per
-execution, even when they reference the same stored value. Do not retain an
-unnecessary cleartext login password while waiting for a later sudo request.
-
-Do not export askpass routing state to the remote environment: ensure matching
-SendEnv/SetEnv entries cannot forward this metadata, and test that inherited
-SSH config cannot accidentally carry it to the target. Broker access and cleanup
-have the same same-user/root limitations as sudo's local broker. Password-mode
-Windows support is advertised only after actual client/askpass/named-pipe tests;
-an unsupported build reports the capability missing without weaker fallback.
-
-Password authentication through jump hosts is deferred. A nested OpenSSH child
-may inherit askpass settings, making a final-host password unsafe to offer to
-an unbound jump-host prompt. Reject such routes in this mode. Future multi-hop
-support needs separately bound host/account/credential and trust verification
-for every hop; parsing prompt text is not a sufficient routing boundary.
+SSH login lookup necessarily occurs before the remote helper's `Ready`
+handshake, which gates sudo password release. One-shot budgets are independent:
+at most one SSH login password response and at most one sudo password response
+per invocation. The askpass routing variables (`SSH_ASKPASS`,
+`SSH_ASKPASS_REQUIRE`, and `AGENTENV_SSH_*`) never reach the remote host:
+`-o SendEnv=-*` clears inherited `SendEnv` patterns, and the effective
+configuration from `ssh -G` is rejected (`ssh-policy-rejected`) when a
+remaining `SendEnv` pattern is anything other than `LANG`, `TZ`, or `LC_*`, when
+a `SetEnv` entry names a reserved variable, or, in `password` mode, when any
+`SetEnv` entry is present.
 
 ### Password values at both authentication boundaries
 
-The shared credential `Secret` type accepts values suitable for other consumers;
-it does not establish askpass compatibility. Both the local SSH askpass reply
-and the sudo PasswordResponse path must validate the complete resolved value
-before sending any password bytes. Require nonempty UTF-8 without CR, LF, or
-NUL, and enforce the stage's verified byte limit. Preserve all other accepted
-bytes, including leading/trailing spaces; do not trim, truncate, split lines,
-or count Unicode characters in place of encoded bytes.
+Both the local SSH askpass broker and the sudo `PasswordResponse` path validate
+the resolved `Secret` with `Secret::validate_authentication` before transmitting
+any bytes:
 
-Use a conservative product ceiling of 255 UTF-8 bytes for each stage. The SSH
-limit is the smaller of that ceiling and the tested local OpenSSH askpass limit;
-the sudo limit is the smaller of that ceiling and the tested destination
-sudo/askpass limit. Verify any line terminator added by the companion fits the
-transport limit. S0 publishes those limits independently for supported clients
-and destinations. OpenSSH's askpass reader has a fixed buffer and ends the value
-at CR/LF, so an unvalidated reply may silently authenticate with a different
-value. [OpenSSH askpass reader](https://github.com/openssh/openssh-portable/blob/master/readpass.c)
+- The value must be non-empty UTF-8 containing no CR (`\r`), LF (`\n`), or NUL
+  (`\0`) bytes.
+- All other UTF-8 bytes—including leading and trailing spaces—are preserved
+  without trimming or normalization.
+- Both stages enforce a maximum length of 255 UTF-8 bytes
+  (`SUDO_PASSWORD_LIMIT = 255`, matching the measured destination `sudo` PAM
+  buffer ceiling of 255 bytes and staying well within OpenSSH's 1,024-byte
+  `read_passphrase` buffer; see [sudo compatibility](sudo-compatibility.md)).
 
-Apply validation on every actual response, including SSH-only credentials,
-shared SSH/sudo references, and SSH login followed by NOPASSWD. Never rely on
-the later sudo stage to validate an earlier SSH response. A shared definition
-uses each stage's own limit when that stage requests it; NOPASSWD still performs
-no sudo lookup. Invalid values produce a fixed credential-resolution failure
-without candidate bytes and terminate the authentication exchange. Owned
-components return failure rather than a successful empty or shortened password
-reply; the coordinator stops the SSH/sudo exchange instead of relying on a
-particular client's treatment of askpass failure. Do not retry or substitute
-another credential. Remote helpers validate sudo secret frames before askpass delivery
-as well; malformed frames are protocol failures. These checks constrain the
-authentication consumers without changing storage or ordinary `run` semantics.
+Validation runs on every actual password request, including SSH-only
+credentials, shared `["ssh-password", "sudo"]` credentials, and SSH password
+login followed by `NOPASSWD` sudo. Invalid values fail with exit code 4
+(credential error) without echoing candidate bytes and immediately terminate
+the authentication exchange. The remote helper also validates the received
+`PasswordResponse` frame before writing it to the sudo askpass socket.
 
 ## Local execution and authentication lifecycle
 
-1. Select and validate the target and immutable command request. Reject an
-   unsupported platform, mismatched invoking account, unsafe executable/helper
-   selection, or invalid paths before resolving a credential.
-2. Create a unique owner-only runtime directory and a mode-0600 Unix socket.
-   Check ownership and reject symlink substitution. Bind this broker to one
-   invocation, credential reference, invoking identity, and command request.
-3. Start the configured trusted sudo binary directly with `-A -k -u <run_as>`,
-   a fixed application prompt containing a fresh session marker and `%p`, then
-   `-- <absolute executable> <args...>`. No preliminary `sudo -v`, no replay
-   through `sudo -n`, and no privileged wrapper are used.
-4. Set `SUDO_ASKPASS` to the packaged companion executable in askpass mode.
-   Use scoped routing metadata to locate the socket; no password travels in
-   environment variables. The helper defaults to askpass mode when invoked by
-   sudo with its prompt argument; `--serve` is its explicit remote mode.
-5. The askpass adapter validates the exact prompt marker and expanded `%p`
-   against the configured authentication account. An unexpected prompt/account
-   fails without fetching a password. The broker validates its session and,
-   where available, Unix peer credentials. PID/UID checks are defense against
-   mistakes, not proof against an adversary with the same user permissions.
-6. Only that validated request triggers local resolution. Apply the shared
-   authentication-value contract with the destination's sudo byte limit before
-   replying; preserve accepted bytes without trimming or truncation. Return
-   the value once to askpass, whose stdout is the private pipe captured by sudo,
-   not the CLI's stdout.
-7. Disarm the broker immediately after one password response. Any second
-   challenge fails without resolving or resubmitting the password. If sudo
-   never invokes sudo askpass, no sudo credential is resolved or transmitted;
-   a preceding SSH login may independently have used its password.
-8. Reap sudo, drain output, close IPC, dispose of secret buffers, and remove
-   only this invocation's validated runtime files. Process exit and abnormal
-   disconnect close pending authentication; no password-bearing disk files
-   exist to recover. Stale socket directories contain no credentials.
-
-Using `-k` with a command avoids depending on or refreshing sudo's credential
-cache; policy can still permit passwordless execution. No global cache purge
-is performed. This choice provides a predictable per-operation credential
-lifecycle without altering unrelated sessions.
-[sudo cache behavior](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudo.man.in)
-
-The prompt check intentionally fails closed when PAM replaces the application
-prompt. It supports conventional single-password sudo, not arbitrary prompt
-text recognition. Do not automatically set `passprompt_override` or change
-PAM. `rootpw`, `targetpw`, or `runaspw` that request a different account's
-password are unsupported and must not receive the configured login password.
-An administrator-controlled multifactor setup can obscure challenge meaning;
-it is outside the supported authentication contract even if a prompt looks
-similar. Check and publish real platform results before claiming support.
-[sudoers authentication options](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudoers.man.in)
-
-The engine launches with a curated environment needed for platform operation
-and locale, excluding inherited provider secrets, dynamic-loader hooks, debug
-hooks, and unrelated credentials. The helper uses the same discipline. sudo
-still applies its own target environment policy. Do not use `sudo -E`.
-Ordinary local command stdin is inherited as data; the executor does not
-consume it for authentication. Both execution paths are pipe-oriented and
-provide no interactive-terminal contract.
-
-Routing metadata is a short-lived local capability. Never log it. Under unusual
-sudoers environment-preservation rules, it may be visible to a target; do not
-promise unconditional metadata stripping without changing the command sudoers
-authorizes. A consumed capability yields no second password. In the NOPASSWD
-case no password has been resolved, and a malicious same-user/root target is
-outside the boundary. Verify ordinary environment policies and document this
-limit instead of introducing a privileged wrapper to conceal it.
+1. **Preflight:** Select and validate the target and command request. Verify
+   that the platform is Unix (`unsupported-platform` on Windows), that the
+   real and effective UIDs agree and the invoking Unix username matches
+   `auth_user` (`account-mismatch`, or `account-unavailable` when the account
+   cannot be read), that `sudo_path` is a safe executable (`sudo-unavailable`),
+   and that the companion `agentenv-sudo-helper` beside `agentenv` is a safe
+   executable (`helper-missing`) whose `--identity` output is exactly
+   `agentenv-sudo-helper <protocol> <version>` for this build
+   (`helper-mismatch`, or `helper-timeout` when it does not answer within
+   `--connect-timeout-secs`). A requested `--cwd` must be an existing directory
+   (`invalid-cwd`).
+2. **Broker setup:** Create a unique mode-`0700` runtime directory
+   (`agentenv-sudo-*` in the platform temporary directory, `TMPDIR` or `/tmp`)
+   and bind a mode-`0600` Unix domain socket (`askpass.sock`). Verify the
+   ownership, type, and permissions of both (`broker-setup`) and generate a
+   192-bit random session marker encoded as 48 hexadecimal characters.
+3. **Spawn `sudo`:** Launch `sudo_path` in its own process group
+   (`process_group(0)`) with `-A -k -u <run_as> -p
+   'agentenv sudo [<session>] password for %p:' -- <executable> <args...>`.
+   No preliminary `sudo -v`, `sudo -n`, or wrapper binary is used. `-k` ignores
+   and avoids updating `sudo`'s cached timestamp while still allowing
+   `NOPASSWD` rules to succeed without a prompt.
+   [sudo cache behavior](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudo.man.in)
+4. **Curated environment:** Start from an empty environment, set
+   `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, and copy only `HOME`, `LANG`,
+   `LC_ALL`, `LC_CTYPE`, and `TZ` when they are set. Add
+   `SUDO_ASKPASS=<companion helper path>`, `AGENTENV_SUDO_SOCKET` (the socket
+   path), and `AGENTENV_SUDO_SESSION` (the session marker). Every other
+   inherited variable, including dynamic-loader variables, debug hooks, and
+   inherited secrets, is absent. `sudo` then applies its own `env_reset`
+   policy to the target command (`sudo -E` is never used).
+5. **Prompt and peer verification:** When `sudo` requires a password, it runs
+   `agentenv-sudo-helper` with the expanded prompt argument. The helper
+   requires `AGENTENV_SUDO_SOCKET`, `AGENTENV_SUDO_SESSION`, and a prompt that
+   starts with `agentenv sudo [<session>] password for ` and ends with `:`
+   before connecting, then sends the session marker and prompt over the Unix
+   socket. The broker verifies the peer UID (`getpeereid` / `SO_PEERCRED`,
+   `peer-rejected`), the session marker, and the exact expected prompt
+   `agentenv sudo [<session>] password for <auth_user>:`. If PAM or
+   `rootpw`/`targetpw`/`runaspw` replaces the prompt or requests a different
+   account's password, the broker refuses the request and fails with
+   `authentication-rejected` without resolving the credential. A malformed
+   request fails with `broker-invalid`, and a request that does not arrive
+   within `--connect-timeout-secs` after the helper connects fails with
+   `helper-timeout`.
+   [sudoers authentication options](https://raw.githubusercontent.com/sudo-project/sudo/main/docs/sudoers.man.in)
+6. **Lazy, one-shot resolution:** The broker accepts one connection. After a
+   valid request it removes the socket file, so a second askpass invocation
+   (for example after a rejected password) cannot connect and `sudo` receives
+   no further password. Only then does the local coordinator invoke the
+   confidential resolver within `--auth-timeout-secs`; a provider failure,
+   timeout, or invalid value refuses the helper and fails with exit code 4. If
+   `sudo` satisfies policy via `NOPASSWD`, no credential lookup occurs.
+7. **Output and cleanup:** Standard input, stdout, and stderr are passed to
+   `sudo` directly and stream independently. A broker failure terminates the
+   `sudo` process group as described under cancellation below. On completion,
+   the engine reaps `sudo`, drops secret buffers, and removes the socket and
+   runtime directory. Because `agentenv-sudo-helper` in askpass mode inherits
+   `sudo`'s stderr, it writes nothing to stderr and reports a failure only
+   through its exit status.
 
 ## Remote execution over SSH
 
-The remote companion runs as the configured SSH user. It has no credential
-configuration, keychain integration, setuid bit, listening network port, or
-background service. It uses the same Unix engine and askpass adapter as local
-execution, with password requests delegated to the local client.
+The remote `agentenv-sudo-helper` runs as the unprivileged SSH login user. It
+has no local credential configuration, keychain integration, setuid bit,
+listening network port, or background daemon. It runs the same Unix `sudo` and
+askpass socket engine as local execution, delegating any validated askpass
+challenge over the framed SSH protocol to the local client.
 
-Start one foreground OpenSSH session with a fixed helper invocation. Put
-only the validated helper path and fixed `--serve` switch in the remote
-command string. Send target argv, cwd, and execution options as protocol data;
-the helper passes argv directly to sudo. OpenSSH constructs a command string
-and sshd uses the login shell, so separate local argv elements are not a safe
-way to transmit arbitrary remote argv.
+The client spawns one foreground OpenSSH session with `-T`, the pinned
+`HostName`, `-l <user>`, and `-p <port>`, the authentication options above, and
+a fixed policy set: host-key pinning (`StrictHostKeyChecking=yes`,
+`HostKeyAlias`, `UserKnownHostsFile`, `GlobalKnownHostsFile=none`,
+`UpdateHostKeys=no`, `VerifyHostKeyDNS=no`, `KnownHostsCommand=none`); no
+multiplexing (`ControlMaster=no`, `ControlPath=none`, `ControlPersist=no`);
+no forwarding or local hooks (`ForwardAgent=no`, `ForwardX11=no`,
+`ForwardX11Trusted=no`, `PermitLocalCommand=no`, `ClearAllForwardings=yes`,
+`ExitOnForwardFailure=yes`, `GatewayPorts=no`, `Tunnel=no`,
+`EnableEscapeCommandline=no`); no alternative key providers
+(`SecurityKeyProvider=none`, `PKCS11Provider=none`); a plain session
+(`RequestTTY=no`, `StdinNull=no`, `ForkAfterAuthentication=no`,
+`SessionType=default`, `RemoteCommand=none`); and `SendEnv=-*`. The same
+arguments are first evaluated with `ssh -G`, and the session is refused when
+OpenSSH did not retain the pinned endpoint (`endpoint-pin-failed`) or a
+required option (`ssh-policy-rejected`). The remote command is the single
+fixed string `<helper_path> --serve`. Target argv, optional `--cwd`, `run_as`,
+and `auth_user` travel inside the binary wire protocol over SSH stdin/stdout
+rather than through the remote login shell. `ssh` runs in its own process
+group, so a terminal signal reaches only `agentenv`, which forwards it as
+`Cancel`.
 [OpenSSH client](https://man.openbsd.org/ssh.1),
 [sshd command execution](https://man.openbsd.org/sshd.8)
 
-The client sets BatchMode according to the explicit authentication method and
-forces `StrictHostKeyChecking=yes`, no PTY, no agent or X11 forwarding,
-no configured port forwarding, no local command hooks, and
-no reuse of a multiplexed connection. Pin user, port, HostKeyAlias, and the
-configured known-hosts file. Disable alternative host-key sources and automatic
-host-key updates for this route so a changed SSH alias cannot silently select a
-new trusted recipient. In SSH-config publickey mode, preserve compatible key
-selection and only ProxyJump routes that pass the per-hop policy before launch;
-these outer-client overrides are not inherited by jump children. Password mode
-refuses jump/proxy routes; explicit mode reads no SSH config. Override conflicting
-RemoteCommand, stdin-null, background, and session-type options. No raw
-caller-supplied SSH options are exposed.
-
-Map options to supported OpenSSH/platform equivalents, including the null-file
-path on Windows. Unsupported required options fail before password resolution.
-Never downgrade security options to accommodate an old client. Host-key
-enrollment is explicit, out of band, and verifies fingerprints using a trusted
-source; `ssh-keyscan` output alone is not identity verification.
-[OpenSSH configuration](https://man.openbsd.org/ssh_config.5)
-
-SSH authenticates the host before the helper handshake. A fresh handshake
-reports protocol/build identity, platform, actual login username/UID, initial
-cwd, and supported sudo features. Validate the configured login account and
-capabilities before starting sudo or resolving its password. Any SSH login
-password was already delivered through the separate local askpass stage.
-These self-reports supplement SSH identity;
-they do not attest a malicious server or a modified same-user helper.
-
-The client validates a bound sudo password request from this session, resolves
-that local credential lazily, and returns one secret response. Password bytes are
-encrypted on the network by SSH and exist briefly in remote helper/askpass/sudo
-memory. They are never saved to the server's credential store or a temp file.
+On `Hello`, the helper runs the same preflight as local execution against the
+SSH login account: the account must equal `auth_user`, `sudo_path` must be a
+safe executable, the `agentenv-sudo-helper` beside the serving helper must
+report this build's identity, and the runtime directory must be creatable. A
+failed preflight answers `Hello` with a `Failure` frame instead of `Ready`,
+which the client reports as `helper-handshake-invalid`. A successful preflight
+answers with `Ready`. A first frame of another kind, a `Ready` whose request
+ID differs from `Hello`'s, or `Ready` metadata that does not decode fails with
+`helper-handshake-invalid`. A decoded `Ready` is accepted only when `build`
+equals the client version, `protocol` is `1`, `platform` is `linux` or
+`macos`, `auth_user` equals the target's `auth_user`, `password_limit` is
+between 1 and 255, `cwd` is an absolute path without NUL, and `features`
+includes `one-shot-auth`, `binary-streams`, `credits`, and `cancel`; any other
+decoded `Ready` fails with `helper-identity-mismatch`. These checks
+complete before the client sends `Start` or resolves any sudo credential. When
+`helper-identity-mismatch` or `helper-handshake-missing` occurs, the
+diagnostic ends with the remediation command
+`agentenv --profile=<profile> sudo --with=<entry> --deploy-helper`.
 
 ### Wire contract
 
-Use a versioned binary framing layer over SSH stdin/stdout, with bounded UTF-8
-JSON metadata and raw byte payloads for streams and secrets. This is transport
-framing, not a new configuration format. A secret frame has a dedicated encoder
-at the credential boundary; `Secret` remains non-serializable and redacted in
-Debug. Explicitly zero/drop its owned buffers after delivery as practical.
+The client and `agentenv-sudo-helper --serve` communicate over SSH stdin and
+stdout using a versioned binary framing layer (`src/sudo/protocol.rs`,
+`src/sudo/transport.rs`):
 
-| Direction | Message | Purpose |
+- **Frame header (20 bytes):** 4-byte ASCII magic `AGEP`, `u16` big-endian
+  protocol version (`1`), `u16` message kind (`1..=16`), `u64` nonzero request
+  ID, and `u32` payload length validated before allocation. The client draws
+  one random nonzero request ID per invocation and uses it on every frame,
+  including `Hello`; the helper adopts the ID of `Hello` for the rest of the
+  session.
+- **Payload limits:** 64 KiB (`65,536` bytes) for JSON metadata frames, 32 KiB
+  (`32,768` bytes) for `StdinChunk`, `StdoutChunk`, and `StderrChunk` frames,
+  and 255 bytes for `PasswordResponse` frames. `PasswordUnavailable` and the
+  three `*Eof` frames must have empty payloads. Metadata payloads are JSON
+  objects whose decoders reject unknown fields.
+- **Flow control:** Each data stream (`stdin`, `stdout`, `stderr`) begins with
+  an initial credit window of 128 KiB (`131,072` bytes, also the maximum credit
+  window). Senders decrement credit by chunk byte length before transmitting
+  and pause data chunks when credit is exhausted; receivers issue
+  `WindowUpdate` frames as chunks are written to their sink. Control frames use
+  a separate priority queue so blocked stream writers cannot starve
+  `PasswordRequest`, `PasswordResponse`, `WindowUpdate`, `Cancel`, `Result`, or
+  `Failure`.
+
+| Direction | Message (`u16` kind) | Purpose |
 | --- | --- | --- |
-| Client to helper | Hello | Negotiate version and check/execute mode, with non-secret sudo path and expected account; contains no credential |
-| Helper to client | Ready | Report identity and capabilities before execution |
-| Client to helper | Start | One immutable argv/cwd/run-as/auth-user request and session identifier |
-| Helper to client | PasswordRequest | One validated askpass challenge bound to that request |
-| Client to helper | PasswordResponse / PasswordUnavailable | One secret response or a closed failure reason |
-| Client to helper | StdinChunk / StdinEof | Target data only; EOF does not close the control channel |
-| Helper to client | StdoutChunk / StderrChunk / stream EOF | Separate sudo/target streams and their completion |
-| Both | WindowUpdate | Per-stream credit for bounded stdin/stdout/stderr flow |
-| Client to helper | Cancel | Request cancellation without replay or a second sudo command |
-| Helper to client | Result / Failure | One terminal result or infrastructure failure; no raw internal exception |
+| Client to helper | `Hello` (`1`) | Select the mode and supply the helper's preflight inputs: `mode` (`check` or `execute`), `sudo_path`, `auth_user`, `setup_timeout_secs`, and `auth_timeout_secs` |
+| Helper to client | `Ready` (`2`) | Report `build` (the helper's release version), `protocol`, `platform`, `auth_user`, `uid`, `cwd` (the session's initial directory), `password_limit` (`255`), and `features` |
+| Client to helper | `Start` (`3`) | Send one immutable execution request: `executable`, `arguments`, `cwd` (or `null`), `run_as`, and `auth_user`, which must equal the `Hello` value |
+| Helper to client | `PasswordRequest` (`4`) | Forward one validated askpass challenge with the `auth_user` it is for |
+| Client to helper | `PasswordResponse` (`5`) / `PasswordUnavailable` (`6`) | Deliver the password as the raw payload (1 to 255 bytes), or report with an empty payload that no password will be sent |
+| Client to helper | `StdinChunk` (`7`) / `StdinEof` (`8`) | Stream target stdin bytes and EOF without closing the SSH control channel |
+| Helper to client | `StdoutChunk` (`9`) / `StdoutEof` (`10`) / `StderrChunk` (`11`) / `StderrEof` (`12`) | Stream target stdout and stderr independently and signal per-stream completion |
+| Both | `WindowUpdate` (`13`) | Grant incremental byte credit (`stream` and `bytes`, up to the 131,072-byte window) for `stdin`, `stdout`, or `stderr` |
+| Client to helper | `Cancel` (`14`) | Forward the received termination `signal` to the running `sudo` process group without replay |
+| Helper to client | `Result` (`15`) / `Failure` (`16`) | Report `exit_code`, `signal`, and `password_delivered`, or a `Failure` whose `reason` is `preflight`, `protocol`, `credential`, or `completion_unknown` |
 
-For check mode, a successful Ready is terminal and the helper closes cleanly
-without accepting Start. For execution mode, Ready is followed by exactly one
-Start; unexpected closure is evaluated against whether Start could have reached
-the helper. Neither mode resolves a credential during Hello/Ready.
-
-Freeze the byte layout and golden fixtures in the protocol milestone: fixed
-magic/version, message type, request identifier, and unsigned length checked
-before allocation. Initial bounds are 64 KiB metadata/frame payload, 32 KiB
-stream chunks, and 1 MiB total queued data per direction. The advertised
-sudo password limit follows the authentication-value contract: the smaller of
-255 UTF-8 bytes and the destination's verified sudo/askpass limit. The SSH login
-reply is a separate local channel subject to its own pre-delivery validation;
-this remote frame bound does not protect it. Reject longer values rather than
-truncate. These are operational bounds with boundary tests, not heuristics
-that discard data.
-
-Use separate bounded queues and explicit credits for all three data streams.
-Freeze initial windows and overflow-safe credit accounting with the protocol;
-reject data exceeding granted credit. Keep control and authentication scheduling
-independent of a blocked target stdin writer.
-Reserve control capacity so full stream queues cannot starve cancellation or
-authentication. Protocol readers dispatch frames without awaiting a target
-stream write; senders consume stream-specific credit before sending data and
-schedule control frames fairly between bounded chunks. Read stdout/stderr
-concurrently; apply backpressure rather than unbounded buffering. A stopped
-output consumer can delay full output/result delivery, but must not prevent
-cancellation or credential-response handling. Coordinate stream EOF, process
-reaping, and Result so all output preceding completion is delivered before exit.
-
-Reject invalid versions, unknown messages, inconsistent session identifiers,
-reordered authentication, duplicate Start/Result, oversized lengths, unexpected
-EOF, and duplicate password requests. No resynchronization by scanning for
-magic bytes. A remote startup banner on protocol stdout is a failure before
-sudo password release; SSH login may already have used its own password.
-Do not silently strip it. Keep SSH stderr separate from the
-framed target stderr; bound and normalize transport failures without relaying
-raw helper/provider exceptions or raw protocol payloads.
+In `check` mode, `Ready` is terminal: the helper closes its output and the
+client requires end of stream next (`helper-check-invalid` otherwise). In
+`execute` mode, `Ready` is followed by exactly one `Start`. Any startup banner
+on remote stdout fails frame verification before `Ready`
+(`helper-handshake-invalid`), and a stream that ends before `Ready` is
+`helper-handshake-missing`, or `ssh-connect-failed` when `ssh` exits with
+status 255 (a connection, host-key, or login failure); neither releases the
+sudo password. The `ssh` process's own stderr is read continuously through a
+4 KiB buffer and discarded: it is never relayed as target stderr, retained,
+or parsed, so diagnostics come from exit statuses and protocol state. Target
+stderr arrives only in `StderrChunk` frames.
 
 ### Status, cancellation, and uncertain execution
 
-A valid Result contains the observed sudo process exit code or signal and
-whether password delivery occurred. It does not infer whether a nonzero status
-came from sudo or the target: sudo can return the same status as the target.
-In particular, exit 1 is not reliably classifiable as a wrong password.
+A terminal `Result` frame carries `exit_code`, optional `signal`, and
+`password_delivered`. `agentenv` returns the observed `sudo` or target exit
+code unchanged (converting a terminating signal `sig` to `128 + sig` when
+`exit_code` is absent). Because `sudo` itself can exit with status 1 on
+authentication rejection or policy refusal and a target command can also exit 1,
+`agentenv` never guesses whether exit 1 means a wrong password.
 
-Return normal sudo/target exit codes unchanged. Preserve existing agentenv
-preflight codes 1-5 and 127. Allocate code 9 for owned execution/protocol
-failures and 10 for lost/uncertain completion; codes 8 and 11 belong to the
-separate fill plan. Prefix owned stderr diagnostics with stable `sudo-execution:` reason
-identifiers. Target codes can collide with these values, so numeric status
-alone is not a complete classification. No command retries follow from codes.
+Owned failures preserve existing `agentenv` preflight exit codes (`1` usage,
+`2` configuration, `3` unknown credential, `4` credential resolution) and use
+two sudo-specific codes:
 
-A framed remote Result with exit 255 is a real observed remote status; SSH
-exit 255 without that result is a transport failure. Missing results after
-Start may mean the target ran or is still running. Report completion unknown,
-even if there is no proof that the target began; never label it not executed
-or automatically replay it. A received terminal result remains evidence even
-if SSH subsequently reports a close error; report the close problem separately.
+- **Exit code 9:** A failure whose outcome is known: preflight, SSH login,
+  helper handshake, deployment, or protocol failure before `Start`, or a
+  `Failure` frame after `Start` that confirms the command did not run
+  (`remote-preflight-failed` or `remote-protocol-failed`). Stderr prints
+  `sudo-execution: <reason>: <detail>`. A `Failure` frame with reason
+  `credential` is a credential error (exit code 4).
+- **Exit code 10:** Completion is unconfirmed: the target command may have
+  started or may still be running. Stderr prints
+  `sudo-execution: completion-unconfirmed: [<reason>: ]<detail>`. Over SSH,
+  every such case reports `remote-result-missing`: a lost connection, protocol
+  violation, failed password delivery, timeout, or unanswered cancellation
+  once `Start` may have reached the helper, and a `Failure` frame with reason
+  `completion_unknown`. The local engine reports an unconfirmed outcome
+  without a further reason code when it cannot observe, signal, or reap `sudo`.
+  The command is never replayed automatically.
 
-Cancel requests ask the engine to signal its sudo process and observe the
-result. Implement platform-appropriate local signal forwarding and remote
-Cancel handling, with a finite cleanup wait. Closing a connection revokes
-undelivered passwords and asks the helper to stop. It does not guarantee that
-detached privileged descendants stop, and an unprivileged helper cannot always
-signal a privileged process. If termination cannot be confirmed, report it as
-unconfirmed. There is no rollback claim. Do not issue a second privileged
-`kill` command or broaden privileges during cleanup.
+The reason codes are listed in `src/sudo/error.rs`; deployment failures carry
+the `helper-deploy-` prefix described in
+[helper-deployment.md](helper-deployment.md). When a remote `Result` was
+observed but the session did not end cleanly, `agentenv` still returns the
+observed status and adds a warning line to stderr:
+`sudo-execution: ssh-close-failed: ...`,
+`sudo-execution: output-interrupted: ...`, or
+`sudo-execution: remote-protocol-after-result: ...`.
+
+Signal cancellation (`SIGINT`, `SIGTERM`, `SIGHUP` on Unix; `Ctrl+C` /
+`Ctrl+Break` on Windows) aborts pending credential resolution. A signal that
+arrives before `Start` is sent, or before the local `sudo` process exists,
+ends the invocation without running the command and exits with `128 + signal`.
+After that point the two transports differ:
+
+- **Local:** The engine forwards the received signal to the `sudo` process
+  group and waits up to 5 seconds. If `sudo` exits, its observed status is
+  returned. Otherwise the engine sends `SIGKILL` to the process group, waits up
+  to another 5 seconds, and exits with code 10, because the privileged target
+  may outlive `sudo`. If the signal cannot be delivered at all, the engine
+  waits up to 5 seconds for `sudo` to exit on its own and otherwise exits with
+  code 10. A broker failure ends `sudo` the same way, starting with `SIGTERM`.
+- **SSH:** The client queues `Cancel` with the signal number and keeps reading
+  for a terminal frame for up to 10 seconds (5 seconds when `Cancel` could not
+  be queued within one second). The helper forwards the signal through the
+  same local engine. A `Result` received in time is returned as the observed
+  status; otherwise the invocation exits with code 10
+  (`remote-result-missing`).
+
+Because an unprivileged parent or helper cannot always signal a setuid `sudo`
+process or its privileged descendants, `agentenv` reports termination as
+unconfirmed rather than issuing a privileged `kill` command.
 
 ## Credential resolution, memory, and diagnostics
 
-Add caller-specific resolution I/O controls at the existing provider seam.
-The sudo caller disallows inherited terminal stdin, bounds command-provider
-stdout, drains/discards its stderr, enforces the credential-response deadline, and
-constructs safe fixed diagnostics. A provider needing user interaction must
-be authenticated separately; missing or locked credentials fail explicitly.
-Platform keychain dialogs may still occur, so fully unattended operation is
-conditional on platform access policy. Do not promise that a stored credential
-is always available without interaction.
+When a valid SSH login askpass request or sudo `PasswordRequest` arrives,
+`agentenv` resolves the referenced credential through `credential::resolver`
+within `--auth-timeout-secs`:
 
-Resolve only after valid askpass demand. Provider calls do not block the
-protocol control loop: cancellation/deadlines must remain observable while a
-provider or OS keychain API is slow. Use an isolated resolver subprocess where
-an API cannot be interrupted; terminate and reap that owned process on timeout
-without passing its stdout/stderr to the agent. Late responses after session
-closure are discarded and cannot enter another invocation.
+- **Unix resolver (`src/credential/resolver.rs`):** Spawns the current
+  `agentenv` executable with `--agentenv-resolver` in its own process group
+  (`process_group(0)`), passing one end of an unnamed `UnixStream::pair()` as
+  file descriptor 3 with null stdin, stdout, and stderr, and a scrubbed
+  environment. Both parent and child verify peer UID (`getpeereid` /
+  `SO_PEERCRED`) before exchanging frames. On timeout or cancellation, the
+  parent sends `SIGKILL` to the negative PID (process group) and reaps the
+  child.
+- **Windows resolver (`src/credential/resolver/windows.rs`, `src/windows.rs`):**
+  Creates a local-only, single-instance named pipe
+  (`\\.\pipe\agentenv-resolver-<pid>-<nonce>`) with a current-user-only DACL
+  (`D:P(A;;GA;;;<sid>)`), spawns `agentenv.exe --agentenv-resolver` with
+  `CREATE_NO_WINDOW` and null stdio, and assigns the child to a kill-on-close
+  Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) before sending the request
+  frame. Both parent and child verify peer and parent PIDs over the named pipe,
+  and the child waits for a `0x06` acknowledgement byte before closing the pipe.
+  Dropping or terminating the Job Object kills the resolver process tree on
+  timeout or cancellation.
 
-Preserve existing resolver behavior for `run`, `credential check`, and
-`credential set`; new restrictions are explicit to the sudo/fill callers.
-Reuse that policy if the fill work lands first. Share resolver cancellation and
-late-response disposal, while keeping deadlines caller-owned: sudo uses its
-credential-response budget; fill uses its remaining whole-operation budget.
-Internal resolver and askpass modes require their expected session channel
-and never provide a general
-print-credential interface.
-
-Use zeroizing storage for new owned password buffers where practical, audit
-copies in IPC encoding and provider conversion, and suppress dependency debug
-logging around secrets. Do not claim complete erasure of OS/provider/sudo
-copies, immunity to a debugger, or protection from privileged memory access.
-Sanitize by constructing safe errors, not by replacing known password strings
-after formatting arbitrary errors. Do not persist wire captures or secret
-fixtures derived from user data.
-
-Askpass inherits sudo's stderr, which can reach the user's command output.
-It therefore emits no raw prompt, account candidate, broker path/session
-marker, protocol payload, or dependency exception on that stream. It reports
-failure with a nonzero status and, when the broker is reachable, a closed safe
-reason code. Disable debug logging in askpass. Sentinel leak tests include
-malformed prompts, socket failures, and protocol failures in this process.
+Internal `--agentenv-resolver` and `agentenv-ssh-askpass` modes require their
+bound session channels and never expose a standalone print-secret CLI. Secret
+buffers use `Zeroizing` storage and are dropped immediately after framing;
+errors use fixed safe classifications so candidate password bytes never enter
+diagnostics.
 
 ## Module and distribution boundaries
 
-| Owner | Responsibility |
+| Module or binary | Responsibility |
 | --- | --- |
-| `src/credential/` | Storage/resolution, usage restrictions, bounded confidential resolver mode, secret ownership |
-| `src/config/` | Credential-use schema and opt-in typed sudo target validation; atomic validated writes |
-| `src/sudo/` | Public execute/check/plan seam, immutable request, local Unix engine, broker, outcomes and cleanup |
-| `src/sudo/ssh.rs` | Config-source selection, bounded effective-config evaluation, controlled OpenSSH invocation, identity binding and two-stage authentication |
-| `src/sudo/protocol.rs` | Versioned framing, size limits, state validation, flow control |
-| `src/cli/sudo.rs` | CLI translation, execution streaming, safe user-visible errors |
-| `src/bin/agentenv-sudo-helper.rs` | Thin Unix askpass/serve executable using the shared engine; no store access |
-| `src/bin/agentenv-ssh-askpass.rs` | Cross-platform local SSH askpass executable, owner-scoped IPC, no standalone store access |
-| `tests/` and dedicated integration fixtures | Behavioral contracts, real sudo/SSH verification, leak/cancellation evidence |
-| Release/update/install and shipped skill | Matching binary/helper assets, setup, support matrix, operational instructions |
+| `src/credential/` | Provider dispatch, `Secret` zeroization and stage validation, confidential command capture, and the cancellable subprocess resolver (`resolver.rs`, `resolver/windows.rs`) |
+| `src/config/` | `CredentialUsage` schema, nullable `inject_as`, `kind = "sudo-target"` validation, and atomic whole-file writes |
+| `src/sudo/` | Local check and execution entry points, shared outcomes and reason codes (`error.rs`), local Unix engine (`unix.rs`), remote helper server (`remote.rs`), askpass channel framing (`askpass_channel.rs`), and the SSH client session runner for execution, `--check`, and `--deploy-helper` (`client.rs`) |
+| `src/sudo/ssh.rs` and `src/sudo/ssh_askpass.rs` | `ssh -G` evaluation, jump-chain verification, controlled OpenSSH invocation, and local SSH askpass broker (`ssh_askpass/windows.rs` on Windows) |
+| `src/sudo/deploy.rs` | `--deploy-helper` path grammar, remote preflight and decision, helper source selection (operator file, bundled companion, or release asset verified against `SHA256SUMS`), and the install command with destination byte-count and identity checks; `client.rs` runs the sessions and the acceptance handshake |
+| `src/sudo/protocol.rs` and `src/sudo/transport.rs` | `AGEP` v1 binary framing, payload limits, credit-window accounting, and priority frame queues |
+| `src/cli/sudo.rs` | CLI flag validation, `--plan` / `--check` / `--deploy-helper` formatting, and execution streaming |
+| `src/bin/agentenv-sudo-helper.rs` | Unix companion binary implementing `--identity`, askpass mode (default), and remote `--serve` mode; no credential-store access |
+| `src/bin/agentenv-ssh-askpass.rs` | Cross-platform local SSH askpass companion executable; no credential-store access |
 
-Split the engine into broker/process modules only where their separate
-responsibilities justify it. Do not build a generic remote automation framework
-or share the environment-injection runner's execution semantics accidentally.
-Use target-specific Unix bindings; Windows builds expose local sudo as
-unsupported while compiling and testing the SSH client and local SSH askpass
-path, including named-pipe access control.
+Unix release archives package `agentenv`, `agentenv-sudo-helper`, and
+`agentenv-ssh-askpass` together; Windows archives package `agentenv.exe` and
+`agentenv-ssh-askpass.exe`. `agentenv update` installs and rolls back companion
+binaries atomically alongside the main binary.
 
-Ship matching sudo companions with Unix release archives and the SSH askpass
-companion for each supported client OS; update/install them coherently with
-the main binary. If main/helper versions are incompatible,
-fail before secret resolution and explain how to repair the installation;
-never run stale assets as a fallback. Consider interactions with browser-helper
-packaging if the fill feature is implemented concurrently.
+Remote helper installation is explicit: operators either place the matching
+`agentenv-sudo-helper` binary at `helper_path` and verify it with `--check`, or
+run `agentenv sudo --with <entry> --deploy-helper` as specified in
+[helper-deployment.md](helper-deployment.md). Normal execution never uploads or
+updates remote binaries automatically.
 
-For remote setup, publish standalone helper assets for supported Unix
-architectures, with release checksums/provenance. Installation is explicit:
-place the matching asset at the configured user-owned absolute path, set it
-executable, verify identity/protocol with `--check`, then use execution. No
-automatic upload, download, remote self-update, root installation, or runtime
-dependency is required during normal use. The separately authorized installer
-is `agentenv sudo --with <entry> --deploy-helper`, specified in
-`helper-deployment.md`: explicit, over the same prepared route, writing only
-the configured path. Protocol mismatch does not trigger an upload. No remote
-Python/Node installation is required.
+## Verification and test matrix
 
-## Implementation plan
+Verification uses only test-owned credentials, hosts, keys, and accounts.
+Real `sudo` and `sshd` suites run inside disposable containers or dedicated lab
+environments and refuse to run unless their explicit lab environment guards are
+set.
 
-S0-S7 are implemented for macOS and Linux clients and Linux destinations.
-Each hazardous task declared `security-boundary` and `external-contract` and
-received independent review assurance against its final code and contracts
-after verification. The Windows part of S5b (confidential resolver and SSH
-password IPC) is deferred to a separate implementation, which needs the same
-hazard review and native Windows evidence before Windows support is
-advertised.
-
-| Task | Owned outcome and files | Depends on | Acceptance and evidence |
-| --- | --- | --- | --- |
-| S0: compatibility investigation | Test-owned sudo/SSH lab and a measured platform report; no production configuration | None | Demonstrate real sudo and SSH forced askpass; freeze stage-specific byte limits, per-hop effective-option predicates and child invocation semantics, effective-config and `-F none` behavior, account markers, NOPASSWD, `-k`, close-FD behavior, and cancellation limitations; record exact versions |
-| S1: schema and usage boundary | `config`, credential model, add/query surfaces, `runner` guard | S0 findings relevant to supported targets | Old configs unchanged; valid local/SSH targets and both connection/auth modes accepted; explicit multi-use references work; malformed targets and env use rejected; mixed-entry and `?as=` attempts cannot export authentication credentials; atomic write failures preserve original bytes |
-| S2: confidential resolver | Provider I/O policy, secret ownership, bounded resolver process, authentication-value validation | S1 | Lazy lookup; validate each stage before reply; safe provider failures; timeout/cancel with no live resolver leak or accepted late reply; no inherited stdin or candidate text in diagnostics; existing resolver contracts pass |
-| S3: local execution | `sudo` Unix engine, askpass companion, local CLI/check/plan | S1, S2 | Actual sudo password success and failure; zero password reads for NOPASSWD; binary stdin preserved; exact command-level sudoers rules still match; concurrent isolation and cleanup |
-| S4: remote protocol and helper | Framing/state machine, flow control, companion serve mode | S3 | Golden protocol cases, malformed input rejection, bounded concurrent streams, cancellation during blocked input/output and password lookup; no protocol bytes reach target stdin |
-| S5a: SSH connection sources and key mode | Effective-config evaluation, per-hop policy, explicit mode, controlled OpenSSH launch and platform I/O | S4 | Real alias/Include/Match resolution; user mismatch rejection; no config read in explicit mode; strict host identity and exact argv; conforming multi-hop success and unsafe inner-hop/custom-proxy rejection before connecting; exit 255 and lost-connection handling |
-| S5b: SSH password mode | Local SSH askpass companion, session broker, password-only policy and two-stage lifecycle | S5a, S2 | Real password login without user keys/config; reject unsupported password bytes before reply, including SSH-only and shared/NOPASSWD cases; wrong-password one-shot behavior, method refusal, unknown key releases no secret, separate/shared references, password-mode proxy rejection, and no stdin/metadata leakage |
-| S6: installation and documentation | Release/update assets, README, shipped `skills/agentenv/SKILL.md`, platform matrix | S3; final SSH instructions need S5a/S5b | Clean install/update and mismatch checks including local SSH askpass; alias/explicit setup and shared/separate passwords; explicit remote deployment guide; no automatic install during execution; documented support and rotation procedure |
-| S7: integration and security review | Adversarial contract tests, current-input review findings, release evidence | S1-S6 | All release criteria below pass on advertised platforms; meaningful review findings fixed/reverified; unavailable real-platform evidence remains an explicit release gap |
-
-S0 is a bounded feasibility milestone, not permission to weaken the interface.
-If the prompt/account guard is incompatible with a supported platform, retain
-the no-wrong-account/no-stdin-leak invariants and amend the design based on
-measured evidence before implementing an alternative. No `-S` fallback.
-
-After S3, local execution plus its packaging/documentation slice is independently
-shippable. The complete requested feature is finished only after S5a/S5b-S7, including
-real remote integration evidence. S4 must freeze protocol golden fixtures before
-S5a depends on them. Shared schema/provider changes are integrated before any
-parallel consumers; protocol changes are reviewed with both endpoints together.
-
-Routine work follows implementation-first development and adds only meaningful
-regression/contract tests. For any test-first exception, document the concrete
-security failure, repository evidence, existing coverage gap, and narrowly
-testable invariant before writing those tests; general complexity is not
-sufficient reason to adopt TDD.
-
-## Release acceptance and test matrix
-
-Use only test-owned credentials, hosts, keys, and accounts. Real sudo tests run
-in disposable Linux containers/VMs and isolated macOS accounts/VMs with explicit
-lab authority; never alter the developer's sudoers or personal keychain merely
-to run the suite. Fake providers/processes test edge cases but do not establish
-real sudo, SSH, keychain, or OS support.
-
-| Contract | Required cases |
+| Contract | Verified cases |
 | --- | --- |
-| Credential confidentiality | Required-password success/failure, provider stdout/stderr failures, denied/locked keychain, debug settings, oversize/CR/LF secrets, argv/environment/artifact capture; use synthetic sentinel passwords |
-| Lazy and one-shot authentication | NOPASSWD with unavailable stored secret succeeds without resolution; wrong password is never resent; duplicate request fails; cached prior sudo session does not bypass selected per-operation behavior |
-| Account and destination binding | Wrong local/effective SSH user, changed host alias with untrusted key, unknown key release no password; wrong helper identity, rootpw/targetpw/runaspw requesting a different account, or unexpected PAM prompt release no sudo password |
-| SSH source selection | Host aliases, Include/Match, custom config file, changed effective User, exact explicit endpoint, no default/system-config reads under `-F none`, offline plan versus connecting check |
-| Publickey jump routes | Conforming multi-hop success; reject an inner hop with BatchMode off, password fallback, permissive host checking, multiplex reuse, or local hooks; unknown hop key fails without prompting; encrypted key without usable agent fails noninteractively; custom proxy, cycles, excess hops, and preflight-budget exhaustion fail before connecting; prove outer overrides alone do not pass the gate |
-| SSH password login | No user public keys/config; correct/wrong/missing password; disabled password method; keyboard-interactive-only/MFA rejection; key-confirmation and password-change prompts; helper/askpass absence; no terminal/stdin fallback |
-| Authentication-value fidelity | Validate SSH and sudo independently at each reply boundary; reject empty/CR/LF/NUL/invalid UTF-8 and over-limit values without candidate output; preserve spaces and Unicode; test exact byte limit and one byte over, SSH-only and shared references, and SSH followed by NOPASSWD; no successful empty/truncated reply or automatic retry |
-| Two-stage credentials | Different SSH/sudo values route correctly; explicit shared reference saved once and used once per stage; NOPASSWD skips sudo lookup after SSH password login; no cross-credential fallback or routing metadata in remote env |
-| Command authorization | Sudoers permits a specific absolute executable and args but denies a shell/helper; the allowed command succeeds and the disallowed command stays denied |
-| Stdin and argv fidelity | Empty/binary input, leading newlines, very large streams, stdin EOF, target ignoring stdin; empty arguments, whitespace, Unicode, quotes, `$()`, semicolons, newlines and leading dashes arrive literally |
-| Output and status | Independent binary stdout/stderr, high output volume, target codes 0/1/9/10/127/255, sudo rejection, missing executable, signal termination, complete output before final result |
-| Lifecycle | Cancel during connect, lookup, authentication, blocked stdin/output, and target execution; disconnect after Start/password/output; no replay, no false success, no unconditional termination claim |
-| IPC isolation | Simultaneous targets/credentials, wrong session/peer, symlink/socket substitution, malformed/truncated/oversized frames, duplicate/out-of-order frames, stdout banner, helper crash |
-| Resource limits | Fixed memory bounds under duplex pressure, control frames not starved, resolver child reaped, broken pipes handled, no stalled invocation blocking another |
-| Compatibility and packaging | Supported macOS/Linux sudo versions including policy `use_pty` variations, requiretty rejection without SSH PTY fallback, missing/mismatched helper, clean binary/helper updates, Windows SSH options and paths |
+| Credential confidentiality | Required-password success and failure, provider stdout/stderr failures, denied/locked keychain, debug environment variables, oversize and CR/LF/NUL secrets, and sentinel leak checks across stdout, stderr, and artifacts |
+| Lazy and one-shot authentication | `NOPASSWD` with an unavailable stored secret succeeds without resolution; wrong password is never resent; duplicate askpass requests fail; `-k` ignores prior cached sudo timestamps |
+| Account and destination binding | Local and remote `auth_user` mismatch, changed host alias with untrusted host key, unknown host key, helper build mismatch, and `rootpw`/`targetpw`/`runaspw` or custom PAM prompts fail before releasing a sudo password |
+| SSH source selection | `ssh-config` aliases, `Include`/`Match` directives, custom `config_file`, changed effective `User`, `explicit` mode with `-F none`, offline `--plan` versus connecting `--check` |
+| Publickey jump routes | Conforming multi-hop route succeeds on Linux `OpenSSH_10.0`; inner hops with `BatchMode=no`, password fallback, permissive host checking, multiplex reuse, or local command hooks, as well as custom `ProxyCommand`, cycles, and >8 hops, fail before connecting |
+| SSH password login | Login without public keys or user config; correct, wrong, and missing password; server password-method refusal; `keyboard-interactive` rejection; `SSH_ASKPASS_PROMPT=confirm` and unexpected prompts rejected without lookup |
+| Authentication-value fidelity | Independent 255-byte UTF-8 and CR/LF/NUL validation at both SSH askpass and sudo `PasswordResponse` boundaries; exact preservation of spaces and Unicode; SSH-only, shared, and SSH-followed-by-`NOPASSWD` flows |
+| Command authorization and stream fidelity | Direct command execution matches command-specific `sudoers` rules while disallowed commands stay denied; binary stdin, independent binary stdout/stderr, special characters in argv, and exit codes `0`, `1`, `9`, `10`, `127`, `255` |
+| Lifecycle, IPC, and resource limits | Signal cancellation during connect, lookup, authentication, and target execution; lost SSH connection after `Start` exits 10; concurrent invocations, symlink/socket substitution refusal, malformed/oversized frames, and 128 KiB stream credit backpressure |
+| Helper deployment | `--deploy-helper` clean install, idempotent re-deploy, upgrade, `--from`, `--force` reinstall of a matching helper, refusal of an occupied path, and path-grammar validation ([helper-deployment.md](helper-deployment.md)) |
 
-Explicitly inspect inherited target environment under default and customized
-sudoers policies. Password bytes must never be present. Routing-metadata
-inheritance follows the documented boundary; do not turn an unproven capability-
-stripping claim into a release assertion. Test sudo I/O logging with synthetic
-credentials to confirm password delivery bypasses target input recording;
-external authentication plugins may have their own logging outside agentenv.
+Continuous integration in `.github/workflows/ci.yml` and the repository lab
+suites verify these contracts:
 
-Retain current checks: `cargo fmt --check`,
-`cargo clippy --all-targets -- -D warnings`,
-`cargo clippy --all-targets --features test-keychain -- -D warnings`, and
-`cargo test --features test-keychain` on the existing OS matrix. Add dedicated
-real sudo/sshd jobs and helper artifact tests for the advertised platform matrix.
-Protect tests that require privileged lab setup from accidental execution on
-ordinary workstations. Test fixtures may observe their own received secret;
-production code must not read back or print stored values for verification.
+- **`lint` job (`ubuntu-latest`):** Runs `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, and
+  `cargo clippy --all-targets --features test-support -- -D warnings`.
+- **`test` job (`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`, `windows-latest`):**
+  Runs `cargo test --features test-support` across all platforms (covering
+  config/schema validation, `runner` authentication-credential rejection, wire
+  protocol framing and flow control, confidential resolver lifecycle, and
+  CLI contracts). On `windows-latest`, it also runs Clippy for both feature
+  sets and executes `python tests/windows_lab/ssh.py`, which drives the real
+  `agentenv.exe` and `agentenv-ssh-askpass.exe` binaries with native
+  `OpenSSH_for_Windows` against a loopback Paramiko SSH server and simulated
+  remote helper ([windows-port.md](windows-port.md)).
+- **`sudo-integration` job (`ubuntu-latest`):** Runs the disposable Debian 13
+  container labs (`--network none`):
+  - `bash tests/sudo_lab/run.sh`: verifies raw `sudo` and OpenSSH askpass, `-k`,
+    `NOPASSWD`, FD closing, and `ssh -G` / `ProxyJump` behavior recorded in
+    [sudo-compatibility.md](sudo-compatibility.md).
+  - `python3 tests/sudo_execution_lab/run.py`: verifies local `agentenv sudo`
+    execution, `--check`, `--plan`, binary streaming, concurrency, and
+    cancellation.
+  - `/opt/sudo-lab/verify_ssh.py` (`python3 tests/sudo_execution_lab/run.py --ssh`):
+    verifies SSH `publickey` and `password` modes, `ssh-config` and `explicit`
+    modes, multi-hop `ProxyJump` preflight, and `--deploy-helper` against a
+    real loopback `sshd`.
+  - `/opt/sudo-lab/verify_release.py` (`python3 tests/sudo_execution_lab/run.py --release`):
+    verifies `sudoers` policy variations (`use_pty`, `!use_pty`, `requiretty`,
+    `rootpw`, `targetpw`, `runaspw`, custom `passprompt`, `sudo_log_input`),
+    SSH refusal cases, and mid-flight cancellation and disconnect behavior.
+- **`tests/sudo_macos_lab/run.py`:** Exercises the native macOS OpenSSH client
+  and `agentenv` binaries against the containerized Linux `sshd` destination
+  bound to `127.0.0.1`.
 
-## Open technical questions and decision ownership
-
-1. **Platform compatibility:** S0 measures packaged macOS sudo, supported
-   Linux distributions, and OpenSSH clients including Windows forced askpass,
-   account-prompt validation and local IPC. Cover PAM prompt replacement,
-   accepted password bytes/length separately for local SSH askpass and destination
-   sudo, per-hop child options and policy predicates, `use_pty`, effective-config
-   handling, and `-F none`. Publish exact tested versions and limits;
-   a version string alone is not proof of compatibility.
-2. **Cancellation:** S0/S3 establish which sudo configurations forward signals
-   and which cannot be controlled by the unprivileged parent. Preserve uncertain-
-   completion reporting wherever termination cannot be proved.
-3. **Resolver isolation:** S2 selects the smallest subprocess boundary needed
-   for cancellable platform credential reads and command providers. Its secret
-   IPC and output suppression are part of the security review.
-4. **Unix runtime bindings:** S3 selects a maintained target-specific Rust
-   facility for peer credentials, socket permissions, signals, and zeroization.
-   Add project dependencies through Cargo manifests/lockfile; no global runtime
-   or system package installation is implied.
-5. **Release layout:** S6 chooses the companion's install path and coherent
-   update sequence based on the existing installer. Failure/mismatch behavior
-   is fixed above; do not add unverified binary-only fallback behavior.
-
-The implementer can resolve these engineering choices from evidence. Any change
-that sends passwords through target stdin, drops host verification, introduces
-a privileged wrapper, persists remote secrets, or claims interactive support
-changes the accepted design and requires an explicit design revision.
+The dated execution results, verified package versions, and remaining
+unmeasured platform combinations (such as native macOS local `sudo` and the
+`x86_64` release targets) are recorded in
+[sudo-release-evidence.md](sudo-release-evidence.md).
