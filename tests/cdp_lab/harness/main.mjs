@@ -6,8 +6,9 @@
 // and compares outcome, receipts, events, host liveness and target counts
 // against the catalog and between the two implementations.
 //
-// Usage: node harness/main.mjs --output-dir DIR --native-bin PATH
-//        [--browser PATH] [--headed] [--implementation native|reference|both]
+// Usage: node harness/main.mjs --output-dir DIR --browser PATH
+//        [--product-bin PATH --product-config PATH]
+//        [--headed] [--implementation reference|product|both|LIST]
 //        [--scenario ID]...
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -203,7 +204,6 @@ function clientCommand(implementation, request, value) {
     };
   }
   if (request.delayBeforeInsertMs) args.push('--delay-before-insert-ms', String(request.delayBeforeInsertMs));
-  if (implementation === 'native') return { command: options.nativeBin, args, env: process.env, valueOnStdin: true };
   return { command: process.execPath, args: [join(labRoot, 'reference', 'fill.mjs'), ...args], env: process.env, valueOnStdin: true };
 }
 
@@ -433,7 +433,6 @@ evidence.summary = {
   parityBaseline: implementations.length >= 2 ? parityBaseline : null,
   parityCompared: implementations.length >= 2 ? parityCompared : 0,
   parityEqual: implementations.length >= 2 ? parityEqual : null,
-  nativeVersions: evidence.scenarios.find((record) => record.native)?.native.versions ?? null,
   referenceVersions: evidence.scenarios.find((record) => record.reference)?.reference.versions ?? null,
   productBin: options.productBin,
 };
@@ -448,7 +447,6 @@ function renderSummary(evidence) {
   lines.push(`Generated ${evidence.generatedAt}.`, '');
   lines.push('| Component | Version |', '| --- | --- |');
   for (const [key, value] of Object.entries(evidence.versions)) lines.push(`| ${key} | ${value} |`);
-  if (evidence.summary.nativeVersions) lines.push(`| native client | ${evidence.summary.nativeVersions.library} |`);
   lines.push('', `Browser: \`${evidence.browserPath}\``, '');
   lines.push(`Result: ${evidence.summary.passed}/${evidence.summary.total} scenarios passed` + (evidence.summary.parityEqual != null ? `; ${evidence.summary.parityEqual}/${evidence.summary.parityCompared} compared scenarios identical between the implementations (baseline ${evidence.summary.parityBaseline}).` : '.'), '');
   const header = ['Scenario', 'Expected', ...evidence.implementations.map((i) => `${i} outcome`), ...evidence.implementations.map((i) => `${i} ms`), 'Parity', 'Problems'];
@@ -466,13 +464,12 @@ function renderSummary(evidence) {
 }
 
 function parseArgs(argv) {
-  const parsed = { outputDir: null, nativeBin: null, productBin: null, productConfig: null, browser: null, headed: false, implementations: ['native', 'reference'], scenarios: new Set() };
-  const aliases = { both: ['native', 'reference'], all: ['native', 'reference', 'product'] };
+  const parsed = { outputDir: null, productBin: null, productConfig: null, browser: null, headed: false, implementations: ['reference', 'product'], scenarios: new Set() };
+  const aliases = { both: ['reference', 'product'] };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const next = () => argv[++index];
     if (flag === '--output-dir') parsed.outputDir = resolve(next());
-    else if (flag === '--native-bin') parsed.nativeBin = resolve(next());
     else if (flag === '--product-bin') parsed.productBin = resolve(next());
     else if (flag === '--product-config') parsed.productConfig = resolve(next());
     else if (flag === '--browser') parsed.browser = next();
@@ -485,9 +482,8 @@ function parseArgs(argv) {
   }
   if (!parsed.outputDir || !parsed.browser) throw new Error('--output-dir and --browser are required');
   for (const implementation of parsed.implementations) {
-    if (!['native', 'reference', 'product'].includes(implementation)) throw new Error(`unknown implementation ${implementation}`);
+    if (!['reference', 'product'].includes(implementation)) throw new Error(`unknown implementation ${implementation}`);
   }
-  if (parsed.implementations.includes('native') && !parsed.nativeBin) throw new Error('--native-bin is required for the native implementation');
   if (parsed.implementations.includes('product') && !(parsed.productBin && parsed.productConfig)) throw new Error('--product-bin and --product-config are required for the product implementation');
   return parsed;
 }

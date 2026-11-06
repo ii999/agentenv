@@ -4,68 +4,18 @@
 //! A trusted pin may select a profile for `run`, but it cannot introduce any
 //! injection name or credential source of its own.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
 use std::fs;
 #[cfg(unix)]
 use std::path::Path;
-use std::path::PathBuf;
 
-use helpers::{
-    assert_exit, canonical_display, command_with_project_discovery, staged_config, Run, SENTINELS,
-    STATE_BASE_ENV,
-};
+use helpers::{assert_exit, canonical_display, ProjectFixture, SENTINELS};
+#[cfg(unix)]
 use tempfile::TempDir;
-
-struct ProjectFixture {
-    _config_dir: TempDir,
-    config: PathBuf,
-    cwd: PathBuf,
-    project: PathBuf,
-    state: PathBuf,
-}
-
-impl ProjectFixture {
-    fn new(config_text: &str, project_text: &str) -> Self {
-        let (config_dir, config) = staged_config(config_text);
-        let root = config.parent().expect("config has a parent").to_owned();
-        let cwd = root.join("workspace/nested");
-        fs::create_dir_all(&cwd).expect("test working directory is created");
-        let project = root.join("workspace/.agentenv.toml");
-        fs::write(&project, project_text).expect("project file is written");
-
-        Self {
-            _config_dir: config_dir,
-            config,
-            cwd,
-            project,
-            state: root.join("state"),
-        }
-    }
-
-    fn run(&self, args: &[&str], envs: &[(&str, &str)]) -> Run {
-        let mut command = command_with_project_discovery(&self.config);
-        command.current_dir(&self.cwd);
-        command.env(STATE_BASE_ENV, &self.state);
-        for (name, value) in envs {
-            command.env(name, value);
-        }
-        command.args(args);
-
-        let output = command.output().expect("agentenv runs");
-        let run = Run {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            code: output.status.code(),
-        };
-        assert_no_sentinels(&run, args);
-        run
-    }
-
-    fn allow(&self) -> Run {
-        self.run(&["project", "allow"], &[])
-    }
-}
 
 #[test]
 fn ac_010_1_invalid_project_values_never_reach_allow_status_or_notices() {
@@ -82,7 +32,7 @@ fn ac_010_1_invalid_project_values_never_reach_allow_status_or_notices() {
         ),
     );
 
-    let allow = fixture.allow();
+    let allow = fixture.run(&["project", "allow"], &[]);
     assert_exit(&allow, 2, "allow rejects an invalid project file");
 
     let status = fixture.run(&["project", "status", "--json"], &[]);
@@ -147,7 +97,7 @@ fn ac_010_4_project_operations_do_not_execute_counting_providers() {
         "untrusted status does not resolve providers",
     );
 
-    let allow = fixture.allow();
+    let allow = fixture.run(&["project", "allow"], &[]);
     assert_exit(&allow, 0, "allow does not resolve providers");
 
     let trusted_status = fixture.run(&["project", "status", "--json"], &[]);
@@ -171,7 +121,7 @@ fn ac_010_5_trusted_pin_selects_exactly_the_pinned_profiles_injection_plan() {
         pinned_injection_config(),
         "version = 1\nprofile = \"work\"\n",
     );
-    let allowed = fixture.allow();
+    let allowed = fixture.run(&["project", "allow"], &[]);
     assert_exit(&allowed, 0, "the project pin is approved before run");
 
     let report_path = fixture.cwd.join("probe-report");
@@ -214,7 +164,7 @@ fn ac_005_3_unreadable_approved_project_file_fails_loudly_with_exit_2() {
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = ProjectFixture::new(basic_config(), "version = 1\nprofile = \"default\"\n");
-    let allow = fixture.allow();
+    let allow = fixture.run(&["project", "allow"], &[]);
     assert_exit(&allow, 0, "the project file is approved while readable");
 
     fs::set_permissions(&fixture.project, fs::Permissions::from_mode(0o000))
@@ -281,7 +231,7 @@ fn ac_010_3_status_renders_the_full_envelope_without_config_values() {
          reason = \"Model access is required for runs\"\n\
          fields = [\"model\"]\n",
     );
-    let allow = fixture.allow();
+    let allow = fixture.run(&["project", "allow"], &[]);
     assert_exit(&allow, 0, "the pinned project file is approved");
 
     // fixture.run asserts no sentinel reaches stdout or stderr on every
@@ -363,17 +313,6 @@ provider = "env"
 name = "PERSONAL_CREDENTIAL_SOURCE"
 inject_as = "PERSONAL_CREDENTIAL_TARGET"
 "#
-}
-
-fn assert_no_sentinels(run: &Run, args: &[&str]) {
-    for (index, sentinel) in SENTINELS.iter().enumerate() {
-        for text in [&run.stdout, &run.stderr] {
-            assert!(
-                !text.contains(sentinel),
-                "agentenv {args:?} leaked sentinel #{index}"
-            );
-        }
-    }
 }
 
 fn assert_probe_value(report: &str, name: &str, expected: &str) {

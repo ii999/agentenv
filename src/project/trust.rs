@@ -17,15 +17,15 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::env_value;
 use crate::error::{AppError, Violation};
+use crate::fs_atomic::{Stage, WriteError};
 
 const STORE_DIR: &str = "agentenv";
 const STORE_FILE: &str = "trust.toml";
@@ -40,86 +40,34 @@ struct StoreDocument {
 }
 
 /// The filesystem operations the trust store needs, as one narrow seam.
-///
-/// Implementors own the durability details; the store itself only sequences
-/// read, write-temp, and rename.
 pub trait StoreFs {
     /// Reads a file's exact bytes. A missing file surfaces as
     /// [`io::ErrorKind::NotFound`], never as empty content.
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
 
-    /// Writes `bytes` to a fresh temporary file inside `dir`, creating `dir`
-    /// when it is missing, and returns the temporary file's path. On Unix the
-    /// file is created with `0600` permissions before any content is written,
-    /// so the bytes are never readable by another user (AC-003.9).
-    fn write_temp(&self, dir: &Path, bytes: &[u8]) -> io::Result<PathBuf>;
-
-    /// Renames `from` over `to`, committing a prepared replacement.
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// Replaces `path` with `bytes` atomically, creating its directory when
+    /// it is missing. A failure leaves the previous file intact. On Unix the
+    /// new bytes are never readable by another user (AC-003.9).
+    fn replace(&self, path: &Path, bytes: &[u8]) -> Result<(), WriteError>;
 }
 
 /// The production [`StoreFs`] adapter over `std::fs`.
 pub struct RealFs;
-
-/// How many names [`RealFs::write_temp`] tries before giving up. A collision
-/// means a leftover temporary file already occupies the name; the next name is
-/// free unless the directory is pathologically full of them.
-const TEMP_NAME_ATTEMPTS: u32 = 16;
-
-/// Distinguishes temporary files created within one process.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl StoreFs for RealFs {
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         fs::read(path)
     }
 
-    fn write_temp(&self, dir: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-        fs::create_dir_all(dir)?;
-        let (path, mut file) = create_temp_file(dir)?;
-        match file.write_all(bytes).and_then(|()| file.sync_all()) {
-            Ok(()) => Ok(path),
-            Err(error) => {
-                // Never leave a partial temporary file behind. The write
-                // failure is what the caller must see, so a cleanup failure
-                // does not replace it.
-                let _ = fs::remove_file(&path);
-                Err(error)
-            }
+    fn replace(&self, path: &Path, bytes: &[u8]) -> Result<(), WriteError> {
+        if let Some(directory) = path.parent() {
+            fs::create_dir_all(directory).map_err(|error| WriteError {
+                stage: Stage::Create,
+                error,
+            })?;
         }
+        crate::fs_atomic::replace(path, bytes, None)
     }
-
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        fs::rename(from, to)
-    }
-}
-
-/// Creates an empty temporary file in `dir` under a name no other file holds,
-/// with `0600` permissions on Unix applied at creation time.
-fn create_temp_file(dir: &Path) -> io::Result<(PathBuf, fs::File)> {
-    for _ in 0..TEMP_NAME_ATTEMPTS {
-        let ordinal = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("{STORE_FILE}.{}.{ordinal}.tmp", std::process::id()));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        match options.open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        format!(
-            "no free temporary file name in {}; remove leftover {STORE_FILE}.*.tmp files",
-            dir.display()
-        ),
-    ))
 }
 
 /// Resolves the trust store path from the environment.
@@ -265,15 +213,25 @@ impl TrustStore {
         let bytes = toml::to_string_pretty(&document)
             .map_err(|_| store_error(path, "could not serialize the trust store"))?
             .into_bytes();
-        let directory = path
+        if path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
-            .ok_or_else(|| store_error(path, "the trust store path has no parent directory"))?;
-        let temporary = fs.write_temp(directory, &bytes).map_err(|_| {
-            store_error(path, "could not prepare an updated copy of the trust store")
-        })?;
-        fs.rename(&temporary, path)
-            .map_err(|_| store_error(path, "could not atomically replace the trust store"))
+            .is_none()
+        {
+            return Err(store_error(
+                path,
+                "the trust store path has no parent directory",
+            ));
+        }
+        fs.replace(path, &bytes).map_err(|failure| {
+            store_error(
+                path,
+                match failure.stage {
+                    Stage::Rename => "could not atomically replace the trust store",
+                    _ => "could not prepare an updated copy of the trust store",
+                },
+            )
+        })
     }
 }
 
@@ -318,8 +276,9 @@ fn validate_records(records: &BTreeMap<String, String>) -> Result<(), &'static s
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
-    use std::collections::BTreeMap;
+    use std::cell::RefCell;
+
+    use crate::fs_atomic::{Stage, WriteError};
     use std::io;
     use std::path::{Path, PathBuf};
 
@@ -360,18 +319,14 @@ mod tests {
     /// filesystem lets a test schedule deterministically.
     struct FaultyFs {
         committed: RefCell<Option<Vec<u8>>>,
-        temps: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
         rename_fails: bool,
-        next_temp: Cell<u32>,
     }
 
     impl FaultyFs {
         fn with_store(bytes: Vec<u8>) -> Self {
             Self {
                 committed: RefCell::new(Some(bytes)),
-                temps: RefCell::new(BTreeMap::new()),
                 rename_fails: false,
-                next_temp: Cell::new(0),
             }
         }
 
@@ -396,31 +351,18 @@ mod tests {
             }
         }
 
-        fn write_temp(&self, dir: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-            let ordinal = self.next_temp.get();
-            self.next_temp.set(ordinal + 1);
-            let path = dir.join(format!("trust.toml.{ordinal}.tmp"));
-            self.temps.borrow_mut().insert(path.clone(), bytes.to_vec());
-            Ok(path)
-        }
-
-        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        fn replace(&self, path: &Path, bytes: &[u8]) -> Result<(), WriteError> {
             if self.rename_fails {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("injected failure renaming onto {}", to.display()),
-                ));
+                return Err(WriteError {
+                    stage: Stage::Rename,
+                    error: io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("injected failure renaming onto {}", path.display()),
+                    ),
+                });
             }
-            match self.temps.borrow_mut().remove(from) {
-                Some(bytes) => {
-                    *self.committed.borrow_mut() = Some(bytes);
-                    Ok(())
-                }
-                None => Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{} does not exist", from.display()),
-                )),
-            }
+            *self.committed.borrow_mut() = Some(bytes.to_vec());
+            Ok(())
         }
     }
 

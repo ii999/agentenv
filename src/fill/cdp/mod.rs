@@ -4,7 +4,7 @@
 //! debugging port, selects exactly one page, frame chain, and element, and
 //! replaces that element's content with the credential through
 //! `Input.insertText`. The protocol surface and the page-side definitions are
-//! those proven at parity with Playwright in Phase A (ADR 0001). No target,
+//! those that ADR 0001 showed to match Playwright's behavior. No target,
 //! context, or page is ever created or closed, and closing the connection is
 //! the only cleanup.
 //!
@@ -104,7 +104,7 @@ impl Backend for CdpBackend {
     }
 
     async fn deliver(&mut self, delivery: &Delivery) -> Result<Effect, FillError> {
-        #[cfg(all(feature = "test-keychain", debug_assertions))]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         test_delay().await;
 
         let (page, chain, element) = self
@@ -166,7 +166,7 @@ impl Backend for CdpBackend {
 /// and delivery. A delay that outlasts the deadline is cut short by the
 /// coordinator dropping this future, so expiry is reported by the
 /// production path.
-#[cfg(all(feature = "test-keychain", debug_assertions))]
+#[cfg(all(feature = "test-support", debug_assertions))]
 async fn test_delay() {
     if let Some(delay) = std::env::var("AGENTENV_FILL_TEST_DELAY_MS")
         .ok()

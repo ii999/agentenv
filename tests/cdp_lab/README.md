@@ -1,11 +1,12 @@
 # CDP filling parity lab
 
-This lab produces the Phase A and Phase C evidence for
-`docs/design/credential-fill.md`: whether a native Rust Chrome DevTools
-Protocol (CDP) client reaches full parity with a `playwright-core`
-`connectOverCDP()` reference for the credential filling contract, against a
-real Chromium-family browser, and whether the product's
-`agentenv credential fill --backend cdp` keeps that parity.
+This lab checks that `agentenv credential fill --backend cdp`, the native
+Rust Chrome DevTools Protocol (CDP) client, keeps full parity with a
+`playwright-core` `connectOverCDP()` reference for the credential filling
+contract, against a real Chromium-family browser. The decision to build the
+native client and the evidence behind it are recorded in
+`docs/design/adr/0001-native-rust-cdp-client.md`; the standalone prototype
+and recording probe used for that decision remain in git history.
 
 It is a test fixture, not product code. Values it fills are test strings from
 `scenarios.json`; no real credential is read or stored. The product run
@@ -19,9 +20,7 @@ configuration file, never from arguments.
 | `fixtures/` | Fixture server, page instrumentation, and scenario pages |
 | `scenarios.json` | Scenario catalog shared by both clients and the harness |
 | `reference/` | Node reference client using `playwright-core` |
-| `native/` | Standalone Rust CDP client prototype |
 | `harness/`, `run.py` | Browser launch, host session, parity comparison, evidence |
-| `recording_probe/` | Probe for which recorder states another CDP client can observe |
 
 ## Fixture server
 
@@ -50,8 +49,10 @@ Fixture dependencies (React 18 UMD builds) are declared in
 
 ## Client contract
 
-Both clients accept the same arguments and produce the same output so the
-harness can compare them directly.
+The reference client accepts these arguments and produces this output. The
+harness passes the same request to the product as `credential fill`
+arguments and maps the product's result onto the same schema, so the two
+can be compared directly.
 
 ```text
 <client> --endpoint http://127.0.0.1:<port> \
@@ -86,7 +87,7 @@ harness can compare them directly.
 Output is one JSON line on stdout:
 
 ```json
-{"version":1,"implementation":"native","outcome":"filled","reason":null,"message":"","details":{},"versions":{"browser":"...","protocol":"...","library":"..."}}
+{"version":1,"implementation":"reference","outcome":"filled","reason":null,"message":"","details":{},"versions":{"browser":"...","protocol":"...","library":"..."}}
 ```
 
 `outcome` is `filled` or `error`. `reason` is one of the codes listed in
@@ -110,15 +111,15 @@ server, and runs every scenario through both clients from a separate host
 session. It writes `evidence.json` and `summary.md` to the output directory.
 See `run.py --help` for browser selection.
 
-`--implementation native|reference|product|both|all` selects the clients.
-`product` builds `agentenv` with `--features test-keychain`, writes a
+`--implementation reference|product|both` selects the clients; the default
+is both. `product` builds `agentenv` with `--features test-support`, writes a
 configuration file whose `lab_value` env credential reads
 `AGENTENV_LAB_VALUE`, and runs `agentenv --json credential fill lab_value
 --backend cdp ...` for each scenario with the value only in that variable.
 The product's success JSON and `credential-fill: <reason>: <message>` stderr
 line are mapped onto the shared outcome schema; error scenarios must exit 8.
 Race-window scenarios set the debug-only `AGENTENV_FILL_TEST_DELAY_MS`
-variable instead of the prototype's `--delay-before-insert-ms` option.
+variable instead of the reference client's `--delay-before-insert-ms` option.
 
 A scenario may name `implementations` to restrict which clients run it; the
 others are recorded as skipped and parity is compared only among those that

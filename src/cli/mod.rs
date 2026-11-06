@@ -372,7 +372,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             }
             let profiles = query::profiles(&config);
             let stdout = if invocation.json {
-                json_stdout(render::profiles_json(config.version, &profiles))
+                json_line(render::profiles_json(config.version, &profiles))
             } else {
                 render::profiles_text(&profiles)
             };
@@ -393,7 +393,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 let entry_name = single_entry_name(&entry_argument)?;
                 let entry = query::entry(&config, profile, &entry_name, &env)?;
                 let stdout = if invocation.json {
-                    json_stdout(render::entry_json(config.version, &entry))
+                    json_line(render::entry_json(config.version, &entry))
                 } else {
                     render::entry_text(&entry, false)
                 };
@@ -405,7 +405,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             } else {
                 let listing = query::list(&config, profile, &env);
                 let stdout = if invocation.json {
-                    json_stdout(render::list_json(config.version, &listing))
+                    json_line(render::list_json(config.version, &listing))
                 } else {
                     render::list_text(&listing)
                 };
@@ -428,7 +428,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             let entry_name = single_entry_name(&entry_argument)?;
             let entry = query::entry(&config, profile, &entry_name, &env)?;
             let stdout = if invocation.json {
-                json_stdout(render::entry_json(config.version, &entry))
+                json_line(render::entry_json(config.version, &entry))
             } else {
                 render::entry_text(&entry, true)
             };
@@ -449,7 +449,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
             let value = query::get(profile, &path)?;
             if invocation.json {
                 Ok(Output {
-                    stdout: json_stdout(render::raw_get_json(value)),
+                    stdout: json_line(render::raw_get_json(value)),
                     stderr: String::new(),
                     status: 0,
                 })
@@ -495,7 +495,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
                 String::new()
             };
             let stdout = if invocation.json {
-                json_stdout(render::find_json(config.version, &matches))
+                json_line(render::find_json(config.version, &matches))
             } else {
                 render::find_text(&matches)
             };
@@ -510,7 +510,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         }) => {
             let credentials = query::credentials(&config, &env);
             let stdout = if invocation.json {
-                json_stdout(render::credentials_json(config.version, &credentials))
+                json_line(render::credentials_json(config.version, &credentials))
             } else {
                 render::credentials_text(&credentials)
             };
@@ -552,8 +552,10 @@ pub(super) fn trusted_project_pin(project: &ProjectContext) -> Option<&ProjectPi
     }
 }
 
-fn json_stdout(value: serde_json::Value) -> String {
-    serde_json::to_string(&value).expect("query JSON views are serializable") + "\n"
+/// Renders one JSON document as a single stdout line. A `Value` always
+/// serializes: its object keys are strings.
+pub(super) fn json_line(value: serde_json::Value) -> String {
+    serde_json::to_string(&value).expect("JSON values are serializable") + "\n"
 }
 
 /// Renders an entry name as the `--with` argument the path grammar accepts

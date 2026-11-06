@@ -61,9 +61,9 @@ Build natively with the Rust MSVC toolchain:
 
 ```powershell
 cargo build --release --bins
-cargo test --features test-keychain
+cargo test --features test-support
 cargo clippy --all-targets -- -D warnings
-cargo clippy --all-targets --features test-keychain -- -D warnings
+cargo clippy --all-targets --features test-support -- -D warnings
 ```
 
 `tests/windows_credentials.rs` exercises the real Windows named-pipe/Job Object

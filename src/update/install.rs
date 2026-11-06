@@ -97,7 +97,7 @@ fn home_dir(env: &impl Fn(&str) -> Option<String>) -> Result<PathBuf, AppError> 
 
 /// Replaces the running binary with `new_binary`. The installed path is only
 /// used for diagnostics: the replacement targets the running executable.
-pub fn replace_binary(new_binary: &Path, installed: &Path) -> Result<(), AppError> {
+fn replace_binary(new_binary: &Path, installed: &Path) -> Result<(), AppError> {
     self_replace::self_replace(new_binary).map_err(|error| {
         AppError::Update(format!(
             "cannot replace {}: {error}; check that its directory is writable",

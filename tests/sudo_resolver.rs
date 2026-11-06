@@ -1,22 +1,17 @@
 #![cfg(unix)]
 
+mod helpers;
+
 use std::path::Path;
 use std::time::Duration;
 
 use agentenv::config::{CredentialDef, CredentialUsage, Provider};
 use agentenv::credential::resolver::{resolve, ResolutionStage};
 use agentenv::credential::CapturedSecret;
+use helpers::command_credential;
 
 fn definition(script: &str) -> CredentialDef {
-    CredentialDef {
-        name: "lab".into(),
-        description: "Synthetic authentication fixture".into(),
-        inject_as: None,
-        usages: vec![CredentialUsage::Sudo],
-        provider: Provider::Command {
-            argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
-        },
-    }
+    command_credential(script, vec![CredentialUsage::Sudo])
 }
 
 async fn lookup(

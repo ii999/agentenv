@@ -1,3 +1,5 @@
+mod helpers;
+
 use std::time::Duration;
 
 use agentenv::credential::CapturedSecret;
@@ -12,12 +14,17 @@ use tokio::io::AsyncWriteExt;
 
 #[cfg(unix)]
 use {
-    std::ffi::CStr,
+    helpers::{account_name, fake_sudo},
     std::fs,
-    std::os::unix::fs::PermissionsExt,
     std::process::Stdio,
     tokio::process::{Child, Command},
 };
+
+/// A stand-in for `sudo` that drops its own options and executes the command
+/// after `--` as the current user.
+#[cfg(unix)]
+const PASSTHROUGH_SUDO: &str =
+    "#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
 
 async fn session_pair(
     request_id: u64,
@@ -479,8 +486,7 @@ async fn dropping_a_queued_flushed_password_response_revokes_it() {
 #[cfg(unix)]
 #[tokio::test]
 async fn helper_check_reports_identity_without_requesting_a_password() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (_sudo_directory, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
     let mut reader = child.stdout.take().expect("helper stdout");
@@ -521,8 +527,7 @@ async fn helper_check_reports_identity_without_requesting_a_password() {
 #[cfg(unix)]
 #[tokio::test]
 async fn helper_rejects_authentication_messages_before_start() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (_sudo_directory, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
     let mut reader = child.stdout.take().expect("helper stdout");
@@ -579,8 +584,7 @@ async fn helper_rejects_authentication_messages_before_start() {
 #[tokio::test]
 async fn helper_rejects_stdin_data_and_eof_before_start() {
     for early in [MessageKind::StdinChunk, MessageKind::StdinEof] {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let sudo = fake_sudo(temporary.path());
+        let (_sudo_directory, sudo) = fake_sudo(PASSTHROUGH_SUDO);
         let mut child = spawn_helper();
         let mut writer = child.stdin.take().expect("helper stdin");
         let mut reader = child.stdout.take().expect("helper stdout");
@@ -644,8 +648,7 @@ async fn helper_rejects_stdin_data_and_eof_before_start() {
 #[cfg(unix)]
 #[tokio::test]
 async fn helper_executes_once_and_delivers_both_output_eofs_before_result() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (_sudo_directory, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
     let mut reader = child.stdout.take().expect("helper stdout");
@@ -742,8 +745,7 @@ async fn helper_executes_once_and_delivers_both_output_eofs_before_result() {
 #[cfg(unix)]
 #[tokio::test]
 async fn early_target_exit_does_not_let_large_stdin_hide_the_result() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (_sudo_directory, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
     let mut reader = child.stdout.take().expect("helper stdout");
@@ -847,8 +849,7 @@ async fn early_target_exit_does_not_let_large_stdin_hide_the_result() {
 #[cfg(unix)]
 #[tokio::test]
 async fn completed_process_waits_for_backpressured_output_and_services_cancel() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (temporary, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let marker = temporary.path().join("process-finished");
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
@@ -970,8 +971,7 @@ async fn completed_process_waits_for_backpressured_output_and_services_cancel() 
 #[cfg(unix)]
 #[tokio::test]
 async fn cancel_after_exit_bounds_output_held_open_by_a_descendant() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (temporary, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let pid_file = temporary.path().join("descendant-pid");
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
@@ -1079,8 +1079,7 @@ async fn cancel_after_exit_bounds_output_held_open_by_a_descendant() {
 #[cfg(unix)]
 #[tokio::test]
 async fn cancelling_a_running_passwordless_target_returns_its_signal_result() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let sudo = fake_sudo(temporary.path());
+    let (temporary, sudo) = fake_sudo(PASSTHROUGH_SUDO);
     let pid_file = temporary.path().join("target-pid");
     let mut child = spawn_helper();
     let mut writer = child.stdin.take().expect("helper stdin");
@@ -1219,28 +1218,4 @@ fn spawn_helper() -> Child {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command.spawn().expect("helper starts")
-}
-
-#[cfg(unix)]
-fn fake_sudo(directory: &std::path::Path) -> std::path::PathBuf {
-    let path = directory.join("sudo");
-    fs::write(
-        &path,
-        b"#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
-    )
-    .expect("fake sudo writes");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("permissions set");
-    path
-}
-
-#[cfg(unix)]
-fn account_name() -> String {
-    unsafe {
-        let record = libc::getpwuid(libc::getuid());
-        assert!(!record.is_null(), "account record exists");
-        CStr::from_ptr((*record).pw_name)
-            .to_str()
-            .expect("account name is UTF-8")
-            .to_owned()
-    }
 }

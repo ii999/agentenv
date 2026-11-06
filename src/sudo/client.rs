@@ -1,6 +1,9 @@
 //! One foreground SSH session, with independent login and sudo authentication.
 
-use super::{deploy, protocol::Ready, Cancellation, ExecutionOutcome, ExecutionRequest};
+use super::{
+    deploy, protocol::Ready, Cancellation, Completion, ExecutionOutcome, ExecutionRequest, Reason,
+    SudoError,
+};
 use crate::config::{Config, SudoTarget};
 use crate::error::AppError;
 use std::time::Duration;
@@ -22,8 +25,7 @@ pub async fn execute(
     auth_timeout: Duration,
     cancellation: Cancellation,
 ) -> Result<RemoteOutcome, AppError> {
-    #[cfg(any(unix, windows))]
-    return native::execute(
+    native::execute(
         config,
         target,
         request,
@@ -31,22 +33,7 @@ pub async fn execute(
         auth_timeout,
         cancellation,
     )
-    .await;
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (
-            config,
-            target,
-            request,
-            setup_timeout,
-            auth_timeout,
-            cancellation,
-        );
-        Err(AppError::SudoExecution(
-            "unsupported-platform: this build has no verified Windows SSH credential channel"
-                .into(),
-        ))
-    }
+    .await
 }
 
 /// Installs or upgrades the remote helper through the target's SSH route and
@@ -61,8 +48,7 @@ pub async fn deploy_helper(
     auth_timeout: Duration,
     cancellation: Cancellation,
 ) -> Result<(deploy::Report, Ready), AppError> {
-    #[cfg(any(unix, windows))]
-    return native::deploy_helper(
+    native::deploy_helper(
         config,
         target,
         source,
@@ -71,25 +57,9 @@ pub async fn deploy_helper(
         auth_timeout,
         cancellation,
     )
-    .await;
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (
-            config,
-            target,
-            source,
-            force,
-            setup_timeout,
-            auth_timeout,
-            cancellation,
-        );
-        Err(AppError::SudoExecution(
-            "unsupported-platform: this build has no verified SSH credential channel".into(),
-        ))
-    }
+    .await
 }
 
-#[cfg(any(unix, windows))]
 mod native {
     use super::super::{
         deploy::{HelperSource, SessionOutput, SessionRunner},
@@ -105,10 +75,9 @@ mod native {
     use crate::config::CredentialDef;
     use crate::credential::resolver::{self, ResolutionStage};
     use crate::credential::Secret;
+    use crate::sudo::SUDO_PASSWORD_LIMIT;
     use std::future::Future;
-    #[cfg(unix)]
-    use std::io::Read;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::sync::Arc;
@@ -120,13 +89,14 @@ mod native {
     type Operation = Pin<Box<dyn Future<Output = Result<(), AppError>> + Send>>;
     type AuthTiming = watch::Receiver<Option<(Instant, Option<Instant>)>>;
 
-    fn owned(reason: &str) -> AppError {
-        AppError::SudoExecution(format!("{reason}: SSH sudo execution could not continue"))
+    fn owned(reason: Reason) -> AppError {
+        SudoError::new(reason, "SSH sudo execution could not continue").into()
     }
     fn unknown() -> AppError {
-        AppError::SudoCompletionUnconfirmed(
-            "remote-result-missing: the command may have run; do not retry automatically".into(),
-        )
+        AppError::from(SudoError::unconfirmed(
+            Reason::RemoteResultMissing,
+            "the command may have run; do not retry automatically",
+        ))
     }
     fn credential_error() -> AppError {
         AppError::Credential(
@@ -172,16 +142,11 @@ mod native {
         mut cancellation: Cancellation,
     ) -> Result<RemoteOutcome, AppError> {
         let started = Instant::now();
-        if *cancellation.borrow() > 0 {
-            return Ok(cancelled(*cancellation.borrow()));
+        if let Some(signal) = cancellation.pending() {
+            return Ok(cancelled(signal));
         }
         let mut bytes = [0; 8];
-        #[cfg(unix)]
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut file| file.read_exact(&mut bytes))
-            .map_err(|_| owned("session-unavailable"))?;
-        #[cfg(windows)]
-        crate::windows::random(&mut bytes).map_err(|_| owned("session-unavailable"))?;
+        crate::random::fill(&mut bytes).map_err(|_| owned(Reason::SessionUnavailable))?;
         let request_id = u64::from_be_bytes(bytes).max(1);
         let start_frame = request
             .as_ref()
@@ -210,109 +175,45 @@ mod native {
             })?;
         let prepared = tokio::select! {
             biased;
-            _ = cancellation_requested(&mut cancellation) => return Ok(cancelled(*cancellation.borrow())),
+            signal = cancellation.requested() => return Ok(cancelled(signal)),
             result = ssh::prepare(target, setup_timeout) => result?,
         };
-        if *cancellation.borrow() > 0 {
-            return Ok(cancelled(*cancellation.borrow()));
+        if let Some(signal) = cancellation.pending() {
+            return Ok(cancelled(signal));
         }
-        let executable = std::env::current_exe().map_err(|_| owned("resolver-unavailable"))?;
+        let executable = std::env::current_exe().map_err(|_| owned(Reason::ResolverUnavailable))?;
         let sudo_credential = definition(config, &target.credential.name)?;
-        let mut command = prepared.command();
-        let mut timing = None;
-        let login = match &prepared.auth {
-            PreparedAuth::PublicKey => None,
-            PreparedAuth::Password {
-                credential,
-                expected_prompt,
-            } => {
-                let path = executable
-                    .parent()
-                    .ok_or_else(|| owned("helper-missing"))?
-                    .join(if cfg!(windows) {
-                        "agentenv-ssh-askpass.exe"
-                    } else {
-                        "agentenv-ssh-askpass"
-                    });
-                let budget = remaining(started, setup_timeout, None);
-                if budget.is_zero() {
-                    return Err(owned("setup-timeout"));
-                }
-                let session = tokio::select! {
-                    biased;
-                    _ = cancellation_requested(&mut cancellation) => return Ok(cancelled(*cancellation.borrow())),
-                    result = ssh_askpass::Session::create(&path, budget) => result?,
-                };
-                timing = Some(session.auth_timing());
-                session.configure(&mut command);
-                Some((
-                    session,
-                    definition(config, &credential.name)?,
-                    expected_prompt.clone(),
-                ))
+        let launched = match launch(
+            prepared.command(),
+            &prepared.auth,
+            config,
+            &executable,
+            started,
+            setup_timeout,
+            auth_timeout,
+            &mut cancellation,
+        )
+        .await
+        {
+            Ok(launched) => launched,
+            Err(LaunchError::Cancelled(signal)) => return Ok(cancelled(signal)),
+            Err(LaunchError::Failed(failure)) => {
+                return Err(owned(match failure {
+                    LaunchFailure::DeadlineExpired => Reason::SetupTimeout,
+                    LaunchFailure::Spawn(_) | LaunchFailure::NoProcessId => Reason::SshSpawnFailed,
+                    LaunchFailure::Stream(_) => Reason::SshStreamUnavailable,
+                }))
             }
+            Err(LaunchError::Other(error)) => return Err(error),
         };
-        if *cancellation.borrow() > 0 {
-            return Ok(cancelled(*cancellation.borrow()));
-        }
-        if remaining(started, setup_timeout, None).is_zero() {
-            return Err(owned("setup-timeout"));
-        }
-        // A terminal or harness signal to agentenv's process group must reach
-        // only agentenv, which forwards it as Cancel; ssh would otherwise exit
-        // and turn an observable result into completion unknown.
-        #[cfg(unix)]
-        command.process_group(0);
-        #[cfg(windows)]
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        let mut child = command.spawn().map_err(|_| owned("ssh-spawn-failed"))?;
-        let ssh_pid = child.id().ok_or_else(|| owned("ssh-spawn-failed"))?;
-        let reader = child
-            .stdout
-            .take()
-            .ok_or_else(|| owned("ssh-stream-unavailable"))?;
-        let writer = child
-            .stdin
-            .take()
-            .ok_or_else(|| owned("ssh-stream-unavailable"))?;
-        let mut stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| owned("ssh-stream-unavailable"))?;
-        // Never relay provider, askpass, helper, or transport diagnostics as
-        // target stderr. Continuously discard this independent SSH stream.
-        let diagnostic = tokio::spawn(async move {
-            let mut bytes = [0; 4096];
-            while let Ok(length) = stderr.read(&mut bytes).await {
-                if length == 0 {
-                    break;
-                }
-            }
-        });
-        let diagnostic = AbortTask(diagnostic);
-        let broker: Option<Operation> = login.map(|(session, credential, prompt)| {
-            let executable = executable.clone();
-            Box::pin(async move {
-                session
-                    .serve(
-                        ssh_pid,
-                        &prompt,
-                        setup_timeout,
-                        auth_timeout,
-                        || async move {
-                            resolver::resolve(
-                                &executable,
-                                &credential,
-                                ResolutionStage::SshPassword,
-                                255,
-                                auth_timeout,
-                            )
-                            .await
-                        },
-                    )
-                    .await
-            }) as Operation
-        });
+        let LaunchedSsh {
+            mut child,
+            reader,
+            writer,
+            broker,
+            timing,
+            diagnostic,
+        } = launched;
         let result = session(
             reader,
             writer,
@@ -341,7 +242,7 @@ mod native {
                     if outcome.execution.is_some() {
                         outcome.close_failed = true;
                     } else {
-                        return Err(owned("ssh-close-failed"));
+                        return Err(owned(Reason::SshCloseFailed));
                     }
                 }
                 Ok(outcome)
@@ -357,7 +258,7 @@ mod native {
                     );
                 stop_ssh(&mut child).await;
                 if connection_failed {
-                    Err(owned("ssh-connect-failed"))
+                    Err(owned(Reason::SshConnectFailed))
                 } else {
                     Err(error)
                 }
@@ -368,7 +269,7 @@ mod native {
     }
 
     fn handshake_missing(error: &AppError) -> bool {
-        matches!(error, AppError::SudoExecution(detail) if detail.starts_with("helper-handshake-missing"))
+        matches!(error, AppError::Sudo(error) if error.reason() == Some(Reason::HelperHandshakeMissing))
     }
 
     fn deploy_failed(detail: impl std::fmt::Display) -> AppError {
@@ -378,17 +279,19 @@ mod native {
         deploy::Reason::Cancelled.error(format!("deployment was cancelled by signal {signal}"))
     }
     fn connect_failed() -> AppError {
-        AppError::SudoExecution(
-            "ssh-connect-failed: the SSH connection or login failed before the remote command ran"
-                .to_owned(),
-        )
+        AppError::from(SudoError::new(
+            Reason::SshConnectFailed,
+            "the SSH connection or login failed before the remote command ran",
+        ))
     }
     fn check_failed(status: &deploy::Status, error: AppError) -> AppError {
         match error {
-            AppError::SudoExecution(detail) => deploy::Reason::CheckFailed.error(format!(
-                "the deployment finished as {} but the check handshake through helper_path failed ({detail})",
-                status.label()
-            )),
+            AppError::Sudo(error) if error.completion() == Completion::Known => {
+                deploy::Reason::CheckFailed.error(format!(
+                    "the deployment finished as {} but the check handshake through helper_path failed ({error})",
+                    status.label()
+                ))
+            }
             other => other,
         }
     }
@@ -410,12 +313,12 @@ mod native {
             destination: &deploy::Destination,
         ) -> Result<deploy::HelperBytes, AppError> {
             let mut cancellation = self.cancellation;
-            if *cancellation.borrow() > 0 {
-                return Err(deploy_cancelled(*cancellation.borrow()));
+            if let Some(signal) = cancellation.pending() {
+                return Err(deploy_cancelled(signal));
             }
             tokio::select! {
                 biased;
-                _ = cancellation_requested(&mut cancellation) => Err(deploy_cancelled(*cancellation.borrow())),
+                signal = cancellation.requested() => Err(deploy_cancelled(signal)),
                 result = self.source.bytes(destination) => result,
             }
         }
@@ -425,6 +328,160 @@ mod native {
     /// keeps a 64 MiB upload viable at roughly one megabit per second.
     fn transfer_allowance(bytes: usize) -> Duration {
         Duration::from_secs((bytes / (128 * 1024)) as u64)
+    }
+
+    /// A started ssh process, its pipes, and its login broker.
+    struct LaunchedSsh {
+        child: Child,
+        reader: ChildStdout,
+        writer: ChildStdin,
+        /// Serves the one SSH login challenge; `None` for publickey routes.
+        broker: Option<Operation>,
+        timing: Option<AuthTiming>,
+        /// Discards ssh's own stderr for the life of the session.
+        diagnostic: AbortTask<()>,
+    }
+
+    enum LaunchFailure {
+        DeadlineExpired,
+        Spawn(std::io::Error),
+        NoProcessId,
+        /// The named standard stream of the ssh child was unavailable.
+        Stream(&'static str),
+    }
+
+    enum LaunchError {
+        Cancelled(i32),
+        Failed(LaunchFailure),
+        Other(AppError),
+    }
+
+    impl From<AppError> for LaunchError {
+        fn from(error: AppError) -> Self {
+            Self::Other(error)
+        }
+    }
+
+    /// Starts `command` over a prepared route with the shared login
+    /// authentication, process isolation and stderr discipline. A password
+    /// route first verifies the askpass companion beside `executable` and
+    /// binds a one-shot login channel to the ssh process.
+    #[allow(clippy::too_many_arguments)]
+    async fn launch(
+        mut command: tokio::process::Command,
+        auth: &PreparedAuth,
+        config: &Config,
+        executable: &Path,
+        started: Instant,
+        setup_timeout: Duration,
+        auth_timeout: Duration,
+        cancellation: &mut Cancellation,
+    ) -> Result<LaunchedSsh, LaunchError> {
+        let mut timing = None;
+        let login = match auth {
+            PreparedAuth::PublicKey => None,
+            PreparedAuth::Password {
+                credential,
+                expected_prompt,
+            } => {
+                let path = executable
+                    .parent()
+                    .ok_or_else(|| owned(Reason::HelperMissing))?
+                    .join(format!(
+                        "agentenv-ssh-askpass{}",
+                        std::env::consts::EXE_SUFFIX
+                    ));
+                let budget = remaining(started, setup_timeout, None);
+                if budget.is_zero() {
+                    return Err(LaunchError::Failed(LaunchFailure::DeadlineExpired));
+                }
+                let session = tokio::select! {
+                    biased;
+                    signal = cancellation.requested() => return Err(LaunchError::Cancelled(signal)),
+                    result = ssh_askpass::Session::create(&path, budget) => result?,
+                };
+                timing = Some(session.auth_timing());
+                session.configure(&mut command);
+                Some((
+                    session,
+                    definition(config, &credential.name)?,
+                    expected_prompt.clone(),
+                ))
+            }
+        };
+        if let Some(signal) = cancellation.pending() {
+            return Err(LaunchError::Cancelled(signal));
+        }
+        if remaining(started, setup_timeout, None).is_zero() {
+            return Err(LaunchError::Failed(LaunchFailure::DeadlineExpired));
+        }
+        // A terminal or harness signal to agentenv's process group must reach
+        // only agentenv, which forwards it as Cancel; ssh would otherwise exit
+        // and turn an observable result into completion unknown.
+        #[cfg(unix)]
+        command.process_group(0);
+        #[cfg(windows)]
+        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        let mut child = command
+            .spawn()
+            .map_err(|error| LaunchError::Failed(LaunchFailure::Spawn(error)))?;
+        let failed = |failure| LaunchError::Failed(failure);
+        let ssh_pid = child
+            .id()
+            .ok_or_else(|| failed(LaunchFailure::NoProcessId))?;
+        let reader = child
+            .stdout
+            .take()
+            .ok_or_else(|| failed(LaunchFailure::Stream("stdout")))?;
+        let writer = child
+            .stdin
+            .take()
+            .ok_or_else(|| failed(LaunchFailure::Stream("stdin")))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| failed(LaunchFailure::Stream("stderr")))?;
+        // Never relay provider, askpass, helper, or transport diagnostics as
+        // target stderr. Continuously discard this independent SSH stream.
+        let diagnostic = AbortTask(tokio::spawn(async move {
+            let mut bytes = [0; 4096];
+            while let Ok(length) = stderr.read(&mut bytes).await {
+                if length == 0 {
+                    break;
+                }
+            }
+        }));
+        let executable = executable.to_owned();
+        let broker = login.map(|(session, credential, prompt)| {
+            Box::pin(async move {
+                session
+                    .serve(
+                        ssh_pid,
+                        &prompt,
+                        setup_timeout,
+                        auth_timeout,
+                        || async move {
+                            resolver::resolve(
+                                &executable,
+                                &credential,
+                                ResolutionStage::SshPassword,
+                                SUDO_PASSWORD_LIMIT,
+                                auth_timeout,
+                            )
+                            .await
+                        },
+                    )
+                    .await
+            }) as Operation
+        });
+        Ok(LaunchedSsh {
+            child,
+            reader,
+            writer,
+            broker,
+            timing,
+            diagnostic,
+        })
     }
 
     /// One remote command over the prepared route, with the same login
@@ -449,99 +506,44 @@ mod native {
             let started = Instant::now();
             let budget_total = self.setup_timeout + transfer_allowance(stdin.len());
             let mut cancellation = self.cancellation.clone();
-            if *cancellation.borrow() > 0 {
-                return Err(deploy_cancelled(*cancellation.borrow()));
+            if let Some(signal) = cancellation.pending() {
+                return Err(deploy_cancelled(signal));
             }
-            let mut command = self.prepared.command_for(remote_command);
-            let mut timing = None;
-            let login = match &self.prepared.auth {
-                PreparedAuth::PublicKey => None,
-                PreparedAuth::Password {
-                    credential,
-                    expected_prompt,
-                } => {
-                    let path = self
-                        .executable
-                        .parent()
-                        .ok_or_else(|| owned("helper-missing"))?
-                        .join(if cfg!(windows) {
-                            "agentenv-ssh-askpass.exe"
-                        } else {
-                            "agentenv-ssh-askpass"
-                        });
-                    let budget = remaining(started, self.setup_timeout, None);
-                    if budget.is_zero() {
-                        return Err(deploy_failed("the session deadline expired"));
-                    }
-                    let session = tokio::select! {
-                        biased;
-                        _ = cancellation_requested(&mut cancellation) => return Err(deploy_cancelled(*cancellation.borrow())),
-                        result = ssh_askpass::Session::create(&path, budget) => result?,
-                    };
-                    timing = Some(session.auth_timing());
-                    session.configure(&mut command);
-                    Some((
-                        session,
-                        definition(self.config, &credential.name)?,
-                        expected_prompt.clone(),
-                    ))
+            let launched = launch(
+                self.prepared.command_for(remote_command),
+                &self.prepared.auth,
+                self.config,
+                &self.executable,
+                started,
+                self.setup_timeout,
+                self.auth_timeout,
+                &mut cancellation,
+            )
+            .await
+            .map_err(|error| match error {
+                LaunchError::Cancelled(signal) => deploy_cancelled(signal),
+                LaunchError::Failed(LaunchFailure::DeadlineExpired) => {
+                    deploy_failed("the session deadline expired")
                 }
-            };
-            #[cfg(unix)]
-            command.process_group(0);
-            #[cfg(windows)]
-            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-            let mut child = command
-                .spawn()
-                .map_err(|error| deploy_failed(format!("cannot start ssh: {error}")))?;
-            let ssh_pid = child
-                .id()
-                .ok_or_else(|| deploy_failed("cannot start ssh"))?;
-            let mut reader = child
-                .stdout
-                .take()
-                .ok_or_else(|| deploy_failed("ssh stdout unavailable"))?;
-            let mut writer = child
-                .stdin
-                .take()
-                .ok_or_else(|| deploy_failed("ssh stdin unavailable"))?;
-            let mut stderr = child
-                .stderr
-                .take()
-                .ok_or_else(|| deploy_failed("ssh stderr unavailable"))?;
-            let diagnostic = AbortTask(tokio::spawn(async move {
-                let mut bytes = [0; 4096];
-                while let Ok(length) = stderr.read(&mut bytes).await {
-                    if length == 0 {
-                        break;
-                    }
+                LaunchError::Failed(LaunchFailure::Spawn(error)) => {
+                    deploy_failed(format!("cannot start ssh: {error}"))
                 }
-            }));
-            let auth_timeout = self.auth_timeout;
-            let setup_timeout = self.setup_timeout;
-            let mut broker: Option<Operation> = login.map(|(session, credential, prompt)| {
-                let executable = self.executable.clone();
-                Box::pin(async move {
-                    session
-                        .serve(
-                            ssh_pid,
-                            &prompt,
-                            setup_timeout,
-                            auth_timeout,
-                            || async move {
-                                resolver::resolve(
-                                    &executable,
-                                    &credential,
-                                    ResolutionStage::SshPassword,
-                                    255,
-                                    auth_timeout,
-                                )
-                                .await
-                            },
-                        )
-                        .await
-                }) as Operation
-            });
+                LaunchError::Failed(LaunchFailure::NoProcessId) => {
+                    deploy_failed("cannot start ssh")
+                }
+                LaunchError::Failed(LaunchFailure::Stream(name)) => {
+                    deploy_failed(format!("ssh {name} unavailable"))
+                }
+                LaunchError::Other(error) => error,
+            })?;
+            let LaunchedSsh {
+                mut child,
+                mut reader,
+                mut writer,
+                mut broker,
+                mut timing,
+                diagnostic,
+            } = launched;
             // The write and the bounded read run together: the destination
             // may print before it has consumed stdin, and a full pipe in
             // either direction would otherwise deadlock the session. The
@@ -590,12 +592,11 @@ mod native {
                 };
                 Ok::<(Vec<u8>, bool), std::io::Error>((stdout, delivered))
             });
-            let mut cancellation_open = true;
             let mut timing_open = timing.is_some();
             let (stdout, delivered) = loop {
-                if *cancellation.borrow() > 0 {
+                if let Some(signal) = cancellation.pending() {
                     stop_ssh(&mut child).await;
-                    return Err(deploy_cancelled(*cancellation.borrow()));
+                    return Err(deploy_cancelled(signal));
                 }
                 let budget = remaining(started, budget_total, timing.as_ref());
                 if budget.is_zero() {
@@ -604,9 +605,8 @@ mod native {
                 }
                 tokio::select! {
                     biased;
-                    changed = cancellation.changed(), if cancellation_open => {
-                        if changed.is_err() { cancellation_open = false; }
-                    }
+                    // The loop's first check returns the requested signal.
+                    _ = cancellation.requested() => {}
                     result = optional(&mut broker), if broker.is_some() => {
                         if let Err(error) = result {
                             stop_ssh(&mut child).await;
@@ -635,9 +635,9 @@ mod native {
             // it gets five seconds, and a signal ends the wait early.
             let status = tokio::select! {
                 biased;
-                _ = cancellation_requested(&mut cancellation) => {
+                signal = cancellation.requested() => {
                     stop_ssh(&mut child).await;
-                    return Err(deploy_cancelled(*cancellation.borrow()));
+                    return Err(deploy_cancelled(signal));
                 }
                 waited = timeout(Duration::from_secs(5), child.wait()) => match waited {
                     Ok(Ok(status)) => status.code(),
@@ -678,15 +678,15 @@ mod native {
         auth_timeout: Duration,
         mut cancellation: Cancellation,
     ) -> Result<(deploy::Report, Ready), AppError> {
-        if *cancellation.borrow() > 0 {
-            return Err(deploy_cancelled(*cancellation.borrow()));
+        if let Some(signal) = cancellation.pending() {
+            return Err(deploy_cancelled(signal));
         }
         let prepared = tokio::select! {
             biased;
-            _ = cancellation_requested(&mut cancellation) => return Err(deploy_cancelled(*cancellation.borrow())),
+            signal = cancellation.requested() => return Err(deploy_cancelled(signal)),
             result = ssh::prepare(target, setup_timeout) => result?,
         };
-        let executable = std::env::current_exe().map_err(|_| owned("resolver-unavailable"))?;
+        let executable = std::env::current_exe().map_err(|_| owned(Reason::ResolverUnavailable))?;
         let mut runner = SshSessionRunner {
             config,
             prepared: &prepared,
@@ -719,7 +719,7 @@ mod native {
         }
         let ready = outcome
             .ready
-            .ok_or_else(|| check_failed(&report.status, owned("helper-handshake-missing")))?;
+            .ok_or_else(|| check_failed(&report.status, owned(Reason::HelperHandshakeMissing)))?;
         Ok((report, ready))
     }
 
@@ -763,50 +763,48 @@ mod native {
                 sudo_path: target
                     .sudo_path
                     .to_str()
-                    .ok_or_else(|| owned("invalid-target"))?
+                    .ok_or_else(|| owned(Reason::InvalidTarget))?
                     .into(),
                 auth_user: target.auth_user.clone(),
                 setup_timeout_secs: setup_timeout.as_secs(),
                 auth_timeout_secs: auth_timeout.as_secs(),
             },
         )
-        .map_err(|_| owned("invalid-target"))?;
+        .map_err(|_| owned(Reason::InvalidTarget))?;
         let mut handshake = Box::pin(async {
             protocol::write_frame(&mut writer, &hello)
                 .await
-                .map_err(|_| owned("ssh-connect-failed"))?;
+                .map_err(|_| owned(Reason::SshConnectFailed))?;
             writer
                 .flush()
                 .await
-                .map_err(|_| owned("ssh-connect-failed"))?;
+                .map_err(|_| owned(Reason::SshConnectFailed))?;
             let frame = protocol::read_frame(&mut reader)
                 .await
-                .map_err(|_| owned("helper-handshake-invalid"))?
-                .ok_or_else(|| owned("helper-handshake-missing"))?;
+                .map_err(|_| owned(Reason::HelperHandshakeInvalid))?
+                .ok_or_else(|| owned(Reason::HelperHandshakeMissing))?;
             if frame.kind() != Kind::Ready || frame.request_id() != request_id {
-                return Err(owned("helper-handshake-invalid"));
+                return Err(owned(Reason::HelperHandshakeInvalid));
             }
             let ready: Ready = frame
                 .decode_metadata()
-                .map_err(|_| owned("helper-handshake-invalid"))?;
+                .map_err(|_| owned(Reason::HelperHandshakeInvalid))?;
             validate_ready(&ready, target)?;
             Ok(ready)
         });
-        let mut cancellation_open = true;
         let mut timing_open = timing.is_some();
         let ready = loop {
-            if *cancellation.borrow() > 0 {
-                return Ok(cancelled(*cancellation.borrow()));
+            if let Some(signal) = cancellation.pending() {
+                return Ok(cancelled(signal));
             }
             let budget = remaining(started, setup_timeout, timing.as_ref());
             if budget.is_zero() {
-                return Err(owned("setup-timeout"));
+                return Err(owned(Reason::SetupTimeout));
             }
             tokio::select! {
                 biased;
-                changed = cancellation.changed(), if cancellation_open => {
-                    if changed.is_err() { cancellation_open = false; }
-                }
+                // The loop's first check returns the requested signal.
+                _ = cancellation.requested() => {}
                 result = optional(&mut broker), if broker.is_some() => {
                     result?;
                     broker = None;
@@ -820,21 +818,21 @@ mod native {
         };
         drop(handshake);
         drop(broker);
-        if *cancellation.borrow() > 0 {
-            return Ok(cancelled(*cancellation.borrow()));
+        if let Some(signal) = cancellation.pending() {
+            return Ok(cancelled(signal));
         }
         let Some(start_frame) = start_frame else {
             let budget = remaining(started, setup_timeout, timing.as_ref());
             let end = tokio::select! {
                 biased;
-                _ = cancellation_requested(cancellation) => return Ok(cancelled(*cancellation.borrow())),
+                signal = cancellation.requested() => return Ok(cancelled(signal)),
                 result = timeout(budget, protocol::read_frame(&mut reader)) => {
-                    result.map_err(|_| owned("setup-timeout"))?
-                        .map_err(|_| owned("helper-check-invalid"))?
+                    result.map_err(|_| owned(Reason::SetupTimeout))?
+                        .map_err(|_| owned(Reason::HelperCheckInvalid))?
                 }
             };
             if end.is_some() {
-                return Err(owned("helper-check-invalid"));
+                return Err(owned(Reason::HelperCheckInvalid));
             }
             return Ok(RemoteOutcome {
                 ready: Some(ready),
@@ -848,7 +846,7 @@ mod native {
         // Missing completion is uncertain, never a reason to replay the command.
         tokio::select! {
             biased;
-            _ = cancellation_requested(cancellation) => return Err(unknown()),
+            _ = cancellation.requested() => return Err(unknown()),
             result = async {
                 protocol::write_frame(&mut writer, &start_frame).await.map_err(|_| unknown())?;
                 writer.flush().await.map_err(|_| unknown())
@@ -892,16 +890,6 @@ mod native {
         }
     }
 
-    async fn cancellation_requested(cancellation: &mut Cancellation) {
-        loop {
-            if *cancellation.borrow() > 0 {
-                return;
-            }
-            if cancellation.changed().await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        }
-    }
     fn validate_ready(ready: &Ready, target: &SudoTarget) -> Result<(), AppError> {
         if ready.build != env!("CARGO_PKG_VERSION")
             || ready.protocol != protocol::VERSION
@@ -914,7 +902,7 @@ mod native {
                 .iter()
                 .any(|required| !ready.features.iter().any(|feature| feature == required))
         {
-            return Err(owned("helper-identity-mismatch"));
+            return Err(owned(Reason::HelperIdentityMismatch));
         }
         Ok(())
     }
@@ -1003,7 +991,6 @@ mod native {
         let mut failure_open = true;
         let mut failure_deadline = None;
         let mut control_open = true;
-        let mut cancellation_open = true;
         let mut cancel_deadline = None;
         loop {
             if result.is_some() && (output_done || cancel_deadline.is_some()) {
@@ -1012,29 +999,26 @@ mod native {
             }
             tokio::select! {
                 biased;
-                changed = cancellation.changed(), if cancellation_open && cancel_deadline.is_none() => {
-                    if changed.is_err() { cancellation_open = false; }
-                    else if *cancellation.borrow() > 0 {
-                        if result.is_some() {
-                            // The status is already known; stop waiting on
-                            // a blocked local output consumer.
-                            output_interrupted = true;
-                            break;
-                        }
-                        authentication = None;
-                        input.0.abort();
-                        let cancel = Frame::metadata(Kind::Cancel, request_id, &Cancel { signal: *cancellation.borrow() })
-                            .map_err(|_| unknown())?;
-                        // A terminal frame may already be queued or arriving
-                        // even when Cancel cannot be written; keep reading it.
-                        // Enqueue without a flush acknowledgement: abandoning a
-                        // slow acknowledgement would make the writer skip it.
-                        let sent = matches!(
-                            timeout(Duration::from_secs(1), sender.send_control(cancel)).await,
-                            Ok(Ok(()))
-                        );
-                        cancel_deadline = Some(Instant::now() + if sent { Duration::from_secs(10) } else { CLOSE_GRACE });
+                signal = cancellation.requested(), if cancel_deadline.is_none() => {
+                    if result.is_some() {
+                        // The status is already known; stop waiting on
+                        // a blocked local output consumer.
+                        output_interrupted = true;
+                        break;
                     }
+                    authentication = None;
+                    input.0.abort();
+                    let cancel = Frame::metadata(Kind::Cancel, request_id, &Cancel { signal })
+                        .map_err(|_| unknown())?;
+                    // A terminal frame may already be queued or arriving
+                    // even when Cancel cannot be written; keep reading it.
+                    // Enqueue without a flush acknowledgement: abandoning a
+                    // slow acknowledgement would make the writer skip it.
+                    let sent = matches!(
+                        timeout(Duration::from_secs(1), sender.send_control(cancel)).await,
+                        Ok(Ok(()))
+                    );
+                    cancel_deadline = Some(Instant::now() + if sent { Duration::from_secs(10) } else { CLOSE_GRACE });
                 }
                 frame = transport.control.recv(), if control_open => {
                     let Some(frame) = frame else {
@@ -1105,8 +1089,8 @@ mod native {
                             return Err(match failure.reason {
                                 FailureReason::Credential => credential_error(),
                                 FailureReason::CompletionUnknown => unknown(),
-                                FailureReason::Preflight => owned("remote-preflight-failed"),
-                                FailureReason::Protocol => owned("remote-protocol-failed"),
+                                FailureReason::Preflight => owned(Reason::RemotePreflightFailed),
+                                FailureReason::Protocol => owned(Reason::RemoteProtocolFailed),
                             });
                         }
                         _ if result.is_some() => protocol_after_result = true,
@@ -1234,21 +1218,21 @@ mod native {
                     output
                         .write_all(&bytes)
                         .await
-                        .map_err(|_| owned("output-write-failed"))?;
+                        .map_err(|_| owned(Reason::OutputWriteFailed))?;
                     // The helper may close its transport after flushing Result
                     // while this consumer still drains queued output. The
                     // coordinator owns transport failure and completion; an
                     // obsolete credit reply must not discard buffered bytes.
                     match sender.acknowledge(stream, bytes.len() as u32).await {
                         Ok(()) | Err(transport::TransportError::Closed) => {}
-                        Err(_) => return Err(owned("stream-credit-invalid")),
+                        Err(_) => return Err(owned(Reason::StreamCreditInvalid)),
                     }
                 }
                 StreamEvent::Eof => {
                     output
                         .flush()
                         .await
-                        .map_err(|_| owned("output-write-failed"))?;
+                        .map_err(|_| owned(Reason::OutputWriteFailed))?;
                     return Ok(());
                 }
             }
@@ -1297,7 +1281,7 @@ mod native {
 
         #[tokio::test]
         async fn a_signal_interrupts_a_pending_helper_source() {
-            let (cancel, cancellation) = super::super::super::cancellation_channel();
+            let (cancel, cancellation) = crate::cancel::channel();
             let source = CancellableSource {
                 source: Pending,
                 cancellation,
@@ -1310,14 +1294,14 @@ mod native {
             };
             let bytes = tokio::spawn(async move { source.bytes(&destination).await });
             tokio::time::sleep(Duration::from_millis(20)).await;
-            cancel.send(2).expect("cancellation delivered");
+            cancel.cancel(2);
             let error = tokio::time::timeout(Duration::from_secs(2), bytes)
                 .await
                 .expect("the pending source is abandoned promptly")
                 .expect("task finished")
                 .expect_err("cancellation is an error");
             assert!(
-                matches!(&error, AppError::SudoExecution(detail) if detail.starts_with("helper-deploy-cancelled: ")),
+                matches!(&error, AppError::Sudo(error) if error.reason() == Some(Reason::Deploy(deploy::Reason::Cancelled))),
                 "{error}"
             );
         }
@@ -1485,9 +1469,9 @@ mod native {
             I: tokio::io::AsyncRead + Unpin + Send + 'static,
             O: tokio::io::AsyncWrite + Unpin,
         {
-            let (cancel, mut cancellation) = crate::sudo::cancellation_channel();
+            let (cancel, mut cancellation) = crate::cancel::channel();
             if signal > 0 {
-                cancel.send(signal).unwrap();
+                cancel.cancel(signal);
             }
             run_session(
                 reader,
@@ -1506,7 +1490,7 @@ mod native {
             .await
         }
         fn completion_unknown(outcome: Result<RemoteOutcome, AppError>) -> bool {
-            matches!(outcome, Err(AppError::SudoCompletionUnconfirmed(_)))
+            matches!(outcome, Err(AppError::Sudo(error)) if error.completion() == Completion::Unconfirmed)
         }
 
         #[tokio::test]

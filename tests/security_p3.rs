@@ -31,15 +31,18 @@
 //! entry plus inject key — rendered as the dotted `<entry>.inject.<KEY>` path
 //! that `list <entry>` already uses for inject members.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
+#[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
 use std::io;
 use std::path::{Path, PathBuf};
 
-use helpers::{assert_exit, run_ac, Run, SENTINEL_NESTED, SENTINEL_PLAIN};
-use tempfile::TempDir;
+use helpers::{assert_exit, run_ac, toml_string, Run, Workspace, SENTINEL_NESTED, SENTINEL_PLAIN};
 
 const CANARY_PROVIDER: &str = "canary_provider.sh";
 #[cfg(unix)]
@@ -619,10 +622,6 @@ fn env_credential(inject_as: &str) -> String {
     )
 }
 
-fn toml_string(value: &str) -> String {
-    serde_json::to_string(value).expect("test strings serialize")
-}
-
 // ---------------------------------------------------------------------------
 // Invocation
 // ---------------------------------------------------------------------------
@@ -721,64 +720,6 @@ fn assert_stderr_mentions(run: &Run, needle: &str, context: &str) {
         run.stderr
     );
 }
-
-// ---------------------------------------------------------------------------
-// Workspace
-// ---------------------------------------------------------------------------
-
-/// A temp directory holding one row's config, fixture script, and observation
-/// files. Held for as long as the row is invoked against.
-struct Workspace {
-    directory: TempDir,
-}
-
-impl Workspace {
-    fn new() -> Self {
-        Self {
-            directory: TempDir::new().expect("a temp directory is available"),
-        }
-    }
-
-    /// A path inside the workspace. Nothing is created: the conflict rows read
-    /// these paths' absence as evidence.
-    fn path(&self, name: &str) -> PathBuf {
-        self.directory.path().join(name)
-    }
-
-    /// Stages the config at mode 0600, which the Unix permission gate requires
-    /// of any config that should load cleanly.
-    fn stage_config(&self, contents: &str) -> PathBuf {
-        let path = self.path("config.toml");
-        fs::write(&path, contents).expect("the injection config is written");
-        set_mode(&path, 0o600);
-        path
-    }
-
-    /// Copies a fixture script into the workspace and makes it executable, so
-    /// the suite does not depend on the checked-in mode surviving a checkout.
-    fn stage_script(&self, name: &str) -> PathBuf {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join(name);
-        let path = self.path(name);
-        fs::copy(&source, &path)
-            .unwrap_or_else(|error| panic!("failed to stage fixture script {name}: {error}"));
-        set_mode(&path, 0o755);
-        path
-    }
-}
-
-#[cfg(unix)]
-fn set_mode(path: &Path, mode: u32) {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(mode))
-        .unwrap_or_else(|error| panic!("failed to set the mode of {}: {error}", path.display()));
-}
-
-#[cfg(not(unix))]
-fn set_mode(_path: &Path, _mode: u32) {}
 
 fn path_str(path: &Path) -> &str {
     path.to_str().expect("test paths are UTF-8")

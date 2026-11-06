@@ -129,7 +129,7 @@ impl Secret {
         &self.0
     }
 
-    #[cfg(all(feature = "test-keychain", debug_assertions))]
+    #[cfg(all(feature = "test-support", debug_assertions))]
     pub(crate) fn as_bytes(&self) -> &[u8] {
         self.0.as_bytes()
     }

@@ -1,6 +1,6 @@
 //! Terminal behavior is exercised through a PTY with synthetic credentials and
 //! the test-only store. No test accesses the platform credential store.
-#![cfg(all(unix, feature = "test-keychain"))]
+#![cfg(all(unix, feature = "test-support"))]
 
 use std::fs;
 use std::io::{Read, Write};

@@ -9,7 +9,7 @@ use agentenv::error::AppError;
 #[cfg(unix)]
 pub(super) fn install_signal_forwarder(
     runtime: &tokio::runtime::Runtime,
-    cancel: tokio::sync::watch::Sender<i32>,
+    cancel: agentenv::cancel::Canceller,
     error: impl Fn() -> AppError,
 ) -> Result<(), AppError> {
     runtime.block_on(async move {
@@ -27,24 +27,10 @@ pub(super) fn install_signal_forwarder(
                 _ = terminate.recv() => libc::SIGTERM,
                 _ = hangup.recv() => libc::SIGHUP,
             };
-            let _ = cancel.send(signal);
+            cancel.cancel(signal);
         });
         Ok(())
     })
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(super) fn install_signal_forwarder(
-    runtime: &tokio::runtime::Runtime,
-    cancel: tokio::sync::watch::Sender<i32>,
-    _error: impl Fn() -> AppError,
-) -> Result<(), AppError> {
-    runtime.spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            let _ = cancel.send(2);
-        }
-    });
-    Ok(())
 }
 
 /// Install both handlers before starting any operation. Signal numbers belong
@@ -52,7 +38,7 @@ pub(super) fn install_signal_forwarder(
 #[cfg(windows)]
 pub(super) fn install_signal_forwarder(
     runtime: &tokio::runtime::Runtime,
-    cancel: tokio::sync::watch::Sender<i32>,
+    cancel: agentenv::cancel::Canceller,
     error: impl Fn() -> AppError,
 ) -> Result<(), AppError> {
     runtime.block_on(async move {
@@ -74,7 +60,7 @@ pub(super) fn install_signal_forwarder(
                 };
                 if !forwarded {
                     forwarded = true;
-                    let _ = cancel.send(signal);
+                    cancel.cancel(signal);
                 }
             }
         });

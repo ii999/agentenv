@@ -4,7 +4,7 @@ use crate::credential::{
 };
 use crate::error::AppError;
 
-#[cfg(all(feature = "test-keychain", debug_assertions))]
+#[cfg(all(feature = "test-support", debug_assertions))]
 use crate::credential::test_store::TestStore;
 
 pub(crate) struct KeychainProvider {
@@ -45,7 +45,7 @@ impl KeychainProvider {
     }
 
     fn read(&self) -> Result<Secret, ReadFailure> {
-        #[cfg(all(feature = "test-keychain", debug_assertions))]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         if let Some(store) = TestStore::from_environment() {
             return store
                 .read(&self.service, &self.account)
@@ -97,7 +97,7 @@ impl Provider for KeychainProvider {
     }
 
     fn store(&self, value: Secret) -> Result<(), AppError> {
-        #[cfg(all(feature = "test-keychain", debug_assertions))]
+        #[cfg(all(feature = "test-support", debug_assertions))]
         if let Some(store) = TestStore::from_environment() {
             return store.write(&self.service, &self.account, &value);
         }

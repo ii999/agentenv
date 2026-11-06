@@ -1,6 +1,5 @@
-use std::fs::{self, File};
+use std::fs;
 use std::future::Future;
-use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
@@ -12,23 +11,22 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use zeroize::Zeroizing;
 
+use super::askpass_channel::{FieldError, SUDO};
 use super::{
-    Cancellation, ExecutionOutcome, ExecutionRequest, LocalOptions, ProcessIo, PROTOCOL_VERSION,
-    SUDO_PASSWORD_LIMIT,
+    execution_error, Cancellation, ExecutionOutcome, ExecutionRequest, LocalOptions, ProcessIo,
+    Reason, SudoError, SUDO_PASSWORD_LIMIT,
 };
 use crate::credential::Secret;
 use crate::error::AppError;
 
-const MAGIC: &[u8; 5] = b"AGES\x01";
-const MAX_FIELD: usize = 4096;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const ROUTE_SOCKET: &str = "AGENTENV_SUDO_SOCKET";
 const ROUTE_SESSION: &str = "AGENTENV_SUDO_SESSION";
 
 pub(super) async fn check(options: &LocalOptions) -> Result<(), AppError> {
     validate_account(&options.auth_user)?;
-    validate_executable(&options.sudo_path, "sudo-unavailable")?;
-    validate_executable(&options.helper_path, "helper-missing")?;
+    validate_executable(&options.sudo_path, Reason::SudoUnavailable)?;
+    validate_executable(&options.helper_path, Reason::HelperMissing)?;
     check_helper_identity(&options.helper_path, options.setup_timeout, None).await?;
     let runtime = Runtime::create()?;
     runtime.validate()?;
@@ -47,16 +45,19 @@ where
     Fut: Future<Output = Result<Secret, AppError>>,
 {
     validate_account(&options.auth_user)?;
-    validate_executable(&options.sudo_path, "sudo-unavailable")?;
-    validate_executable(&options.helper_path, "helper-missing")?;
+    validate_executable(&options.sudo_path, Reason::SudoUnavailable)?;
+    validate_executable(&options.helper_path, Reason::HelperMissing)?;
     if let Some(cwd) = request.cwd() {
         let metadata = fs::metadata(cwd)
-            .map_err(|_| owned("invalid-cwd", "working directory is unavailable"))?;
+            .map_err(|_| execution_error(Reason::InvalidCwd, "working directory is unavailable"))?;
         if !metadata.is_dir() {
-            return Err(owned("invalid-cwd", "working directory is not a directory"));
+            return Err(execution_error(
+                Reason::InvalidCwd,
+                "working directory is not a directory",
+            ));
         }
     }
-    if let Some(signal) = pending_signal(&cancellation) {
+    if let Some(signal) = cancellation.pending() {
         return Ok(cancelled(signal));
     }
     if let Some(signal) = check_helper_identity(
@@ -101,13 +102,13 @@ where
         command.current_dir(cwd);
     }
     command.as_std_mut().process_group(0);
-    if let Some(signal) = pending_signal(&cancellation) {
+    if let Some(signal) = cancellation.pending() {
         return Ok(cancelled(signal));
     }
     let mut child = command
         .spawn()
-        .map_err(|_| owned("spawn-failed", "could not start sudo"))?;
-    if let Some(signal) = pending_signal(&cancellation) {
+        .map_err(|_| execution_error(Reason::SpawnFailed, "could not start sudo"))?;
+    if let Some(signal) = cancellation.pending() {
         let status = terminate(&mut child, signal).await?;
         return Ok(observed(status, false));
     }
@@ -127,19 +128,14 @@ where
         resolve_password,
     ));
     let mut password_delivered = false;
-    let mut cancellation_open = true;
     loop {
         tokio::select! {
             biased;
-            changed = cancellation.changed(), if cancellation_open => {
-                if changed.is_err() {
-                    cancellation_open = false;
-                } else if let Some(signal) = pending_signal(&cancellation) {
-                    let _ = fs::remove_file(&socket);
-                    drop(broker);
-                    let status = terminate(&mut child, signal).await?;
-                    return Ok(observed(status, password_delivered));
-                }
+            signal = cancellation.requested() => {
+                let _ = fs::remove_file(&socket);
+                drop(broker);
+                let status = terminate(&mut child, signal).await?;
+                return Ok(observed(status, password_delivered));
             }
             broker_result = &mut broker, if !password_delivered => {
                 let _ = fs::remove_file(&socket);
@@ -157,11 +153,6 @@ where
             }
         }
     }
-}
-
-fn pending_signal(cancellation: &Cancellation) -> Option<i32> {
-    let signal = *cancellation.borrow();
-    (signal > 0).then_some(signal)
 }
 
 fn observed(status: ExitStatus, password_delivered: bool) -> ExecutionOutcome {
@@ -223,7 +214,7 @@ where
     let (mut stream, _) = listener
         .accept()
         .await
-        .map_err(|_| owned("broker-failed", "could not accept the sudo helper"))?;
+        .map_err(|_| execution_error(Reason::BrokerFailed, "could not accept the sudo helper"))?;
     let mut stream = tokio::time::timeout(setup_timeout, async {
         validate_peer(&stream)?;
         let received_session = read_field(&mut stream).await?;
@@ -231,51 +222,44 @@ where
         if received_session.as_slice() != session.as_bytes()
             || prompt.as_slice() != expected_prompt.as_bytes()
         {
-            let _ = write_failure(&mut stream).await;
-            return Err(owned(
-                "authentication-rejected",
+            let _ = SUDO.refuse(&mut stream).await;
+            return Err(execution_error(
+                Reason::AuthenticationRejected,
                 "sudo requested an unexpected account or prompt",
             ));
         }
         Ok(stream)
     })
     .await
-    .map_err(|_| owned("helper-timeout", "the sudo helper request timed out"))??;
-    fs::remove_file(socket)
-        .map_err(|_| owned("broker-failed", "could not disarm the sudo helper socket"))?;
+    .map_err(|_| execution_error(Reason::HelperTimeout, "the sudo helper request timed out"))??;
+    fs::remove_file(socket).map_err(|_| {
+        execution_error(
+            Reason::BrokerFailed,
+            "could not disarm the sudo helper socket",
+        )
+    })?;
 
     tokio::time::timeout(auth_timeout, async {
         let secret = match resolve_password().await {
             Ok(secret) => secret,
             Err(_) => {
-                let _ = write_failure(&mut stream).await;
+                let _ = SUDO.refuse(&mut stream).await;
                 return Err(credential_failure());
             }
         };
         if secret.validate_authentication(SUDO_PASSWORD_LIMIT).is_err() {
-            let _ = write_failure(&mut stream).await;
+            let _ = SUDO.refuse(&mut stream).await;
             return Err(credential_failure());
         }
-        stream
-            .write_all(MAGIC)
-            .await
-            .map_err(|_| owned("broker-failed", "could not reply to the sudo helper"))?;
-        stream
-            .write_u8(0)
-            .await
-            .map_err(|_| owned("broker-failed", "could not reply to the sudo helper"))?;
-        stream
-            .write_u16(secret.as_str().len() as u16)
-            .await
-            .map_err(|_| owned("broker-failed", "could not reply to the sudo helper"))?;
-        stream
-            .write_all(secret.as_str().as_bytes())
-            .await
-            .map_err(|_| owned("broker-failed", "could not reply to the sudo helper"))?;
-        stream
-            .shutdown()
-            .await
-            .map_err(|_| owned("broker-failed", "could not close the sudo helper response"))?;
+        SUDO.write_secret(&mut stream, &secret).await.map_err(|_| {
+            execution_error(Reason::BrokerFailed, "could not reply to the sudo helper")
+        })?;
+        stream.shutdown().await.map_err(|_| {
+            execution_error(
+                Reason::BrokerFailed,
+                "could not close the sudo helper response",
+            )
+        })?;
         Ok(())
     })
     .await
@@ -283,41 +267,15 @@ where
 }
 
 async fn read_field(stream: &mut UnixStream) -> Result<Zeroizing<Vec<u8>>, AppError> {
-    let mut magic = [0; 5];
-    stream
-        .read_exact(&mut magic)
-        .await
-        .map_err(|_| owned("broker-invalid", "the sudo helper request was incomplete"))?;
-    if &magic != MAGIC {
-        return Err(owned(
-            "broker-invalid",
-            "the sudo helper request was invalid",
-        ));
-    }
-    let length = stream
-        .read_u16()
-        .await
-        .map_err(|_| owned("broker-invalid", "the sudo helper request was incomplete"))?
-        as usize;
-    if length == 0 || length > MAX_FIELD {
-        return Err(owned(
-            "broker-invalid",
-            "the sudo helper request was invalid",
-        ));
-    }
-    let mut field = Zeroizing::new(vec![0; length]);
-    stream
-        .read_exact(&mut field)
-        .await
-        .map_err(|_| owned("broker-invalid", "the sudo helper request was incomplete"))?;
-    Ok(field)
-}
-
-async fn write_failure(stream: &mut UnixStream) -> std::io::Result<()> {
-    stream.write_all(MAGIC).await?;
-    stream.write_u8(1).await?;
-    stream.write_u16(0).await?;
-    stream.shutdown().await
+    SUDO.read_field(stream).await.map_err(|error| {
+        execution_error(
+            Reason::BrokerInvalid,
+            match error {
+                FieldError::Incomplete => "the sudo helper request was incomplete",
+                FieldError::Invalid => "the sudo helper request was invalid",
+            },
+        )
+    })
 }
 
 fn validate_peer(stream: &UnixStream) -> Result<(), AppError> {
@@ -335,8 +293,8 @@ fn validate_peer(stream: &UnixStream) -> Result<(), AppError> {
         ) != 0
             || credentials.assume_init().uid != libc::getuid()
         {
-            return Err(owned(
-                "peer-rejected",
+            return Err(execution_error(
+                Reason::PeerRejected,
                 "the sudo helper peer is not the invoking user",
             ));
         }
@@ -345,8 +303,8 @@ fn validate_peer(stream: &UnixStream) -> Result<(), AppError> {
     unsafe {
         let (mut uid, mut gid) = (0, 0);
         if libc::getpeereid(fd, &mut uid, &mut gid) != 0 || uid != libc::getuid() {
-            return Err(owned(
-                "peer-rejected",
+            return Err(execution_error(
+                Reason::PeerRejected,
                 "the sudo helper peer is not the invoking user",
             ));
         }
@@ -359,10 +317,7 @@ async fn check_helper_identity(
     timeout: Duration,
     mut cancellation: Option<&mut Cancellation>,
 ) -> Result<Option<i32>, AppError> {
-    let expected = format!(
-        "agentenv-sudo-helper {PROTOCOL_VERSION} {}\n",
-        env!("CARGO_PKG_VERSION")
-    );
+    let expected = format!("{}\n", super::deploy::expected_identity());
     let mut command = Command::new(path);
     command
         .arg("--identity")
@@ -372,15 +327,18 @@ async fn check_helper_identity(
         .stderr(Stdio::null())
         .kill_on_drop(true);
     apply_curated_environment(&mut command);
-    if let Some(signal) = cancellation.as_deref().and_then(pending_signal) {
+    if let Some(signal) = cancellation.as_deref().and_then(Cancellation::pending) {
         return Ok(Some(signal));
     }
-    let mut child = command
-        .spawn()
-        .map_err(|_| owned("helper-missing", "the sudo helper could not be started"))?;
+    let mut child = command.spawn().map_err(|_| {
+        execution_error(
+            Reason::HelperMissing,
+            "the sudo helper could not be started",
+        )
+    })?;
     let stdout = child.stdout.take().ok_or_else(|| {
-        owned(
-            "helper-mismatch",
+        execution_error(
+            Reason::HelperMismatch,
             "the sudo helper identity could not be read",
         )
     })?;
@@ -413,8 +371,8 @@ async fn check_helper_identity(
                 let _ = child.wait().await;
                 reader.abort();
                 let _ = reader.await;
-                return Err(owned(
-                    "helper-timeout",
+                return Err(execution_error(
+                    Reason::HelperTimeout,
                     "the sudo helper identity check timed out",
                 ));
             }
@@ -422,43 +380,40 @@ async fn check_helper_identity(
             result = &mut reader, if output.is_none() => output = Some(result),
         }
     }
-    let status = status
-        .and_then(Result::ok)
-        .ok_or_else(|| owned("helper-mismatch", "the sudo helper identity check failed"))?;
+    let status = status.and_then(Result::ok).ok_or_else(|| {
+        execution_error(
+            Reason::HelperMismatch,
+            "the sudo helper identity check failed",
+        )
+    })?;
     let output = output
         .and_then(Result::ok)
         .and_then(Result::ok)
-        .ok_or_else(|| owned("helper-mismatch", "the sudo helper identity check failed"))?;
+        .ok_or_else(|| {
+            execution_error(
+                Reason::HelperMismatch,
+                "the sudo helper identity check failed",
+            )
+        })?;
     if !status.success() || output != expected.as_bytes() {
-        return Err(owned(
-            "helper-mismatch",
+        return Err(execution_error(
+            Reason::HelperMismatch,
             "the sudo helper identity or protocol version does not match agentenv",
         ));
     }
     Ok(None)
 }
 
-async fn wait_for_signal(cancellation: &mut Cancellation) -> i32 {
-    loop {
-        if let Some(signal) = pending_signal(cancellation) {
-            return signal;
-        }
-        if cancellation.changed().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
 async fn wait_for_optional_signal(cancellation: &mut Option<&mut Cancellation>) -> i32 {
     match cancellation.as_deref_mut() {
-        Some(cancellation) => wait_for_signal(cancellation).await,
+        Some(cancellation) => cancellation.requested().await,
         None => std::future::pending().await,
     }
 }
 
-fn validate_executable(path: &Path, reason: &str) -> Result<(), AppError> {
+fn validate_executable(path: &Path, reason: Reason) -> Result<(), AppError> {
     let metadata = fs::symlink_metadata(path)
-        .map_err(|_| owned(reason, "the configured executable is unavailable"))?;
+        .map_err(|_| execution_error(reason, "the configured executable is unavailable"))?;
     let owner = metadata.uid();
     if metadata.file_type().is_symlink()
         || !metadata.file_type().is_file()
@@ -466,7 +421,7 @@ fn validate_executable(path: &Path, reason: &str) -> Result<(), AppError> {
         || metadata.permissions().mode() & 0o111 == 0
         || metadata.permissions().mode() & 0o022 != 0
     {
-        return Err(owned(
+        return Err(execution_error(
             reason,
             "the configured executable is not a safe executable file",
         ));
@@ -478,8 +433,8 @@ fn validate_account(expected: &str) -> Result<(), AppError> {
     unsafe {
         let uid = libc::getuid();
         if libc::geteuid() != uid {
-            return Err(owned(
-                "account-mismatch",
+            return Err(execution_error(
+                Reason::AccountMismatch,
                 "agentenv is already running with a different effective user",
             ));
         }
@@ -497,8 +452,8 @@ fn validate_account(expected: &str) -> Result<(), AppError> {
         ) != 0
             || result.is_null()
         {
-            return Err(owned(
-                "account-unavailable",
+            return Err(execution_error(
+                Reason::AccountUnavailable,
                 "the invoking account could not be determined",
             ));
         }
@@ -506,14 +461,14 @@ fn validate_account(expected: &str) -> Result<(), AppError> {
         let actual = std::ffi::CStr::from_ptr(record.pw_name)
             .to_str()
             .map_err(|_| {
-                owned(
-                    "account-unavailable",
+                execution_error(
+                    Reason::AccountUnavailable,
                     "the invoking account name is not valid UTF-8",
                 )
             })?;
         if actual != expected {
-            return Err(owned(
-                "account-mismatch",
+            return Err(execution_error(
+                Reason::AccountMismatch,
                 "the configured sudo account is not the invoking account",
             ));
         }
@@ -542,18 +497,30 @@ impl Runtime {
             .prefix("agentenv-sudo-")
             .tempdir()
             .map_err(|_| {
-                owned(
-                    "broker-setup",
+                execution_error(
+                    Reason::BrokerSetup,
                     "could not create a private runtime directory",
                 )
             })?;
-        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
-            .map_err(|_| owned("broker-setup", "could not protect the runtime directory"))?;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).map_err(|_| {
+            execution_error(
+                Reason::BrokerSetup,
+                "could not protect the runtime directory",
+            )
+        })?;
         let socket = directory.path().join("askpass.sock");
-        let listener = UnixListener::bind(&socket)
-            .map_err(|_| owned("broker-setup", "could not create the sudo helper socket"))?;
-        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
-            .map_err(|_| owned("broker-setup", "could not protect the sudo helper socket"))?;
+        let listener = UnixListener::bind(&socket).map_err(|_| {
+            execution_error(
+                Reason::BrokerSetup,
+                "could not create the sudo helper socket",
+            )
+        })?;
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).map_err(|_| {
+            execution_error(
+                Reason::BrokerSetup,
+                "could not protect the sudo helper socket",
+            )
+        })?;
         let runtime = Self {
             _directory: directory,
             socket,
@@ -565,10 +532,12 @@ impl Runtime {
 
     fn validate(&self) -> Result<(), AppError> {
         let uid = unsafe { libc::getuid() };
-        let directory = fs::symlink_metadata(self._directory.path())
-            .map_err(|_| owned("broker-setup", "the runtime directory disappeared"))?;
-        let socket = fs::symlink_metadata(&self.socket)
-            .map_err(|_| owned("broker-setup", "the sudo helper socket disappeared"))?;
+        let directory = fs::symlink_metadata(self._directory.path()).map_err(|_| {
+            execution_error(Reason::BrokerSetup, "the runtime directory disappeared")
+        })?;
+        let socket = fs::symlink_metadata(&self.socket).map_err(|_| {
+            execution_error(Reason::BrokerSetup, "the sudo helper socket disappeared")
+        })?;
         if directory.file_type().is_symlink()
             || !directory.is_dir()
             || directory.uid() != uid
@@ -578,8 +547,8 @@ impl Runtime {
             || socket.uid() != uid
             || socket.mode() & 0o177 != 0
         {
-            return Err(owned(
-                "broker-setup",
+            return Err(execution_error(
+                Reason::BrokerSetup,
                 "the sudo helper socket is not owner-only",
             ));
         }
@@ -588,25 +557,16 @@ impl Runtime {
 }
 
 fn random_session() -> Result<String, AppError> {
-    let mut bytes = [0_u8; 24];
-    File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| owned("broker-setup", "could not create a sudo session identifier"))?;
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        use std::fmt::Write as _;
-        write!(&mut encoded, "{byte:02x}")
-            .map_err(|_| owned("broker-setup", "could not create a sudo session identifier"))?;
-    }
-    Ok(encoded)
-}
-
-fn owned(reason: &str, detail: &str) -> AppError {
-    AppError::SudoExecution(format!("{reason}: {detail}"))
+    crate::random::nonce().map_err(|_| {
+        execution_error(
+            Reason::BrokerSetup,
+            "could not create a sudo session identifier",
+        )
+    })
 }
 
 fn uncertain(detail: &str) -> AppError {
-    AppError::SudoCompletionUnconfirmed(detail.to_owned())
+    SudoError::unobserved(detail).into()
 }
 
 fn credential_failure() -> AppError {

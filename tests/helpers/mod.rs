@@ -1,16 +1,25 @@
 //! Shared invocation harness for the agentenv integration suites.
 //!
 //! Each integration test file compiles as its own binary, so every suite
-//! (`security_p1` today; `query_p1`, `credential_p2`, `security_p3` later)
 //! pulls this module in with `mod helpers;`. Suites use different subsets of
 //! the harness, which is why unused items are tolerated here.
 #![allow(dead_code)]
 
+mod project;
+mod workspace;
+
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use assert_cmd::Command;
 use tempfile::TempDir;
+
+// Each suite imports only the fixtures it needs.
+#[allow(unused_imports)]
+pub use project::ProjectFixture;
+#[allow(unused_imports)]
+pub use workspace::Workspace;
 
 /// Planted secret values, one per fixture that carries a suspected plaintext
 /// secret. Distinct and high-entropy so a leak is unambiguous and no value is
@@ -21,8 +30,8 @@ pub const SENTINEL_ARRAY: &str = "sk-sentinel-c3-7q2v5z";
 pub const SENTINEL_UPPER: &str = "sk-sentinel-d4-1w6y3n";
 pub const SENTINEL_PARSE: &str = "sk-sentinel-e5-8h2j4r";
 
-/// Every planted secret. `run_ac` checks all of them on every invocation it
-/// captures, so no suite can opt out of the no-secret invariant.
+/// Every planted secret. [`Run::from_output`] checks all of them on every
+/// invocation it captures, so no suite can opt out of the no-secret invariant.
 pub const SENTINELS: &[&str] = &[
     SENTINEL_PLAIN,
     SENTINEL_NESTED,
@@ -67,6 +76,20 @@ pub struct Run {
 }
 
 impl Run {
+    /// Captures a finished agentenv process, checking both channels for
+    /// planted secrets before the caller sees them. Every suite that spawns
+    /// agentenv itself goes through here, so none can skip the no-secret
+    /// invariant.
+    pub fn from_output(output: Output, args: &[&str]) -> Self {
+        let run = Self {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            code: output.status.code(),
+        };
+        assert_no_sentinels(&run, args);
+        run
+    }
+
     /// Both channels joined, for assertions that do not care which one carried
     /// the message.
     pub fn combined(&self) -> String {
@@ -113,14 +136,7 @@ pub fn run_ac(config: &Path, envs: &[(&str, &str)], args: &[&str]) -> Run {
     let output = command
         .output()
         .unwrap_or_else(|error| panic!("failed to run agentenv {args:?}: {error}"));
-
-    let run = Run {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        code: output.status.code(),
-    };
-    assert_no_sentinels(&run, args);
-    run
+    Run::from_output(output, args)
 }
 
 /// Finds the nearest existing directory in the path controlled by the test.
@@ -214,10 +230,7 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn new(name: &str) -> Self {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join(name);
+        let source = fixture_source(name);
         let dir = TempDir::new().expect("failed to create a temp dir for a fixture config");
         let path = dir.path().join(name);
 
@@ -233,13 +246,77 @@ impl Fixture {
     }
 }
 
+/// The checked-in file `name` under `tests/fixtures`.
+fn fixture_source(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
+/// Quotes `value` as a TOML basic string. JSON string escaping is a subset of
+/// TOML's, so the serialized form is valid TOML.
+pub fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).expect("test strings serialize")
+}
+
+/// A command-provider credential that runs `script` through `/bin/sh -c`, for
+/// suites that exercise the resolver directly.
 #[cfg(unix)]
+pub fn command_credential(
+    script: &str,
+    usages: Vec<agentenv::config::CredentialUsage>,
+) -> agentenv::config::CredentialDef {
+    agentenv::config::CredentialDef {
+        name: "lab".into(),
+        description: "Synthetic command credential fixture".into(),
+        inject_as: None,
+        usages,
+        provider: agentenv::config::Provider::Command {
+            argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
+        },
+    }
+}
+
+/// The name of the account running the tests, which the sudo helper reports
+/// as its authenticating user.
+#[cfg(unix)]
+pub fn account_name() -> String {
+    let output = std::process::Command::new("/usr/bin/id")
+        .arg("-un")
+        .output()
+        .expect("id is available");
+    String::from_utf8(output.stdout)
+        .expect("account is UTF-8")
+        .trim_end()
+        .to_owned()
+}
+
+/// Writes `source` as an executable stand-in for `sudo` in a fresh temp
+/// directory. The directory is removed when the returned value is dropped,
+/// so tests hold it for as long as the stand-in may run.
+#[cfg(unix)]
+pub fn fake_sudo(source: &str) -> (TempDir, PathBuf) {
+    let directory = TempDir::new().expect("a temp dir for a fake sudo");
+    let path = directory.path().join("sudo");
+    fs::write(&path, source).expect("write fake sudo");
+    set_mode(&path, 0o700);
+    (directory, path)
+}
+
+/// Restricts a config to mode 0600, which the Unix permission gate requires
+/// of any config that should load cleanly.
 fn restrict_permissions(path: &Path) {
+    set_mode(path, 0o600);
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
 
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .unwrap_or_else(|error| panic!("failed to restrict {}: {error}", path.display()));
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .unwrap_or_else(|error| panic!("failed to set the mode of {}: {error}", path.display()));
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}
+fn set_mode(_path: &Path, _mode: u32) {}

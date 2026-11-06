@@ -1,6 +1,6 @@
 //! Dialog preflight stays ahead of GUI and credential resolution. Interactive
 //! acceptance uses a real window with a separate test-owned credential store.
-#![cfg(feature = "test-keychain")]
+#![cfg(feature = "test-support")]
 
 mod helpers;
 

@@ -10,7 +10,7 @@ use agentenv::path::Segments;
 use agentenv::project::{self, model::ProjectFileMeta, ProjectContext, UntrustedReason};
 use agentenv::query::entry_table;
 
-use super::{Output, ProjectArgs, ProjectCommand};
+use super::{json_line, Output, ProjectArgs, ProjectCommand};
 
 /// Executes a project subcommand. Project commands own discovery so the
 /// top-level prelude can remain inert for this command group.
@@ -40,7 +40,7 @@ fn status(
     let report = StatusReport::from_context(&context, config.as_ref(), profile_flag, env);
     let status = report.exit_status(&context);
     let stdout = if json_output {
-        json_stdout(report.json(version))
+        json_line(report.json(version))
     } else {
         report.text(version)
     };
@@ -409,8 +409,4 @@ impl RequirementEntry {
             "missing": self.missing,
         })
     }
-}
-
-fn json_stdout(value: JsonValue) -> String {
-    serde_json::to_string(&value).expect("project status JSON is serializable") + "\n"
 }

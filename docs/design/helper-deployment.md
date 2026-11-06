@@ -1,8 +1,8 @@
 # Remote sudo helper deployment
 
 Status: implemented, 2026-09-24 (branch `helper-deployment`). Extends
-`sudo-execution.md`, whose "Module and distribution boundaries" section
-reserved this as "a future installer ... a separately authorized operation".
+`sudo-execution.md`, whose "Module and distribution boundaries" section keeps
+remote helper installation explicit and never part of normal execution.
 Sections below describe the shipped behaviour; "Evidence" records what has and
 has not run against a real destination.
 
@@ -324,7 +324,7 @@ and contracts, as the sudo-execution milestones did.
 
 ## Evidence
 
-Deterministic tests (`cargo test --features test-keychain`): path grammar
+Deterministic tests (`cargo test --features test-support`): path grammar
 acceptance and refusal including the file-name rule; remote command templates
 and their parameter order; strict preflight parsing for every
 platform/machine/glibc/identity combination including banner, truncated and

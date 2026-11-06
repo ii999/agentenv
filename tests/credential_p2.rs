@@ -1,18 +1,19 @@
 //! Integration coverage for Phase-2 credential resolution and storage.
 //!
-//! The whole suite requires the `test-keychain` feature: without it the
+//! The whole suite requires the `test-support` feature: without it the
 //! binary's keychain provider reaches the user's real credential store, so
 //! these tests must not run at all in an unfeatured build.
-#![cfg(feature = "test-keychain")]
+#![cfg(feature = "test-support")]
 
 mod helpers;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use helpers::toml_string;
 use helpers::{
     assert_exit, assert_mentions, assert_omits, command_with_project_discovery, run_ac, Run,
-    SENTINELS,
 };
 use tempfile::TempDir;
 
@@ -264,11 +265,6 @@ fn command_config(script: &Path, arguments: &[&str]) -> String {
 }
 
 #[cfg(unix)]
-fn toml_string(value: &str) -> String {
-    serde_json::to_string(value).expect("test strings serialize")
-}
-
-#[cfg(unix)]
 fn executable_script(directory: &TempDir, name: &str, contents: &str) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -322,18 +318,5 @@ fn run_with_input(config: &Path, envs: &[(&str, &str)], args: &[&str], input: &[
     command.args(args);
     command.write_stdin(input.to_vec());
     let output = command.output().expect("the command executes");
-    let run = Run {
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        code: output.status.code(),
-    };
-    for (index, sentinel) in SENTINELS.iter().enumerate() {
-        for (channel, text) in [("stdout", &run.stdout), ("stderr", &run.stderr)] {
-            assert!(
-                !text.contains(sentinel),
-                "agentenv {args:?} leaked sentinel #{index} on {channel}"
-            );
-        }
-    }
-    run
+    Run::from_output(output, args)
 }

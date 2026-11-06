@@ -6,6 +6,9 @@
 //! `test-probe` fixture, which answers `--version` with the version the test
 //! announces through `TEST_PROBE_VERSION`.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
 use std::fs::{self, File};
@@ -258,11 +261,7 @@ impl Install {
             .env("TEST_PROBE_VERSION", NEXT)
             .args(args);
         let output = command.output().expect("agentenv runs");
-        Run {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            code: output.status.code(),
-        }
+        Run::from_output(output, args)
     }
 
     fn binary_is_original(&self) -> bool {

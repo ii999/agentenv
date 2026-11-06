@@ -14,12 +14,13 @@ release gap. It is not supported by inference from a related passing case.
 | `tests/sudo_execution_lab/run.py --ssh` | Built client, helper, and askpass companion over real sshd, including explicit helper deployment (46 cases) | Loopback-only sshd inside the container; OpenSSH 10.0p2 client and server; glibc 2.41 destination |
 | `tests/sudo_execution_lab/run.py --release` | sudoers policy variations, SSH refusal cases, and passwordless remote cancellation (16 cases) | Same container; release-specific sudoers and additional loopback sshd instances |
 | `tests/sudo_macos_lab/run.py` | Native macOS client against the Linux destination (8 cases) | macOS 27.0 arm64, OpenSSH_10.3p1 (LibreSSL 3.3.6); destination published only on 127.0.0.1 |
-| `cargo test --features test-keychain` | Protocol, transport, client, resolver, config, askpass, and local-engine contracts | Fake sudo, SSH, and provider processes; no real authentication |
+| `cargo test --features test-support` | Protocol, transport, client, resolver, config, askpass, and local-engine contracts | Fake sudo, SSH, and provider processes; no real authentication |
 | `tests/windows_credentials.rs` and `tests/windows_lab/ssh.py` (CI `windows-latest`) | Native named-pipe resolver and bound askpass boundary; native `OpenSSH_for_Windows` client and askpass against a loopback protocol fixture | GitHub `windows-latest`; the fixture stands in for the remote helper, so no Unix sudo is involved |
 
 The Linux and macOS lab runs recorded here used Docker 29.5.2 on arm64 and
 debug builds (stripped, without debuginfo, since 2026-09-24) with the
-`test-keychain` feature, not release artifacts. All
+test-only feature, then named `test-keychain` and now `test-support`, not
+release artifacts. All
 accounts, passwords, keys, host keys, and sudoers rules are synthetic and belong
 to disposable containers or temporary directories. The CI `sudo-integration`
 job runs the three Linux lab entry points on `ubuntu-latest` (amd64), again
@@ -80,7 +81,7 @@ and arm64 macOS client combinations above.
    without a targeted test" have neither real nor deterministic coverage.
    Excess jump hops have a deterministic parser test only.
 6. **Shipped build and x86_64 macOS.** Every recorded run used debug builds
-   with `test-keychain`; the arm64 runs are local, the amd64 Linux run is the CI
+   with the test-only feature; the arm64 runs are local, the amd64 Linux run is the CI
    `sudo-integration` job recorded above. No release artifact has a recorded
    lab run on any target, and the x86_64 macOS client remains unmeasured.
 7. **Helper deployment from a release.** Deployment has installed the helper

@@ -62,7 +62,7 @@ pub fn parse(bytes: &[u8], file: &Path) -> Result<ProjectFileMeta, Vec<Violation
     let root = text.parse::<Table>().map_err(|error: toml::de::Error| {
         vec![Violation {
             path: file.display().to_string(),
-            message: toml_error_message(text, &error),
+            message: crate::config::toml_error_message(text, &error),
         }]
     })?;
 
@@ -77,39 +77,6 @@ pub fn parse(bytes: &[u8], file: &Path) -> Result<ProjectFileMeta, Vec<Violation
     } else {
         Err(violations)
     }
-}
-
-fn toml_error_message(text: &str, error: &toml::de::Error) -> String {
-    match error.span() {
-        Some(span) => {
-            let (line, column) = line_column(text, span.start);
-            format!(
-                "invalid TOML at line {line}, column {column}: {}",
-                error.message()
-            )
-        }
-        None => format!("invalid TOML: {}", error.message()),
-    }
-}
-
-fn line_column(text: &str, offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut line_start = 0;
-    for (index, character) in text.char_indices() {
-        if index >= offset {
-            break;
-        }
-        if character == '\n' {
-            line += 1;
-            line_start = index + 1;
-        }
-    }
-    let column = text[line_start..]
-        .char_indices()
-        .take_while(|(index, _)| line_start + index < offset)
-        .count()
-        + 1;
-    (line, column)
 }
 
 fn validate_version(root: &Table, violations: &mut Vec<Violation>) {

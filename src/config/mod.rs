@@ -1,4 +1,5 @@
-//! Config loading: locate, read, parse, validate, and build the typed model.
+//! Config loading: locate, read, parse, then validate and decode the typed
+//! model in one pass.
 //!
 //! [`Config::load`] is the single entry point. It aggregates every SPEC-002
 //! violation into one [`AppError::Config`](crate::error::AppError::Config)
@@ -55,12 +56,7 @@ impl Config {
         let path = locate::resolve_path(explicit_file, env)?;
         let text = read_config(&path)?;
         let root = parse_config(&path, &text)?;
-        let violations = validate::validate(&root);
-        if violations.is_empty() {
-            Ok(Config::from_validated(&root))
-        } else {
-            Err(AppError::Config(violations))
-        }
+        validate::decode(&root).map_err(AppError::Config)
     }
 }
 
@@ -94,21 +90,26 @@ fn read_config(path: &Path) -> Result<String, AppError> {
 /// line or any field value.
 fn parse_config(path: &Path, text: &str) -> Result<Table, AppError> {
     text.parse::<Table>().map_err(|error: TomlError| {
-        let message = match error.span() {
-            Some(span) => {
-                let (line, column) = line_column(text, span.start);
-                format!(
-                    "invalid TOML at line {line}, column {column}: {}",
-                    error.message()
-                )
-            }
-            None => format!("invalid TOML: {}", error.message()),
-        };
         AppError::Config(vec![Violation {
             path: path.display().to_string(),
-            message,
+            message: toml_error_message(text, &error),
         }])
     })
+}
+
+/// Describes a TOML parse error by position and parser message, without
+/// echoing the source line or any field value.
+pub(crate) fn toml_error_message(text: &str, error: &TomlError) -> String {
+    match error.span() {
+        Some(span) => {
+            let (line, column) = line_column(text, span.start);
+            format!(
+                "invalid TOML at line {line}, column {column}: {}",
+                error.message()
+            )
+        }
+        None => format!("invalid TOML: {}", error.message()),
+    }
 }
 
 /// One-based line and column of `offset` within `text`.

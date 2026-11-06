@@ -1,43 +1,32 @@
 //! Remote helper lifecycle built on the bounded sudo transport.
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use std::os::fd::OwnedFd;
+use std::os::unix::net::UnixStream as StdUnixStream;
+use std::process::Stdio;
+use std::time::Duration;
 
-use crate::error::AppError;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::UnixStream;
+use tokio::sync::{mpsc, oneshot};
 
-#[cfg(unix)]
-use {
-    std::os::fd::OwnedFd,
-    std::os::unix::net::UnixStream as StdUnixStream,
-    std::process::Stdio,
-    std::time::Duration,
-    tokio::io::{AsyncReadExt, AsyncWriteExt},
-    tokio::net::UnixStream,
-    tokio::sync::{mpsc, oneshot},
-};
-
-#[cfg(unix)]
-use crate::credential::Secret;
-
-#[cfg(unix)]
 use super::{
-    cancellation_channel, check_local, companion_path, execute_local,
+    check_local, companion_path, execute_local, execution_error,
     protocol::{
         read_frame, write_frame, Cancel, ExecutionResult, Failure, FailureReason, Frame, Hello,
         MessageKind, Mode, PasswordRequest, Ready, Start, Stream, MAX_STREAM_CHUNK_SIZE, VERSION,
     },
     transport::{self, Side, StreamEvent, StreamReceiver, TransportError, TransportSender},
-    ExecutionRequest, LocalOptions, ProcessIo, SUDO_PASSWORD_LIMIT,
+    Completion, ExecutionRequest, LocalOptions, ProcessIo, Reason, SudoError, SUDO_PASSWORD_LIMIT,
 };
+use crate::credential::Secret;
+use crate::error::AppError;
 
-#[cfg(unix)]
 const INITIAL_HELLO_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long output may stay open after the process exited and Cancel arrived.
-#[cfg(unix)]
 const OUTPUT_CANCEL_GRACE: Duration = Duration::from_secs(5);
 
 /// Serves one check or execute request. The caller supplies the protocol-only
 /// stdin/stdout channel; target streams remain on their own bounded frames.
-#[cfg(unix)]
 pub async fn serve<R, W>(mut reader: R, mut writer: W) -> Result<(), AppError>
 where
     R: AsyncRead + Unpin + Send + 'static,
@@ -45,19 +34,19 @@ where
 {
     let hello_frame = tokio::time::timeout(INITIAL_HELLO_TIMEOUT, read_frame(&mut reader))
         .await
-        .map_err(|_| remote_error("hello-timeout", "the remote hello timed out"))?
-        .map_err(|_| remote_error("protocol", "the remote hello was invalid"))?
-        .ok_or_else(|| remote_error("protocol", "the remote hello was missing"))?;
+        .map_err(|_| execution_error(Reason::HelloTimeout, "the remote hello timed out"))?
+        .map_err(|_| execution_error(Reason::Protocol, "the remote hello was invalid"))?
+        .ok_or_else(|| execution_error(Reason::Protocol, "the remote hello was missing"))?;
     if hello_frame.kind() != MessageKind::Hello {
-        return Err(remote_error(
-            "protocol",
+        return Err(execution_error(
+            Reason::Protocol,
             "the first remote message was not hello",
         ));
     }
     let request_id = hello_frame.request_id();
     let hello: Hello = hello_frame
         .decode_metadata()
-        .map_err(|_| remote_error("protocol", "the remote hello metadata was invalid"))?;
+        .map_err(|_| execution_error(Reason::Protocol, "the remote hello metadata was invalid"))?;
     let options = match options_from_hello(&hello) {
         Ok(options) => options,
         Err(error) => {
@@ -73,7 +62,12 @@ where
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|path| path.into_os_string().into_string().ok())
-        .ok_or_else(|| remote_error("preflight", "the remote working directory is unavailable"))?;
+        .ok_or_else(|| {
+            execution_error(
+                Reason::Preflight,
+                "the remote working directory is unavailable",
+            )
+        })?;
     let ready = Ready {
         build: env!("CARGO_PKG_VERSION").to_owned(),
         protocol: VERSION,
@@ -89,40 +83,38 @@ where
             "cancel".to_owned(),
         ],
     };
-    let ready = Frame::metadata(MessageKind::Ready, request_id, &ready)
-        .map_err(|_| remote_error("protocol", "the remote ready frame could not be built"))?;
-    write_frame(&mut writer, &ready)
-        .await
-        .map_err(|_| remote_error("transport", "the remote ready frame could not be sent"))?;
-    writer
-        .flush()
-        .await
-        .map_err(|_| remote_error("transport", "the remote ready frame could not be sent"))?;
+    let ready = Frame::metadata(MessageKind::Ready, request_id, &ready).map_err(|_| {
+        execution_error(
+            Reason::Protocol,
+            "the remote ready frame could not be built",
+        )
+    })?;
+    write_frame(&mut writer, &ready).await.map_err(|_| {
+        execution_error(
+            Reason::Transport,
+            "the remote ready frame could not be sent",
+        )
+    })?;
+    writer.flush().await.map_err(|_| {
+        execution_error(
+            Reason::Transport,
+            "the remote ready frame could not be sent",
+        )
+    })?;
 
     if hello.mode == Mode::Check {
-        writer
-            .shutdown()
-            .await
-            .map_err(|_| remote_error("transport", "the remote check could not close cleanly"))?;
+        writer.shutdown().await.map_err(|_| {
+            execution_error(
+                Reason::Transport,
+                "the remote check could not close cleanly",
+            )
+        })?;
         return Ok(());
     }
 
     serve_execution(reader, writer, request_id, hello, options).await
 }
 
-#[cfg(not(unix))]
-pub async fn serve<R, W>(_reader: R, _writer: W) -> Result<(), AppError>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-    W: AsyncWrite + Unpin + Send + 'static,
-{
-    Err(remote_error(
-        "unsupported-platform",
-        "the remote sudo helper is unavailable on this platform",
-    ))
-}
-
-#[cfg(unix)]
 async fn serve_execution<R, W>(
     reader: R,
     writer: W,
@@ -141,15 +133,15 @@ where
             frame = session.control.recv() => Ok(frame),
             changed = failure.changed() => {
                 if changed.is_err() || failure.borrow().is_some() {
-                    Err(remote_error("protocol", "a message arrived before start"))
+                    Err(execution_error(Reason::Protocol, "a message arrived before start"))
                 } else {
-                    Err(remote_error("transport", "the remote transport failed before start"))
+                    Err(execution_error(Reason::Transport, "the remote transport failed before start"))
                 }
             }
         }
     })
     .await
-    .map_err(|_| remote_error("start-timeout", "the remote start request timed out"))?;
+    .map_err(|_| execution_error(Reason::StartTimeout, "the remote start request timed out"))?;
     let start_frame = match start_frame {
         Ok(Some(frame)) => frame,
         Ok(None) => {
@@ -158,12 +150,12 @@ where
                     &session.sender,
                     request_id,
                     FailureReason::Protocol,
-                    remote_error("protocol", "a message arrived before start"),
+                    execution_error(Reason::Protocol, "a message arrived before start"),
                 )
                 .await;
             }
-            return Err(remote_error(
-                "transport",
+            return Err(execution_error(
+                Reason::Transport,
                 "the remote session closed before start",
             ));
         }
@@ -176,19 +168,25 @@ where
             &session.sender,
             request_id,
             FailureReason::Protocol,
-            remote_error("protocol", "the remote start request was out of order"),
+            execution_error(
+                Reason::Protocol,
+                "the remote start request was out of order",
+            ),
         )
         .await;
     }
     let start: Start = start_frame
         .decode_metadata()
-        .map_err(|_| remote_error("protocol", "the remote start metadata was invalid"))?;
+        .map_err(|_| execution_error(Reason::Protocol, "the remote start metadata was invalid"))?;
     if start.auth_user != hello.auth_user {
         return fail_session(
             &session.sender,
             request_id,
             FailureReason::Protocol,
-            remote_error("protocol", "the remote authentication account changed"),
+            execution_error(
+                Reason::Protocol,
+                "the remote authentication account changed",
+            ),
         )
         .await;
     }
@@ -228,7 +226,7 @@ where
     let stderr_sender = session.sender.clone();
     let mut stderr_task = tokio::spawn(pump_output(stderr_io, Stream::Stderr, stderr_sender));
 
-    let (cancel_tx, cancel_rx) = cancellation_channel();
+    let (cancel_tx, cancel_rx) = crate::cancel::channel();
     let (auth_tx, mut auth_rx) = mpsc::channel::<AuthRequest>(1);
     let password_sender = session.sender.clone();
     let auth_user = hello.auth_user;
@@ -277,20 +275,20 @@ where
             control = session.control.recv() => {
                 let Some(control) = control else {
                     cancel_and_wait(&cancel_tx, &mut engine).await;
-                    return Err(remote_error("transport", "the remote control channel closed"));
+                    return Err(execution_error(Reason::Transport, "the remote control channel closed"));
                 };
                 match control.kind() {
                     MessageKind::PasswordResponse => {
                         let Some(reply) = auth_pending.take() else {
                             cancel_and_wait(&cancel_tx, &mut engine).await;
-                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "a password response arrived out of order")).await;
+                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "a password response arrived out of order")).await;
                         };
                         let secret = match control.consume_secret() {
                             Ok(secret) => secret,
                             Err(_) => {
                                 let _ = reply.send(Err(credential_error()));
                                 cancel_and_wait(&cancel_tx, &mut engine).await;
-                                return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "the password response was invalid")).await;
+                                return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "the password response was invalid")).await;
                             }
                         };
                         let _ = reply.send(Ok(secret));
@@ -298,7 +296,7 @@ where
                     MessageKind::PasswordUnavailable => {
                         let Some(reply) = auth_pending.take() else {
                             cancel_and_wait(&cancel_tx, &mut engine).await;
-                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "password unavailability arrived out of order")).await;
+                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "password unavailability arrived out of order")).await;
                         };
                         let _ = reply.send(Err(credential_error()));
                     }
@@ -307,25 +305,25 @@ where
                             Ok(cancel) => cancel,
                             Err(_) => {
                                 cancel_and_wait(&cancel_tx, &mut engine).await;
-                                return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "the remote cancel request was invalid")).await;
+                                return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "the remote cancel request was invalid")).await;
                             }
                         };
                         if !matches!(cancel.signal, libc::SIGHUP | libc::SIGINT | libc::SIGTERM) {
                             cancel_and_wait(&cancel_tx, &mut engine).await;
-                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "the remote cancel signal was invalid")).await;
+                            return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "the remote cancel signal was invalid")).await;
                         }
-                        let _ = cancel_tx.send(cancel.signal);
+                        cancel_tx.cancel(cancel.signal);
                     }
                     _ => {
                         cancel_and_wait(&cancel_tx, &mut engine).await;
-                        return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "a remote control message arrived out of order")).await;
+                        return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "a remote control message arrived out of order")).await;
                     }
                 }
             }
             changed = failure.changed() => {
                 if changed.is_err() || failure.borrow().is_some() {
                     cancel_and_wait(&cancel_tx, &mut engine).await;
-                    return Err(remote_error("transport", "the remote transport failed"));
+                    return Err(execution_error(Reason::Transport, "the remote transport failed"));
                 }
             }
             result = &mut engine => break result,
@@ -352,9 +350,7 @@ where
                         &session.sender,
                         request_id,
                         FailureReason::CompletionUnknown,
-                        AppError::SudoCompletionUnconfirmed(
-                            "remote-output: target stdout could not be completed".to_owned(),
-                        ),
+                        AppError::from(SudoError::unconfirmed(Reason::RemoteOutput, "target stdout could not be completed")),
                     )
                     .await;
                 }
@@ -371,9 +367,7 @@ where
                         &session.sender,
                         request_id,
                         FailureReason::CompletionUnknown,
-                        AppError::SudoCompletionUnconfirmed(
-                            "remote-output: target stderr could not be completed".to_owned(),
-                        ),
+                        AppError::from(SudoError::unconfirmed(Reason::RemoteOutput, "target stderr could not be completed")),
                     )
                     .await;
                 }
@@ -383,7 +377,7 @@ where
                 let Some(control) = control else {
                     stdout_task.abort();
                     stderr_task.abort();
-                    return Err(remote_error("transport", "the remote control channel closed"));
+                    return Err(execution_error(Reason::Transport, "the remote control channel closed"));
                 };
                 match control.kind() {
                     // A reply to a request that crossed the client's Cancel
@@ -398,7 +392,7 @@ where
                         // The target already ran; only its output is incomplete.
                         stdout_task.abort();
                         stderr_task.abort();
-                        return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, remote_error("protocol", "an invalid control message arrived after process completion")).await;
+                        return fail_session(&session.sender, request_id, FailureReason::CompletionUnknown, execution_error(Reason::Protocol, "an invalid control message arrived after process completion")).await;
                     }
                 }
                 output_deadline.get_or_insert_with(|| tokio::time::Instant::now() + OUTPUT_CANCEL_GRACE);
@@ -407,7 +401,7 @@ where
                 if changed.is_err() || failure.borrow().is_some() {
                     stdout_task.abort();
                     stderr_task.abort();
-                    return Err(remote_error("transport", "the remote transport failed"));
+                    return Err(execution_error(Reason::Transport, "the remote transport failed"));
                 }
             }
             _ = sleep_until_deadline(output_deadline), if output_deadline.is_some() => {
@@ -417,9 +411,7 @@ where
                     &session.sender,
                     request_id,
                     FailureReason::CompletionUnknown,
-                    AppError::SudoCompletionUnconfirmed(
-                        "remote-output: target output did not finish after cancellation".to_owned(),
-                    ),
+                    AppError::from(SudoError::unconfirmed(Reason::RemoteOutput, "target output did not finish after cancellation")),
                 )
                 .await;
             }
@@ -440,7 +432,9 @@ where
                     password_delivered: outcome.password_delivered,
                 },
             )
-            .map_err(|_| remote_error("protocol", "the remote result could not be built"))?;
+            .map_err(|_| {
+                execution_error(Reason::Protocol, "the remote result could not be built")
+            })?;
             session
                 .sender
                 .send_terminal(result)
@@ -448,9 +442,11 @@ where
                 .map_err(transport_error)
         }
         Err(error) => {
-            let reason = match error {
+            let reason = match &error {
                 AppError::Credential(_) => FailureReason::Credential,
-                AppError::SudoCompletionUnconfirmed(_) => FailureReason::CompletionUnknown,
+                AppError::Sudo(error) if error.completion() == Completion::Unconfirmed => {
+                    FailureReason::CompletionUnknown
+                }
                 _ => FailureReason::Preflight,
             };
             fail_session(&session.sender, request_id, reason, error).await
@@ -458,13 +454,11 @@ where
     }
 }
 
-#[cfg(unix)]
 struct AuthRequest {
     reply: oneshot::Sender<Result<Secret, AppError>>,
     ready: oneshot::Sender<()>,
 }
 
-#[cfg(unix)]
 async fn pump_stdin(
     mut stream: UnixStream,
     mut events: StreamReceiver,
@@ -482,7 +476,10 @@ async fn pump_stdin(
             event = events.recv() => event,
         };
         let Some(event) = event else {
-            return Err(remote_error("transport", "the remote stdin channel closed"));
+            return Err(execution_error(
+                Reason::Transport,
+                "the remote stdin channel closed",
+            ));
         };
         match event {
             StreamEvent::Chunk(bytes) => {
@@ -505,17 +502,15 @@ async fn pump_stdin(
                 }
             }
             StreamEvent::Eof => {
-                stream
-                    .shutdown()
-                    .await
-                    .map_err(|_| remote_error("stream", "target stdin could not be closed"))?;
+                stream.shutdown().await.map_err(|_| {
+                    execution_error(Reason::Stream, "target stdin could not be closed")
+                })?;
                 return Ok(());
             }
         }
     }
 }
 
-#[cfg(unix)]
 async fn drain_stdin(mut events: StreamReceiver, sender: TransportSender) -> Result<(), AppError> {
     while let Some(event) = events.recv().await {
         match event {
@@ -529,7 +524,6 @@ async fn drain_stdin(mut events: StreamReceiver, sender: TransportSender) -> Res
     Ok(())
 }
 
-#[cfg(unix)]
 async fn pump_output(
     mut stream: UnixStream,
     stream_kind: Stream,
@@ -540,7 +534,7 @@ async fn pump_output(
         let count = stream
             .read(&mut buffer)
             .await
-            .map_err(|_| remote_error("stream", "target output could not be read"))?;
+            .map_err(|_| execution_error(Reason::Stream, "target output could not be read"))?;
         if count == 0 {
             sender
                 .send_eof(stream_kind)
@@ -555,33 +549,31 @@ async fn pump_output(
     }
 }
 
-#[cfg(unix)]
 fn socket_pair() -> Result<(UnixStream, Stdio), AppError> {
     let (helper, target) = StdUnixStream::pair()
-        .map_err(|_| remote_error("stream", "a target stream could not be created"))?;
+        .map_err(|_| execution_error(Reason::Stream, "a target stream could not be created"))?;
     helper
         .set_nonblocking(true)
-        .map_err(|_| remote_error("stream", "a target stream could not be configured"))?;
+        .map_err(|_| execution_error(Reason::Stream, "a target stream could not be configured"))?;
     let helper = UnixStream::from_std(helper)
-        .map_err(|_| remote_error("stream", "a target stream could not be configured"))?;
+        .map_err(|_| execution_error(Reason::Stream, "a target stream could not be configured"))?;
     let target: OwnedFd = target.into();
     Ok((helper, Stdio::from(target)))
 }
 
-#[cfg(unix)]
 fn options_from_hello(hello: &Hello) -> Result<LocalOptions, AppError> {
     if hello.setup_timeout_secs == 0
-        || hello.setup_timeout_secs > 300
+        || hello.setup_timeout_secs > super::MAX_TIMEOUT.as_secs()
         || hello.auth_timeout_secs == 0
-        || hello.auth_timeout_secs > 300
+        || hello.auth_timeout_secs > super::MAX_TIMEOUT.as_secs()
     {
-        return Err(remote_error(
-            "preflight",
+        return Err(execution_error(
+            Reason::Preflight,
             "remote timeout values must be between 1 and 300 seconds",
         ));
     }
     let executable = std::env::current_exe()
-        .map_err(|_| remote_error("helper-missing", "the helper path is unavailable"))?;
+        .map_err(|_| execution_error(Reason::HelperMissing, "the helper path is unavailable"))?;
     Ok(LocalOptions {
         sudo_path: hello.sudo_path.clone().into(),
         helper_path: companion_path(&executable)?,
@@ -592,7 +584,6 @@ fn options_from_hello(hello: &Hello) -> Result<LocalOptions, AppError> {
     })
 }
 
-#[cfg(unix)]
 async fn send_direct_failure<W: AsyncWrite + Unpin>(
     writer: &mut W,
     request_id: u64,
@@ -606,7 +597,6 @@ async fn send_direct_failure<W: AsyncWrite + Unpin>(
     }
 }
 
-#[cfg(unix)]
 async fn fail_session(
     sender: &TransportSender,
     request_id: u64,
@@ -619,7 +609,6 @@ async fn fail_session(
     Err(error)
 }
 
-#[cfg(unix)]
 async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -627,27 +616,18 @@ async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-#[cfg(unix)]
-async fn cancel_and_wait<F>(
-    cancel: &tokio::sync::watch::Sender<i32>,
-    engine: &mut std::pin::Pin<Box<F>>,
-) where
+async fn cancel_and_wait<F>(cancel: &crate::cancel::Canceller, engine: &mut std::pin::Pin<Box<F>>)
+where
     F: std::future::Future<Output = Result<super::ExecutionOutcome, AppError>>,
 {
-    let _ = cancel.send(libc::SIGTERM);
+    cancel.cancel(libc::SIGTERM);
     let _ = tokio::time::timeout(Duration::from_secs(6), engine).await;
 }
 
-#[cfg(unix)]
 fn credential_error() -> AppError {
     AppError::Credential("remote sudo credential was unavailable".to_owned())
 }
 
-#[cfg(unix)]
 fn transport_error(_error: TransportError) -> AppError {
-    remote_error("transport", "the remote transport failed")
-}
-
-fn remote_error(reason: &str, message: &str) -> AppError {
-    AppError::SudoExecution(format!("{reason}: {message}"))
+    execution_error(Reason::Transport, "the remote transport failed")
 }

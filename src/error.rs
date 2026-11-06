@@ -40,11 +40,9 @@ pub enum AppError {
     #[error("update error: {0}")]
     Update(String),
 
+    /// A sudo execution failure; its completion decides the exit status.
     #[error("sudo-execution: {0}")]
-    SudoExecution(String),
-
-    #[error("sudo-execution: completion-unconfirmed: {0}")]
-    SudoCompletionUnconfirmed(String),
+    Sudo(crate::sudo::SudoError),
 
     /// A filling failure before any mutation was attempted.
     #[error("credential-fill: {0}")]
@@ -65,8 +63,10 @@ impl AppError {
             Self::Injection(_) => 4,
             Self::ProjectTrust(_) => 5,
             Self::Update(_) => 7,
-            Self::SudoExecution(_) => 9,
-            Self::SudoCompletionUnconfirmed(_) => 10,
+            Self::Sudo(error) => match error.completion() {
+                crate::sudo::Completion::Known => 9,
+                crate::sudo::Completion::Unconfirmed => 10,
+            },
             Self::Fill(_) => 8,
             Self::FillUncertain(_) => 11,
             Self::TargetNotExecutable(_) => 127,

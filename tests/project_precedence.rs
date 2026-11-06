@@ -1,12 +1,13 @@
 //! Integration coverage for trusted project profile pins.
 
+// The suite runs the `test-probe` binary, which builds only with this feature.
+#![cfg(feature = "test-support")]
+
 mod helpers;
 
 use std::fs;
-use std::path::PathBuf;
 
-use helpers::{assert_exit, command_with_project_discovery, read_config, staged_config};
-use tempfile::TempDir;
+use helpers::{assert_exit, read_config, ProjectFixture};
 
 const PROFILES: &str = r#"
 version = 1
@@ -26,57 +27,6 @@ description = "Personal profile"
 description = "Personal model"
 model = "personal-model"
 "#;
-
-struct ProjectFixture {
-    _config_dir: TempDir,
-    config: PathBuf,
-    cwd: PathBuf,
-    project: PathBuf,
-    state: PathBuf,
-}
-
-impl ProjectFixture {
-    fn new(config_text: &str, project_text: &str) -> Self {
-        let (config_dir, config) = staged_config(config_text);
-        let root = config.parent().expect("config has a parent").to_owned();
-        let cwd = root.join("nested/deeper");
-        fs::create_dir_all(&cwd).expect("nested working directory is created");
-        let project = root.join(".agentenv.toml");
-        fs::write(&project, project_text).expect("project file is written");
-        let state = root.join("state");
-        Self {
-            _config_dir: config_dir,
-            config,
-            cwd,
-            project,
-            state,
-        }
-    }
-
-    fn approve(&self) {
-        let env = |name: &str| match name {
-            name if name == helpers::STATE_BASE_ENV => Some(self.state.display().to_string()),
-            _ => None,
-        };
-        agentenv::project::allow(&self.cwd, &env).expect("project file is approved");
-    }
-
-    fn run(&self, args: &[&str], envs: &[(&str, &str)]) -> helpers::Run {
-        let mut command = command_with_project_discovery(&self.config);
-        command.current_dir(&self.cwd);
-        command.env(helpers::STATE_BASE_ENV, &self.state);
-        for (name, value) in envs {
-            command.env(name, value);
-        }
-        command.args(args);
-        let output = command.output().expect("agentenv runs");
-        helpers::Run {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            code: output.status.code(),
-        }
-    }
-}
 
 #[test]
 fn trusted_pin_precedes_default_and_yields_to_env_and_flag() {

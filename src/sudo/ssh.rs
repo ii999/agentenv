@@ -14,6 +14,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::time::{timeout_at, Instant};
 
+use super::{execution_error, Reason};
 use crate::config::{CredentialRef, SshAuth, SshConnection, SshTarget, SudoTarget, SudoTransport};
 use crate::error::AppError;
 
@@ -92,15 +93,15 @@ impl PreparedSsh {
 
 /// Resolves and validates an SSH route without connecting to it.
 pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedSsh, AppError> {
-    if timeout.is_zero() || timeout > Duration::from_secs(300) {
-        return Err(owned(
-            "invalid-timeout",
+    if timeout.is_zero() || timeout > super::MAX_TIMEOUT {
+        return Err(execution_error(
+            Reason::InvalidTimeout,
             "SSH setup timeout must be greater than zero and at most 300 seconds",
         ));
     }
     let SudoTransport::Ssh(ssh) = &target.transport else {
-        return Err(owned(
-            "invalid-target",
+        return Err(execution_error(
+            Reason::InvalidTarget,
             "the selected sudo target does not use SSH transport",
         ));
     };
@@ -120,8 +121,8 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
         )
         .await?;
         if !String::from_utf8_lossy(&version.stderr).starts_with("OpenSSH_for_Windows_") {
-            return Err(owned(
-                "ssh-client-unsupported",
+            return Err(execution_error(
+                Reason::SshClientUnsupported,
                 "Windows execution requires native Win32 OpenSSH, not an MSYS/Cygwin client",
             ));
         }
@@ -139,7 +140,7 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
                 &environment,
                 arguments,
                 deadline,
-                "ssh-config-evaluation",
+                Reason::SshConfigEvaluation,
             )
             .await?;
             (host_alias.clone(), effective)
@@ -157,12 +158,12 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
         }
     };
 
-    let host = required_single(&initial, "hostname", "effective-host")?;
-    let user = required_single(&initial, "user", "effective-user")?;
-    let port = parse_port(required_single(&initial, "port", "effective-port")?)?;
+    let host = required_single(&initial, "hostname", Reason::EffectiveHost)?;
+    let user = required_single(&initial, "user", Reason::EffectiveUser)?;
+    let port = parse_port(required_single(&initial, "port", Reason::EffectivePort)?)?;
     if user != target.auth_user {
-        return Err(owned(
-            "account-mismatch",
+        return Err(execution_error(
+            Reason::AccountMismatch,
             "the effective SSH user does not match the target authentication account",
         ));
     }
@@ -170,16 +171,16 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
     let proxy_jump = effective_route(&initial, "proxyjump");
     let proxy_command = effective_route(&initial, "proxycommand");
     if proxy_command.is_some() {
-        return Err(owned(
-            "proxy-command-unsupported",
+        return Err(execution_error(
+            Reason::ProxyCommandUnsupported,
             "custom SSH ProxyCommand routes are unsupported",
         ));
     }
 
     match &ssh.auth {
         SshAuth::Password { .. } if proxy_jump.is_some() => {
-            return Err(owned(
-                "password-route-unsupported",
+            return Err(execution_error(
+                Reason::PasswordRouteUnsupported,
                 "SSH password authentication does not support proxy or jump routes",
             ));
         }
@@ -208,7 +209,7 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
         &environment,
         evaluation_arguments.clone(),
         deadline,
-        "ssh-option-validation",
+        Reason::SshOptionValidation,
     )
     .await?;
     validate_final_route(&final_effective, ssh, proxy_jump.as_deref())?;
@@ -220,8 +221,8 @@ pub async fn prepare(target: &SudoTarget, timeout: Duration) -> Result<PreparedS
     )?;
 
     let helper = ssh.helper_path.to_str().ok_or_else(|| {
-        owned(
-            "invalid-helper-path",
+        execution_error(
+            Reason::InvalidHelperPath,
             "the configured remote helper path is not valid UTF-8",
         )
     })?;
@@ -384,8 +385,8 @@ struct EffectiveConfig(HashMap<String, Vec<String>>);
 impl EffectiveConfig {
     fn parse(output: &[u8]) -> Result<Self, AppError> {
         let text = std::str::from_utf8(output).map_err(|_| {
-            owned(
-                "ssh-config-invalid",
+            execution_error(
+                Reason::SshConfigInvalid,
                 "OpenSSH effective configuration was not valid UTF-8",
             )
         })?;
@@ -424,7 +425,7 @@ async fn evaluate(
     environment: &[(OsString, OsString)],
     mut arguments: Vec<OsString>,
     deadline: Instant,
-    reason: &'static str,
+    reason: Reason,
 ) -> Result<EffectiveConfig, AppError> {
     arguments.insert(0, OsString::from("-G"));
     let output = run_bounded(
@@ -436,7 +437,7 @@ async fn evaluate(
     )
     .await?;
     if !output.status.success() {
-        return Err(owned(
+        return Err(execution_error(
             reason,
             "OpenSSH could not evaluate the required connection policy",
         ));
@@ -447,7 +448,6 @@ async fn evaluate(
 struct BoundedOutput {
     status: std::process::ExitStatus,
     stdout: Vec<u8>,
-    #[allow(dead_code)]
     stderr: Vec<u8>,
 }
 
@@ -470,8 +470,8 @@ async fn run_bounded(
     #[cfg(windows)]
     child.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
     let mut child = child.spawn().map_err(|_| {
-        owned(
-            "ssh-unavailable",
+        execution_error(
+            Reason::SshUnavailable,
             "the configured OpenSSH client could not be started",
         )
     })?;
@@ -487,70 +487,39 @@ async fn run_bounded(
             let _ = child.start_kill();
             let _ = child.wait().await;
             readers.abort_and_join().await;
-            return Err(owned("ssh-probe-failed", "OpenSSH probe failed"));
+            return Err(execution_error(
+                Reason::SshProbeFailed,
+                "OpenSSH probe failed",
+            ));
         }
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
             readers.abort_and_join().await;
-            return Err(owned(
-                "ssh-setup-timeout",
+            return Err(execution_error(
+                Reason::SshSetupTimeout,
                 "OpenSSH policy evaluation exceeded the setup timeout",
             ));
         }
     };
-    let first = timeout_at(deadline, async {
-        tokio::select! {
-            result = &mut readers.stdout => FirstReader::Stdout(result),
-            result = &mut readers.stderr => FirstReader::Stderr(result),
-        }
+    let (stdout_task, stderr_task) = (&mut readers.stdout, &mut readers.stderr);
+    let outputs = timeout_at(deadline, async {
+        tokio::try_join!(
+            async { reader_task_result(stdout_task.await, "OpenSSH stdout reader failed") },
+            async { reader_task_result(stderr_task.await, "OpenSSH stderr reader failed") },
+        )
     })
     .await;
-    let (stdout, stderr) = match first {
-        Ok(FirstReader::Stdout(result)) => {
-            let stdout = match reader_task_result(result, "OpenSSH stdout reader failed") {
-                Ok(output) => output,
-                Err(error) => {
-                    abort_reader_task(&mut readers.stderr).await;
-                    return Err(error);
-                }
-            };
-            let stderr = match timeout_at(deadline, &mut readers.stderr).await {
-                Ok(result) => reader_task_result(result, "OpenSSH stderr reader failed")?,
-                Err(_) => {
-                    abort_reader_task(&mut readers.stderr).await;
-                    return Err(owned(
-                        "ssh-setup-timeout",
-                        "OpenSSH policy evaluation exceeded the setup timeout",
-                    ));
-                }
-            };
-            (stdout, stderr)
-        }
-        Ok(FirstReader::Stderr(result)) => {
-            let stderr = match reader_task_result(result, "OpenSSH stderr reader failed") {
-                Ok(output) => output,
-                Err(error) => {
-                    abort_reader_task(&mut readers.stdout).await;
-                    return Err(error);
-                }
-            };
-            let stdout = match timeout_at(deadline, &mut readers.stdout).await {
-                Ok(result) => reader_task_result(result, "OpenSSH stdout reader failed")?,
-                Err(_) => {
-                    abort_reader_task(&mut readers.stdout).await;
-                    return Err(owned(
-                        "ssh-setup-timeout",
-                        "OpenSSH policy evaluation exceeded the setup timeout",
-                    ));
-                }
-            };
-            (stdout, stderr)
+    let (stdout, stderr) = match outputs {
+        Ok(Ok(outputs)) => outputs,
+        Ok(Err(error)) => {
+            readers.abort_and_join().await;
+            return Err(error);
         }
         Err(_) => {
             readers.abort_and_join().await;
-            return Err(owned(
-                "ssh-setup-timeout",
+            return Err(execution_error(
+                Reason::SshSetupTimeout,
                 "OpenSSH policy evaluation exceeded the setup timeout",
             ));
         }
@@ -562,21 +531,22 @@ async fn run_bounded(
     })
 }
 
-enum FirstReader {
-    Stdout(Result<Result<Vec<u8>, AppError>, tokio::task::JoinError>),
-    Stderr(Result<Result<Vec<u8>, AppError>, tokio::task::JoinError>),
-}
-
 struct ReaderTasks {
     stdout: tokio::task::JoinHandle<Result<Vec<u8>, AppError>>,
     stderr: tokio::task::JoinHandle<Result<Vec<u8>, AppError>>,
 }
 
 impl ReaderTasks {
+    /// Stops and awaits every reader that is still running. A finished task
+    /// may already have yielded its output, and a consumed handle must not be
+    /// polled again.
     async fn abort_and_join(&mut self) {
-        self.stdout.abort();
-        self.stderr.abort();
-        let _ = tokio::join!(&mut self.stdout, &mut self.stderr);
+        for task in [&mut self.stdout, &mut self.stderr] {
+            if !task.is_finished() {
+                task.abort();
+                let _ = task.await;
+            }
+        }
     }
 }
 
@@ -591,12 +561,7 @@ fn reader_task_result(
     result: Result<Result<Vec<u8>, AppError>, tokio::task::JoinError>,
     detail: &'static str,
 ) -> Result<Vec<u8>, AppError> {
-    result.map_err(|_| owned("ssh-probe-failed", detail))?
-}
-
-async fn abort_reader_task(task: &mut tokio::task::JoinHandle<Result<Vec<u8>, AppError>>) {
-    task.abort();
-    let _ = task.await;
+    result.map_err(|_| execution_error(Reason::SshProbeFailed, detail))?
 }
 
 async fn read_bounded(
@@ -606,16 +571,18 @@ async fn read_bounded(
     let mut output = Vec::new();
     let mut chunk = [0_u8; 8192];
     loop {
-        let read = reader
-            .read(&mut chunk)
-            .await
-            .map_err(|_| owned("ssh-probe-failed", "OpenSSH probe output could not be read"))?;
+        let read = reader.read(&mut chunk).await.map_err(|_| {
+            execution_error(
+                Reason::SshProbeFailed,
+                "OpenSSH probe output could not be read",
+            )
+        })?;
         if read == 0 {
             return Ok(output);
         }
         if output.len().saturating_add(read) > limit {
-            return Err(owned(
-                "ssh-probe-output-limit",
+            return Err(execution_error(
+                Reason::SshProbeOutputLimit,
                 "OpenSSH probe output exceeded its allowed size",
             ));
         }
@@ -626,14 +593,14 @@ async fn read_bounded(
 fn required_single(
     config: &EffectiveConfig,
     key: &str,
-    reason: &'static str,
+    reason: Reason,
 ) -> Result<String, AppError> {
     config
         .first(key)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| {
-            owned(
+            execution_error(
                 reason,
                 "OpenSSH omitted a required effective connection field",
             )
@@ -646,8 +613,8 @@ fn parse_port(value: String) -> Result<u16, AppError> {
         .ok()
         .filter(|port| *port > 0)
         .ok_or_else(|| {
-            owned(
-                "effective-port",
+            execution_error(
+                Reason::EffectivePort,
                 "OpenSSH returned an invalid effective port",
             )
         })
@@ -670,8 +637,8 @@ fn validate_pinned_endpoint(
         || config.first("user") != Some(user)
         || config.first("port") != Some(port.to_string().as_str())
     {
-        return Err(owned(
-            "endpoint-pin-failed",
+        return Err(execution_error(
+            Reason::EndpointPinFailed,
             "OpenSSH did not retain the pinned endpoint and account",
         ));
     }
@@ -794,15 +761,15 @@ fn validate_final_route(
     validated_jump: Option<&str>,
 ) -> Result<(), AppError> {
     if effective_route(config, "proxycommand").is_some() {
-        return Err(owned(
-            "proxy-command-unsupported",
+        return Err(execution_error(
+            Reason::ProxyCommandUnsupported,
             "the final SSH policy selected a custom ProxyCommand",
         ));
     }
     let final_jump = effective_route(config, "proxyjump");
     if matches!(ssh.auth, SshAuth::Password { .. }) && final_jump.is_some() {
-        return Err(owned(
-            "password-route-unsupported",
+        return Err(execution_error(
+            Reason::PasswordRouteUnsupported,
             "SSH password authentication does not support proxy or jump routes",
         ));
     }
@@ -972,7 +939,7 @@ async fn validate_jump_route(
             environment,
             arguments,
             deadline,
-            "jump-policy-evaluation",
+            Reason::JumpPolicyEvaluation,
         )
         .await?;
         let expected_jump = (index > 0).then(|| {
@@ -988,17 +955,17 @@ async fn validate_jump_route(
             ));
         }
         if effective_route(&config, "proxycommand").is_some() {
-            return Err(owned(
-                "proxy-command-unsupported",
+            return Err(execution_error(
+                Reason::ProxyCommandUnsupported,
                 "a jump child selected a custom ProxyCommand",
             ));
         }
         validate_hop_policy(&config)?;
         validate_export_policy(&config, false)?;
         let endpoint = (
-            required_single(&config, "hostname", "jump-host")?,
-            required_single(&config, "user", "jump-user")?,
-            parse_port(required_single(&config, "port", "jump-port")?)?,
+            required_single(&config, "hostname", Reason::JumpHost)?,
+            required_single(&config, "user", Reason::JumpUser)?,
+            parse_port(required_single(&config, "port", Reason::JumpPort)?)?,
         );
         let trust_identity = config
             .first("hostkeyalias")
@@ -1016,7 +983,10 @@ async fn validate_jump_route(
     ));
     for endpoint in resolved.into_iter().flatten() {
         if !identities.insert(format!("{}@{}:{}", endpoint.1, endpoint.0, endpoint.2)) {
-            return Err(owned("jump-cycle", "the SSH jump route contains a cycle"));
+            return Err(execution_error(
+                Reason::JumpCycle,
+                "the SSH jump route contains a cycle",
+            ));
         }
     }
     Ok(())
@@ -1029,8 +999,8 @@ fn record_jump_trust_identity(
     if identities.insert(identity.to_ascii_lowercase()) {
         Ok(())
     } else {
-        Err(owned(
-            "jump-trust-identity",
+        Err(execution_error(
+            Reason::JumpTrustIdentity,
             "an SSH jump hop reuses a destination trust identity",
         ))
     }
@@ -1041,8 +1011,8 @@ fn jump_config_source(ssh: &SshTarget) -> Result<Vec<OsString>, AppError> {
         SshConnection::Config { config_file, .. } => {
             Ok(config_source_arguments(config_file.as_deref()))
         }
-        SshConnection::Explicit { .. } => Err(owned(
-            "jump-route-unsupported",
+        SshConnection::Explicit { .. } => Err(execution_error(
+            Reason::JumpRouteUnsupported,
             "explicit SSH targets do not support jump routes",
         )),
     }
@@ -1054,8 +1024,8 @@ async fn ensure_jump_client_supported(
     deadline: Instant,
 ) -> Result<(), AppError> {
     if !cfg!(target_os = "linux") {
-        return Err(owned(
-            "jump-client-unsupported",
+        return Err(execution_error(
+            Reason::JumpClientUnsupported,
             "native ProxyJump is supported only on the measured Linux OpenSSH client",
         ));
     }
@@ -1069,8 +1039,8 @@ async fn ensure_jump_client_supported(
     .await?;
     let version = String::from_utf8_lossy(&output.stderr);
     if !version.contains("OpenSSH_10.0") {
-        return Err(owned(
-            "jump-client-unsupported",
+        return Err(execution_error(
+            Reason::JumpClientUnsupported,
             "native ProxyJump requires the measured OpenSSH 10.0 client semantics",
         ));
     }
@@ -1080,8 +1050,8 @@ async fn ensure_jump_client_supported(
 fn parse_jump_route(route: &str) -> Result<Vec<JumpSpec>, AppError> {
     let parts: Vec<&str> = route.split(',').collect();
     if parts.is_empty() || parts.len() > MAX_JUMP_HOPS || parts.iter().any(|part| part.is_empty()) {
-        return Err(owned(
-            "jump-route-invalid",
+        return Err(execution_error(
+            Reason::JumpRouteInvalid,
             "SSH ProxyJump must contain between one and eight valid hops",
         ));
     }
@@ -1094,15 +1064,15 @@ fn parse_jump_spec(raw: &str) -> Result<JumpSpec, AppError> {
         .map_or((None, raw), |(user, rest)| (Some(user.to_owned()), rest));
     let (host, port) = if let Some(bracketed) = host_port.strip_prefix('[') {
         let (host, suffix) = bracketed.split_once(']').ok_or_else(|| {
-            owned(
-                "jump-route-invalid",
+            execution_error(
+                Reason::JumpRouteInvalid,
                 "SSH ProxyJump contains an invalid IPv6 hop",
             )
         })?;
         let port = suffix.strip_prefix(':').map(parse_jump_port).transpose()?;
         if !suffix.is_empty() && port.is_none() {
-            return Err(owned(
-                "jump-route-invalid",
+            return Err(execution_error(
+                Reason::JumpRouteInvalid,
                 "SSH ProxyJump contains invalid syntax",
             ));
         }
@@ -1123,8 +1093,8 @@ fn parse_jump_spec(raw: &str) -> Result<JumpSpec, AppError> {
                     .any(|ch| ch.is_control() || ch.is_whitespace())
         })
     {
-        return Err(owned(
-            "jump-route-invalid",
+        return Err(execution_error(
+            Reason::JumpRouteInvalid,
             "SSH ProxyJump contains invalid host or account metadata",
         ));
     }
@@ -1142,8 +1112,8 @@ fn parse_jump_port(value: &str) -> Result<u16, AppError> {
         .ok()
         .filter(|port| *port > 0)
         .ok_or_else(|| {
-            owned(
-                "jump-route-invalid",
+            execution_error(
+                Reason::JumpRouteInvalid,
                 "SSH ProxyJump contains an invalid port",
             )
         })
@@ -1214,8 +1184,8 @@ fn validate_hop_policy(config: &EffectiveConfig) -> Result<(), AppError> {
 
 fn find_ssh_executable() -> Result<PathBuf, AppError> {
     let path = std::env::var_os("PATH").ok_or_else(|| {
-        owned(
-            "ssh-unavailable",
+        execution_error(
+            Reason::SshUnavailable,
             "PATH is unavailable, so OpenSSH cannot be located",
         )
     })?;
@@ -1224,16 +1194,16 @@ fn find_ssh_executable() -> Result<PathBuf, AppError> {
             let candidate = directory.join(name);
             if candidate.is_file() {
                 return std::fs::canonicalize(candidate).map_err(|_| {
-                    owned(
-                        "ssh-unavailable",
+                    execution_error(
+                        Reason::SshUnavailable,
                         "the OpenSSH executable path could not be resolved",
                     )
                 });
             }
         }
     }
-    Err(owned(
-        "ssh-unavailable",
+    Err(execution_error(
+        Reason::SshUnavailable,
         "a supported OpenSSH executable was not found on PATH",
     ))
 }
@@ -1281,11 +1251,7 @@ fn curated_environment() -> Vec<(OsString, OsString)> {
 }
 
 fn policy_error(detail: &'static str) -> AppError {
-    owned("ssh-policy-rejected", detail)
-}
-
-fn owned(reason: &'static str, detail: &'static str) -> AppError {
-    AppError::SudoExecution(format!("{reason}: {detail}"))
+    execution_error(Reason::SshPolicyRejected, detail)
 }
 
 #[cfg(test)]

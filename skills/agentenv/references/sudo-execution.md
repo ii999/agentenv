@@ -1,13 +1,5 @@
 # Privileged execution with agentenv
 
-Windows implementation update: the native OpenSSH client, confidential
-resolver, and one-shot askpass channel are implemented. Windows local UAC
-elevation and Windows ProxyJump remain unsupported. Windows execution uses
-the same remote Unix helper protocol and failure semantics; this is not a
-Windows remote helper. See `docs/design/windows-port.md` for the current
-validation scope. Historical phase descriptions below remain design context.
-
-
 Use this reference only for typed `sudo-target` entries. The target binds the
 transport, account, credential references, sudo executable, and SSH trust
 policy. Do not convert an ordinary entry into a target unless the user asks to
@@ -121,7 +113,6 @@ disconnects, sudoers policy variations, and refusal cases. The native macOS
 OpenSSH client passed its lab against that destination. macOS local sudo
 remains unverified.
 Windows SSH execution uses the native Win32 OpenSSH client with a private
-named-pipe resolver and a one-shot askpass broker. Consult
-`docs/design/windows-port.md` and the native Windows CI results for measured
-client compatibility. MSYS/Cygwin clients, Windows ProxyJump and native Windows
+named-pipe resolver and a one-shot askpass broker, and talks to the same Unix
+remote helper. MSYS/Cygwin clients, Windows ProxyJump and native Windows
 local sudo/UAC remain unsupported.

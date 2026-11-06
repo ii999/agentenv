@@ -9,7 +9,7 @@ use agentenv::path::single_entry_name;
 use agentenv::sudo::{self, ExecutionRequest, LocalOptions, ProcessIo, SUDO_PASSWORD_LIMIT};
 use clap::Args;
 
-use super::Output;
+use super::{json_line, Output};
 
 #[derive(Debug, Args)]
 pub struct SudoArgs {
@@ -37,10 +37,18 @@ pub struct SudoArgs {
     #[arg(long, requires = "deploy_helper")]
     pub force: bool,
     /// Setup deadline in seconds.
-    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=300))]
+    #[arg(
+        long,
+        default_value_t = sudo::DEFAULT_SETUP_TIMEOUT.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..=sudo::MAX_TIMEOUT.as_secs())
+    )]
     pub connect_timeout_secs: u64,
     /// Credential response deadline in seconds.
-    #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64).range(1..=300))]
+    #[arg(
+        long,
+        default_value_t = sudo::DEFAULT_AUTH_TIMEOUT.as_secs(),
+        value_parser = clap::value_parser!(u64).range(1..=sudo::MAX_TIMEOUT.as_secs())
+    )]
     pub auth_timeout_secs: u64,
     /// Absolute executable and its arguments, after `--`.
     #[arg(last = true, value_name = "COMMAND")]
@@ -125,9 +133,10 @@ fn deploy_helper(
         Some(path) => sudo::deploy::Source::File(path.clone()),
         None => {
             let executable = std::env::current_exe().map_err(|_| {
-                AppError::SudoExecution(
-                    "helper-missing: could not determine the agentenv executable path".to_owned(),
-                )
+                AppError::from(sudo::SudoError::new(
+                    sudo::Reason::HelperMissing,
+                    "could not determine the agentenv executable path",
+                ))
             })?;
             sudo::deploy::Source::Automatic {
                 bundle: sudo::companion_path(&executable)?,
@@ -136,7 +145,7 @@ fn deploy_helper(
         }
     };
     let runtime = runtime()?;
-    let (cancel, cancellation) = sudo::cancellation_channel();
+    let (cancel, cancellation) = agentenv::cancel::channel();
     super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
     let result = runtime.block_on(sudo::client::deploy_helper(
         config,
@@ -150,7 +159,7 @@ fn deploy_helper(
     runtime.shutdown_timeout(Duration::from_millis(100));
     let (report, ready) = result?;
     let stdout = if json {
-        serde_json::to_string(&serde_json::json!({
+        json_line(serde_json::json!({
             "status": report.status.label(),
             "transport": "ssh",
             "helper_path": report.helper_path,
@@ -161,8 +170,6 @@ fn deploy_helper(
             "helper": ready,
             "sudo_authentication": "not-attempted",
         }))
-        .expect("deployment JSON is serializable")
-            + "\n"
     } else {
         let destination = format!(
             "{}/{} ({})",
@@ -207,13 +214,15 @@ fn deploy_helper(
 /// login failures surface as `ssh-connect-failed` and carry no remediation.
 fn with_remediation(error: AppError, remediation: &str) -> AppError {
     match error {
-        AppError::SudoExecution(detail)
-            if detail.starts_with("helper-identity-mismatch")
-                || detail.starts_with("helper-handshake-missing") =>
+        AppError::Sudo(error)
+            if matches!(
+                error.reason(),
+                Some(sudo::Reason::HelperIdentityMismatch | sudo::Reason::HelperHandshakeMissing)
+            ) =>
         {
-            AppError::SudoExecution(format!(
-                "{detail}; to install the helper matching this build, run: {remediation}"
-            ))
+            AppError::Sudo(error.append(&format!(
+                "; to install the helper matching this build, run: {remediation}"
+            )))
         }
         other => other,
     }
@@ -242,9 +251,10 @@ fn local_options(
     args: &SudoArgs,
 ) -> Result<LocalOptions, AppError> {
     let executable = std::env::current_exe().map_err(|_| {
-        AppError::SudoExecution(
-            "helper-missing: could not determine the agentenv executable path".to_owned(),
-        )
+        AppError::from(sudo::SudoError::new(
+            sudo::Reason::HelperMissing,
+            "could not determine the agentenv executable path",
+        ))
     })?;
     Ok(LocalOptions {
         sudo_path: target.sudo_path.clone(),
@@ -261,9 +271,10 @@ fn runtime() -> Result<tokio::runtime::Runtime, AppError> {
         .enable_all()
         .build()
         .map_err(|_| {
-            AppError::SudoExecution(
-                "runtime-unavailable: could not initialize sudo execution".to_owned(),
-            )
+            AppError::from(sudo::SudoError::new(
+                sudo::Reason::RuntimeUnavailable,
+                "could not initialize sudo execution",
+            ))
         })
 }
 
@@ -279,14 +290,12 @@ fn check(
             let options = local_options(target, args)?;
             runtime()?.block_on(sudo::check_local(&options))?;
             let stdout = if json {
-                serde_json::to_string(&serde_json::json!({
+                json_line(serde_json::json!({
                     "status": "ready",
                     "transport": "local",
                     "helper_protocol": sudo::PROTOCOL_VERSION,
                     "sudo_authentication": "not-attempted"
                 }))
-                .expect("sudo check JSON is serializable")
-                    + "\n"
             } else {
                 "Local sudo prerequisites are ready; sudo authentication was not attempted.\n"
                     .to_owned()
@@ -311,9 +320,11 @@ fn check(
                     output.stderr.push_str(&format!("sudo-check: {warning}\n"));
                     Ok(output)
                 }
-                (Err(AppError::SudoExecution(detail)), Some(warning)) => Err(
-                    AppError::SudoExecution(format!("{detail}; also, {warning}")),
-                ),
+                (Err(AppError::Sudo(error)), Some(warning))
+                    if error.completion() == sudo::Completion::Known =>
+                {
+                    Err(AppError::Sudo(error.append(&format!("; also, {warning}"))))
+                }
                 (result, _) => result,
             }
         }
@@ -348,13 +359,14 @@ fn run(
         .clone();
     let options = local_options(&target, args)?;
     let executable = std::env::current_exe().map_err(|_| {
-        AppError::SudoExecution(
-            "resolver-unavailable: could not determine the agentenv executable path".to_owned(),
-        )
+        AppError::from(sudo::SudoError::new(
+            sudo::Reason::ResolverUnavailable,
+            "could not determine the agentenv executable path",
+        ))
     })?;
     let auth_timeout = options.auth_timeout;
     let runtime = runtime()?;
-    let (cancel, cancellation) = sudo::cancellation_channel();
+    let (cancel, cancellation) = agentenv::cancel::channel();
     super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
     let outcome = runtime.block_on(sudo::execute_local(
         request,
@@ -388,7 +400,7 @@ fn remote(
     json: bool,
 ) -> Result<Output, AppError> {
     let runtime = runtime()?;
-    let (cancel, cancellation) = sudo::cancellation_channel();
+    let (cancel, cancellation) = agentenv::cancel::channel();
     super::signals::install_signal_forwarder(&runtime, cancel, signal_error)?;
     let result = runtime.block_on(sudo::client::execute(
         config,
@@ -419,19 +431,18 @@ fn remote(
     }
     let ready = outcome.ready.ok_or_else(|| {
         with_remediation(
-            AppError::SudoExecution(
-                "helper-handshake-missing: remote readiness was not observed".into(),
-            ),
+            AppError::from(sudo::SudoError::new(
+                sudo::Reason::HelperHandshakeMissing,
+                "remote readiness was not observed",
+            )),
             remediation,
         )
     })?;
     let stdout = if json {
-        serde_json::to_string(&serde_json::json!({
+        json_line(serde_json::json!({
             "status": "ready", "transport": "ssh", "helper": ready,
             "sudo_authentication": "not-attempted"
         }))
-        .expect("check output is serializable")
-            + "\n"
     } else {
         format!(
             "SSH helper is ready as {} in {}; sudo authentication was not attempted.\n",
@@ -443,9 +454,10 @@ fn remote(
 }
 
 fn signal_error() -> AppError {
-    AppError::SudoExecution(
-        "signal-unavailable: could not install sudo cancellation handlers".to_owned(),
-    )
+    AppError::from(sudo::SudoError::new(
+        sudo::Reason::SignalUnavailable,
+        "could not install sudo cancellation handlers",
+    ))
 }
 
 fn render_plan(
@@ -503,7 +515,7 @@ fn render_plan(
             .join(", ")
     );
     let stdout = if json {
-        serde_json::to_string(&serde_json::json!({
+        json_line(serde_json::json!({
             "profile": profile.name,
             "target": entry,
             "transport": transport,
@@ -515,8 +527,6 @@ fn render_plan(
             "cwd": cwd,
             "command": command,
         }))
-        .expect("sudo plan JSON is serializable")
-            + "\n"
     } else {
         format!(
             "Profile: {}\nTarget: {}\nTransport: {}\nEndpoint: {}\nRoute policy: {}\nCredential: {}\nAuthentication account: {}\nRun as: {}\nWorking directory: {}\nCommand: {}\n",

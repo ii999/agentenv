@@ -226,6 +226,7 @@ mod tests {
             entries: entries_toml
                 .parse::<Table>()
                 .unwrap_or_else(|error| panic!("the entry fixture should parse: {error}")),
+            sudo_targets: std::collections::BTreeMap::new(),
         }
     }
 
