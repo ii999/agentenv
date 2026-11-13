@@ -48,6 +48,12 @@ jobs:
       - name: Run tests
         id: native_tests
         run: cargo test --features test-support
+      - name: Native macOS login-Keychain update continuity
+        if: runner.os == 'macOS'
+        run: >-
+          cargo test --features test-support --locked --test update
+          macos_login_keychain::installer_and_update_preserve_login_keychain_authorization
+          -- --ignored --exact --test-threads=1 --nocapture
       - name: Windows lint (both provider configurations)
         if: runner.os == 'Windows'
         run: |

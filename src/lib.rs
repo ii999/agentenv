@@ -12,5 +12,8 @@ pub mod runner;
 pub mod sudo;
 pub mod update;
 
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 #[cfg(windows)]
 mod windows;

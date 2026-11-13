@@ -47,6 +47,15 @@ verify its SHA-256 checksum, and install the matching `agentenv`,
 `agentenv-sudo-helper`, and `agentenv-ssh-askpass` bundle plus the agent skill.
 They validate the complete bundle before replacing installed executables.
 
+On macOS, the bundle also contains `agentenv-keychain-helper`. The installer
+generates a local signing identity in the current user's Keychain and signs
+the staged executables before installation. It installs a fixed credential
+helper in the user data directory. Ordinary reinstalls and updates preserve
+that helper's exact signed file so existing Keychain permissions remain valid.
+No Apple developer account is required. This local signature establishes an
+installation identity; it does not provide Developer ID signing or Apple
+notarization for downloaded software.
+
 On macOS and Linux:
 
 ```bash
@@ -92,6 +101,12 @@ Substitute the archive name for your platform from the table above. On Linux,
 `sha256sum --check --ignore-missing SHA256SUMS` performs the same
 verification.
 
+After a manual macOS installation, prepare the dedicated credential helper:
+
+```bash
+agentenv keychain setup
+```
+
 ### Build from source
 
 With a Rust toolchain installed:
@@ -99,6 +114,12 @@ With a Rust toolchain installed:
 ```bash
 cargo install --path .
 ```
+
+On macOS, run `agentenv keychain setup` after installing from source. For a
+development checkout, build the executable bundle with `cargo build --bins`
+and run `target/debug/agentenv keychain setup`. Credential access uses the fixed
+installed helper while development builds of the CLI can change. A CLI-only
+build does not supply the required credential helper.
 
 ### Update
 
@@ -111,7 +132,9 @@ agentenv update
 `update` resolves the latest release from its `SHA256SUMS` file, downloads
 the archive for the running binary's platform, verifies the checksum, runs
 all three downloaded executables to confirm their identities and release
-version, and then replaces the bundle in place. Every installed copy of the agent skill
+version, and then replaces the bundle in place. On macOS it also verifies the
+credential helper candidate, signs the staged bundle with the existing local
+identity, and preserves the active credential helper. Every installed copy of the agent skill
 (`~/.agents/skills/agentenv` and `~/.claude/skills/agentenv`) is refreshed
 from the same release; a copy that was never installed stays absent.
 
@@ -126,9 +149,73 @@ from the same release; a copy that was never installed stays absent.
   skills unchanged.
 
 `update` refuses binaries installed by cargo or Homebrew and names the
-matching upgrade command instead. `AGENTENV_RELEASE_BASE_URL` points it at
-a release mirror. A missing or mismatched companion is never bypassed: rerun
-`agentenv update --force` or the installer to repair the complete bundle.
+matching upgrade command instead. Downloaded releases must contain every
+required companion with the expected identity.
+
+`AGENTENV_RELEASE_BASE_URL` is an optional, non-sensitive release mirror URL
+shared by `update`, `install.sh`, and `install.ps1`. It defaults to
+`https://github.com/ii999/agentenv/releases`. A compatible mirror serves
+`latest/download/SHA256SUMS` and `download/<tag>/<asset>` beneath that root;
+the installers derive the latest version from the platform archive listed in
+the checksums. Do not put credentials in the URL.
+
+### macOS Keychain access
+
+The macOS credential helper starts for one operation and exits afterward. It
+does not install a background service. Credentials remain in the user's
+Keychain and travel over a private inherited local socket; they are not placed
+in helper arguments, logs, or temporary files.
+
+Credential operations require the installed, verified helper. A missing helper,
+invalid existing helper, or partial installation produces an actionable error
+without installing or replacing files. Run `agentenv keychain setup` with a
+complete installed bundle to prepare a missing helper. If the companion itself
+is absent, reinstall the complete bundle or rebuild it with `cargo build --bins`.
+
+Inspect lock state and session access without reading any credential:
+
+```bash
+agentenv keychain status --json
+agentenv keychain unlock
+```
+
+When credential access finds a locked Keychain in a graphical session, the
+helper opens the macOS unlock window and resumes the operation after a
+successful unlock. The login password goes directly to macOS. Cancelling the
+window, unavailable interaction, missing Keychain selection, and item access
+denials produce distinct diagnostics. An unlocked Keychain can still deny a
+particular item; unlock does not override its access controls. Status inspection
+does not prompt or enroll an identity. Lock settings that cannot be inspected
+are reported as unavailable rather than as disabled.
+
+Existing items may require an initial authorization for
+`agentenv-keychain-helper`. Newly stored items are created by that helper.
+The first signing operation may separately ask to let macOS `codesign` use
+the local signing key. Ordinary CLI updates retain the credential helper and
+its permissions. The newer helper candidate beside `agentenv` is used only
+when an explicit helper replacement is requested:
+
+```bash
+agentenv keychain setup --replace-helper
+```
+
+Replacing the helper can require authorization for existing items again.
+Use this operation for an intended helper upgrade or repair, rather than for
+an ordinary locked-Keychain error. `--from <file>` selects a helper candidate
+from another complete release or source build; invalid explicit input fails.
+
+Helper state lives in `$XDG_DATA_HOME/agentenv/macos-keychain`, or
+`~/.local/share/agentenv/macos-keychain` when that optional variable is unset.
+`XDG_DATA_HOME` is a non-sensitive absolute directory path. The directory holds
+the signed helper and public TOML recovery receipts. The nonextractable signing
+private key stays in the selected Keychain. Preserve both the Keychain and
+these receipts when backing up the installation. A missing or mismatched
+enrolled identity fails explicitly instead of generating a replacement key.
+
+A save whose helper response is lost is reported as unconfirmed: the value
+may have been stored. Inspect the credential before deciding whether to save
+again. macOS unlock and item authorization windows remain subject to the
+calling operation's timeout, including `credential fill --timeout-ms`.
 
 ## Configuration
 

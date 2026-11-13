@@ -280,7 +280,7 @@ exec "$@"
     let outcome = runtime
         .block_on(sudo::execute_local(
             ExecutionRequest::new("/usr/bin/true", Vec::new(), None).expect("request"),
-            options(sudo_path),
+            options(sudo_path.clone()),
             ProcessIo {
                 stdin: Stdio::null(),
                 stdout: Stdio::null(),
@@ -298,6 +298,26 @@ exec "$@"
     assert_eq!(outcome.exit_code, Some(0));
     assert!(outcome.password_delivered);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let diagnostic = agentenv::credential::KeychainFailure::new(
+        agentenv::credential::KeychainReason::InteractionUnavailable,
+        agentenv::credential::KeychainOperation::Unlock,
+    );
+    let (_cancel, cancellation) = agentenv::cancel::channel();
+    let error = runtime
+        .block_on(sudo::execute_local(
+            ExecutionRequest::new("/usr/bin/true", Vec::new(), None).unwrap(),
+            options(sudo_path),
+            ProcessIo {
+                stdin: Stdio::null(),
+                stdout: Stdio::null(),
+                stderr: Stdio::null(),
+            },
+            cancellation,
+            || async { Err(agentenv::error::AppError::Keychain(diagnostic)) },
+        ))
+        .unwrap_err();
+    assert!(matches!(error, agentenv::error::AppError::Keychain(actual) if actual == diagnostic));
 
     let wrong = r#"#!/bin/sh
 while [ "$#" -gt 0 ]; do

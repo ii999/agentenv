@@ -165,6 +165,28 @@ pub fn apply(
     let extracted = release::extract(&archive, &release, workdir.path())?;
     release::verify_bundle(&extracted, &release.version)?;
 
+    #[cfg(target_os = "macos")]
+    if let Some(helper) = &extracted.keychain_helper {
+        let directory = extracted.binary.parent().ok_or_else(|| {
+            AppError::Update("the staged executable has no parent directory".into())
+        })?;
+        let prepared = crate::macos::installation::prepare_bundle(directory, Some(helper))?;
+        write_progress(
+            progress,
+            format!(
+                "Signed the staged macOS release; credential helper {} at {}",
+                if prepared.reused {
+                    "preserved"
+                } else {
+                    "installed"
+                },
+                prepared.helper.display(),
+            ),
+        )?;
+    } else {
+        write_progress(progress, "This release predates the fixed credential helper; its direct Keychain access may require authorization again")?;
+    }
+
     let installation = Installation::discover(env)?;
     install::replace_bundle(&extracted, &installation)?;
     write_progress(

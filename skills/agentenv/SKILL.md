@@ -209,6 +209,36 @@ toggle, so its screen output must remain outside the Agent's tools.
 Prefer `keychain` or `command` providers for local use; `env` exposes the
 value to every process inheriting the environment and suits CI.
 
+### macOS Keychain diagnostics
+
+macOS credential access uses an installed `agentenv-keychain-helper` whose
+signed file is preserved across ordinary CLI updates. Existing credentials
+may need an initial authorization for this helper.
+
+Use `agentenv keychain status --json` to inspect lock state, session interaction,
+and helper installation without reading credentials. Locked Keychains open a
+system-owned unlock window during credential access when the session supports
+it; tell the user to complete that window and wait for the command's result.
+The operation resumes after successful unlock. `agentenv keychain unlock`
+also requests that system window explicitly. Do not obtain the login password
+through chat, argv, environment variables, or a file.
+
+An unlocked Keychain can still deny an item's access. Relay the classified
+failure and OSStatus; do not repeatedly unlock it or claim a missing credential
+when authorization failed. Missing or invalid helpers cause an explicit error;
+credential operations do not install or replace them. `agentenv keychain setup`
+prepares the dedicated helper from a complete installed bundle. If its source
+executable is absent, report that the complete bundle must be installed or built.
+Perform setup or repair only within the task's authorized scope.
+`setup --replace-helper` intentionally changes the
+Keychain client and may require authorization again; use it for an intended
+helper upgrade or repair, not as a retry for transient read failures.
+
+A lost save response reports that the value may have been stored. Do not retry
+automatically. System unlock and item authorization share the enclosing
+command's timeout; increase `credential fill --timeout-ms` when a user needs
+time to complete the window.
+
 ## Docker Compose pairing
 
 Keep non-secret settings in `.env`. Inject credentials only for the process

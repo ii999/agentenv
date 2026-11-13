@@ -242,6 +242,10 @@ where
     tokio::time::timeout(auth_timeout, async {
         let secret = match resolve_password().await {
             Ok(secret) => secret,
+            Err(error @ AppError::Keychain(_)) => {
+                let _ = SUDO.refuse(&mut stream).await;
+                return Err(error);
+            }
             Err(_) => {
                 let _ = SUDO.refuse(&mut stream).await;
                 return Err(credential_failure());

@@ -86,6 +86,14 @@ impl Server {
             }
             fs::copy(cargo_bin(name), staging.join(packaged)).expect("companion copied");
         }
+        #[cfg(target_os = "macos")]
+        if omit != Some("agentenv-keychain-helper") {
+            fs::copy(
+                cargo_bin("agentenv-keychain-helper"),
+                staging.join("agentenv-keychain-helper"),
+            )
+            .expect("Keychain helper candidate copied");
+        }
         if let Some(text) = skill_text {
             let skill = staging.join("skills").join("agentenv");
             fs::create_dir_all(&skill).expect("skill dir");
@@ -213,6 +221,10 @@ struct Install {
     _dir: TempDir,
     binary: PathBuf,
     home: PathBuf,
+    #[cfg(target_os = "macos")]
+    keychain: security_framework::os::macos::keychain::SecKeychain,
+    #[cfg(target_os = "macos")]
+    keychain_path: PathBuf,
 }
 
 impl Install {
@@ -225,10 +237,21 @@ impl Install {
         fs::copy(cargo_bin("agentenv"), &binary).expect("binary copied");
         let home = dir.path().join("home");
         fs::create_dir_all(&home).expect("home dir");
+        #[cfg(target_os = "macos")]
+        let keychain_path = dir.path().join("update-signing.keychain");
+        #[cfg(target_os = "macos")]
+        let keychain = security_framework::os::macos::keychain::CreateOptions::new()
+            .password("agentenv-update-fixture")
+            .create(&keychain_path)
+            .expect("isolated signing Keychain");
         Self {
             _dir: dir,
             binary,
             home,
+            #[cfg(target_os = "macos")]
+            keychain,
+            #[cfg(target_os = "macos")]
+            keychain_path,
         }
     }
 
@@ -244,7 +267,7 @@ impl Install {
         fs::write(skill, text).expect("skill seeded");
     }
 
-    fn run(&self, server: &Server, args: &[&str]) -> Run {
+    fn command(&self, server: &Server, args: &[&str]) -> std::process::Command {
         let mut command = std::process::Command::new(&self.binary);
         command.env_clear();
         for name in ["PATH", "SYSTEMROOT"] {
@@ -260,13 +283,39 @@ impl Install {
             .env("AGENTENV_RELEASE_BASE_URL", &server.base_url)
             .env("TEST_PROBE_VERSION", NEXT)
             .args(args);
-        let output = command.output().expect("agentenv runs");
+        #[cfg(target_os = "macos")]
+        command
+            .env("AGENTENV_TEST_NATIVE_KEYCHAIN", &self.keychain_path)
+            .env("AGENTENV_TEST_KEYCHAIN_NO_UI", "1");
+        command
+    }
+
+    fn run(&self, server: &Server, args: &[&str]) -> Run {
+        let output = self.command(server, args).output().expect("agentenv runs");
         Run::from_output(output, args)
     }
 
     fn binary_is_original(&self) -> bool {
         let original = fs::read(cargo_bin("agentenv")).expect("original read");
         fs::read(&self.binary).expect("installed read") == original
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[path = "macos_keychain_lab/continuity.rs"]
+mod macos_login_keychain;
+
+#[cfg(target_os = "macos")]
+impl Drop for Install {
+    fn drop(&mut self) {
+        use core_foundation::base::TCFType;
+        extern "C" {
+            fn SecKeychainDelete(keychain: security_framework_sys::base::SecKeychainRef) -> i32;
+        }
+        assert_eq!(
+            unsafe { SecKeychainDelete(self.keychain.as_concrete_TypeRef()) },
+            0
+        );
     }
 }
 

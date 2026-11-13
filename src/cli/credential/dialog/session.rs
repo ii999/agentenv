@@ -103,10 +103,17 @@ impl Session {
                     details: None,
                     uncertain: true,
                 })
-                .and_then(|result| result.map_err(|error| StoreError {
-                    message: "Could not save to the credential store. Your input is retained; check access to the store, then try Save again.".into(),
-                    details: Some(error.to_string()),
-                    uncertain: false,
+                .and_then(|result| result.map_err(|error| {
+                    let uncertain = matches!(&error, agentenv::error::AppError::Keychain(failure) if failure.store_unconfirmed());
+                    StoreError {
+                        message: if uncertain {
+                            "The credential store did not confirm the save. Your input is retained; check the credential before deciding whether to save again.".into()
+                        } else {
+                            "Could not save to the credential store. Your input is retained; check access to the store, then try Save again.".into()
+                        },
+                        details: Some(error.to_string()),
+                        uncertain,
+                    }
                 }));
             let _ = sender.send(saved);
             repaint.request_repaint();

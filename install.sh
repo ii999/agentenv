@@ -14,11 +14,14 @@
 #                     Claude Code, in addition to the ~/.agents/skills default.
 #   --no-skill        Install the executable bundle only.
 #
-# Downloads use plain HTTPS from GitHub Releases.
+# AGENTENV_RELEASE_BASE_URL selects a GitHub-compatible release mirror.
+# Downloads default to HTTPS from GitHub Releases.
 
 set -euo pipefail
 
 readonly repo="ii999/agentenv"
+release_base="${AGENTENV_RELEASE_BASE_URL:-https://github.com/$repo/releases}"
+readonly release_base="${release_base%/}"
 
 fail() {
     echo "install.sh: $*" >&2
@@ -70,9 +73,12 @@ if [[ "$os" == Linux ]]; then
 fi
 
 if [[ -z "$version" ]]; then
-    version="$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')" || true
-    [[ -n "$version" ]] || fail "cannot determine the latest release; pass --version <tag>"
+    latest_sums="$(curl -fsSL "$release_base/latest/download/SHA256SUMS")" \
+        || fail "cannot read the latest release checksums; pass --version <tag> or check AGENTENV_RELEASE_BASE_URL"
+    version="$(printf '%s\n' "$latest_sums" \
+        | sed -n "s/^[[:xdigit:]]\{64\}[[:space:]][[:space:]*]*agentenv-\(v[^[:space:]]*\)-${target}\.tar\.gz$/\1/p")"
+    [[ -n "$version" && "$version" != *$'\n'* ]] \
+        || fail "the latest checksums do not identify exactly one release for $target; pass --version <tag>"
 fi
 readonly version
 readonly asset="agentenv-${version}-${target}.tar.gz"
@@ -84,7 +90,7 @@ trap 'rm -rf "$workdir"' EXIT
 download() {
     local name="$1"
     curl -fSL --output "$workdir/$name" \
-        "https://github.com/$repo/releases/download/$version/$name" \
+        "$release_base/download/$version/$name" \
         || fail "cannot download $name from release $version"
 }
 
@@ -103,7 +109,8 @@ fi
 tar -xzf "$workdir/$asset" -C "$workdir"
 readonly extracted="$workdir/agentenv-${version}-${target}"
 readonly release_version="${version#v}"
-readonly binaries=(agentenv agentenv-sudo-helper agentenv-ssh-askpass)
+binaries=(agentenv agentenv-sudo-helper agentenv-ssh-askpass)
+binary_source="$extracted"
 
 for binary in "${binaries[@]}"; do
     [[ -f "$extracted/$binary" ]] \
@@ -115,6 +122,29 @@ done
     || fail "$asset contains a mismatched sudo helper"
 [[ "$("$extracted"/agentenv-ssh-askpass --identity)" == "agentenv-ssh-askpass 1 $release_version" ]] \
     || fail "$asset contains a mismatched SSH askpass helper"
+
+if [[ "$os" == Darwin ]]; then
+    if [[ -f "$extracted/agentenv-keychain-helper" ]]; then
+        [[ "$("$extracted"/agentenv-keychain-helper --identity)" == "agentenv-keychain-helper 1" ]] \
+            || fail "$asset contains an incompatible credential helper"
+        binaries+=(agentenv-keychain-helper)
+        binary_source="$workdir/signed"
+        mkdir "$binary_source"
+        for binary in "${binaries[@]}"; do
+            install -m 755 "$extracted/$binary" "$binary_source/$binary"
+        done
+        # The downloaded CLI runs from the extraction directory while signing
+        # separate copies. The active per-user credential helper is preserved.
+        "$extracted/agentenv" keychain prepare-install \
+            --directory "$binary_source" --helper "$extracted/agentenv-keychain-helper" \
+            || fail "could not prepare the macOS signing identity and credential helper; installed executables have not been replaced"
+    elif "$extracted/agentenv" keychain --help >/dev/null 2>&1; then
+        fail "$asset is incomplete: missing agentenv-keychain-helper"
+    else
+        echo "install.sh: this release predates the fixed credential helper; its direct Keychain access may require authorization again" >&2
+    fi
+fi
+readonly binaries binary_source
 
 mkdir -p "$install_dir"
 
@@ -136,10 +166,15 @@ rollback_bundle() {
 swapped=()
 for binary in "${binaries[@]}"; do
     rm -f "$install_dir/.$binary.agentenv-new" "$install_dir/.$binary.agentenv-old"
-    install -m 755 "$extracted/$binary" "$install_dir/.$binary.agentenv-new" \
+    install -m 755 "$binary_source/$binary" "$install_dir/.$binary.agentenv-new" \
         || { rollback_bundle || fail "cannot stage or restore the executable bundle in $install_dir; repair the complete bundle"; fail "cannot stage the executable bundle in $install_dir"; }
 done
-for binary in agentenv-sudo-helper agentenv-ssh-askpass agentenv; do
+install_order=(agentenv-sudo-helper agentenv-ssh-askpass)
+if [[ -f "$binary_source/agentenv-keychain-helper" ]]; then
+    install_order+=(agentenv-keychain-helper)
+fi
+install_order+=(agentenv)
+for binary in "${install_order[@]}"; do
     if [[ -e "$install_dir/$binary" ]]; then
         mv "$install_dir/$binary" "$install_dir/.$binary.agentenv-old" \
             || { rollback_bundle || fail "cannot retire or restore $install_dir/$binary; repair the complete bundle"; fail "cannot retire $install_dir/$binary"; }

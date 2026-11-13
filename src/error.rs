@@ -28,6 +28,9 @@ pub enum AppError {
     #[error("credential error: {0}")]
     Credential(String),
 
+    #[error("credential error: {0}")]
+    Keychain(crate::credential::KeychainFailure),
+
     #[error("injection conflict: {0}")]
     Injection(String),
 
@@ -60,6 +63,7 @@ impl AppError {
             Self::Config(_) => 2,
             Self::NotFound(_) => 3,
             Self::Credential(_) => 4,
+            Self::Keychain(_) => 4,
             Self::Injection(_) => 4,
             Self::ProjectTrust(_) => 5,
             Self::Update(_) => 7,
