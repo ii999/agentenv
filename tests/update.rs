@@ -11,6 +11,10 @@
 
 mod helpers;
 
+#[cfg(target_os = "macos")]
+#[path = "helpers/macos_keychain.rs"]
+mod keychain_fixture;
+
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -240,10 +244,7 @@ impl Install {
         #[cfg(target_os = "macos")]
         let keychain_path = dir.path().join("update-signing.keychain");
         #[cfg(target_os = "macos")]
-        let keychain = security_framework::os::macos::keychain::CreateOptions::new()
-            .password("agentenv-update-fixture")
-            .create(&keychain_path)
-            .expect("isolated signing Keychain");
+        let keychain = keychain_fixture::create(&keychain_path, "agentenv-update-fixture");
         Self {
             _dir: dir,
             binary,
@@ -308,14 +309,7 @@ mod macos_login_keychain;
 #[cfg(target_os = "macos")]
 impl Drop for Install {
     fn drop(&mut self) {
-        use core_foundation::base::TCFType;
-        extern "C" {
-            fn SecKeychainDelete(keychain: security_framework_sys::base::SecKeychainRef) -> i32;
-        }
-        assert_eq!(
-            unsafe { SecKeychainDelete(self.keychain.as_concrete_TypeRef()) },
-            0
-        );
+        keychain_fixture::delete(&self.keychain);
     }
 }
 

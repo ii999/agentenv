@@ -139,7 +139,10 @@ Native signing and helper tests use disposable Keychains, independent
 bootstrap processes, synthetic credentials, and explicit cleanup. They cover
 identity recovery, nonextractability, signature and helper integrity checks,
 long-value round trips, lock diagnostics, unavailable interaction, and lost
-store acknowledgements.
+store acknowledgements. The fixtures temporarily register their Keychains in
+the user's search list so `codesign` can resolve the signing identities. They
+preserve the default Keychain and other search-list entries, serialize registry
+changes across test processes, and remove only their own entries at cleanup.
 
 A fresh disposable Keychain can use an older format that lacks partition
 checks. It cannot establish login-Keychain authorization continuity. The

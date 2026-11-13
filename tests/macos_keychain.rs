@@ -2,22 +2,28 @@
 
 #![cfg(all(target_os = "macos", feature = "test-support"))]
 
+#[path = "helpers/macos_keychain.rs"]
+mod keychain_fixture;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 
 use assert_cmd::cargo::cargo_bin;
 use core_foundation::base::TCFType;
-use security_framework::os::macos::keychain::{CreateOptions, SecKeychain};
+use security_framework::os::macos::keychain::SecKeychain;
 use security_framework_sys::base::SecKeychainRef;
 use sha2::{Digest, Sha256};
 
 extern "C" {
-    fn SecKeychainDelete(keychain: SecKeychainRef) -> i32;
     fn SecKeychainLock(keychain: SecKeychainRef) -> i32;
 }
+
+// Security.framework's interaction setting belongs to the whole process.
+static KEYCHAIN_INTERACTION: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     keychain: SecKeychain,
@@ -31,10 +37,7 @@ impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let keychain_path = directory.path().join("native-helper.keychain");
-        let keychain = CreateOptions::new()
-            .password("agentenv-native-fixture")
-            .create(&keychain_path)
-            .unwrap();
+        let keychain = keychain_fixture::create(&keychain_path, "agentenv-native-fixture");
         let config = directory.path().join("config.toml");
         fs::write(
             &config,
@@ -95,28 +98,7 @@ credential = "credential://fixture"
         if replace {
             command.arg("--replace-helper");
         }
-        let output = command.output().unwrap();
-        if !output.status.success() {
-            // Identity listings contain public certificate metadata only.
-            // Compare the subprocess home with the native login environment.
-            for fixture_home in [true, false] {
-                let mut inspect = Command::new("/usr/bin/security");
-                inspect
-                    .args(["find-identity", "-p", "codesigning"])
-                    .arg(&self.keychain_path);
-                if fixture_home {
-                    inspect.env("HOME", self.directory.path());
-                }
-                let result = inspect.output().unwrap();
-                eprintln!(
-                    "Fixture identity lookup (isolated home: {fixture_home}): {}\n{}\n{}",
-                    result.status,
-                    String::from_utf8_lossy(&result.stdout),
-                    String::from_utf8_lossy(&result.stderr)
-                );
-            }
-        }
-        output
+        command.output().unwrap()
     }
 
     fn helper(&self) -> PathBuf {
@@ -146,10 +128,7 @@ credential = "credential://fixture"
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        assert_eq!(
-            unsafe { SecKeychainDelete(self.keychain.as_concrete_TypeRef()) },
-            0
-        );
+        keychain_fixture::delete(&self.keychain);
     }
 }
 
@@ -170,6 +149,7 @@ fn digest(path: &Path) -> Vec<u8> {
 
 #[test]
 fn native_helper_preserves_values_and_setup_and_classifies_lock_and_store_failures() {
+    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
     let _no_ui = SecKeychain::disable_user_interaction().unwrap();
     let mut fixture = Fixture::new();
     let before = fixture.run(&["keychain", "status", "--json"]);
@@ -311,6 +291,7 @@ fn helper_refuses_an_invocation_without_a_private_channel() {
 
 #[test]
 fn missing_helper_fails_without_implicit_installation_or_cli_substitution() {
+    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
     let _no_ui = SecKeychain::disable_user_interaction().unwrap();
     let mut fixture = Fixture::new();
     fixture.without_companion();
@@ -372,6 +353,7 @@ fn missing_helper_fails_without_implicit_installation_or_cli_substitution() {
 #[test]
 #[ignore = "opens system unlock windows for a disposable Keychain; requires explicit local UI verification"]
 fn system_unlock_resumes_read_and_cancellation_remains_explicit() {
+    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
     let fixture = Fixture::new();
     success(&fixture.setup(false));
     success(&fixture.store("synthetic-unlock-fixture", false));

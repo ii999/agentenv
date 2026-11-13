@@ -1,5 +1,8 @@
 #![cfg(target_os = "macos")]
 
+#[path = "helpers/macos_keychain.rs"]
+mod keychain_fixture;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -9,14 +12,13 @@ use agentenv::macos::signing;
 use core_foundation::base::TCFType;
 use security_framework::item::{ItemClass, ItemSearchOptions, Limit, Reference, SearchResult};
 use security_framework::key::{Algorithm, SecKey};
-use security_framework::os::macos::keychain::{CreateOptions, SecKeychain};
+use security_framework::os::macos::keychain::SecKeychain;
 use security_framework_sys::base::SecKeychainRef;
 
 const IDENTIFIER: &str = "io.github.ii999.agentenv.signing-test";
 const LABEL: &str = "agentenv local code signing";
 
 extern "C" {
-    fn SecKeychainDelete(keychain: SecKeychainRef) -> i32;
     fn SecKeychainLock(keychain: SecKeychainRef) -> i32;
 }
 
@@ -27,10 +29,7 @@ struct ScratchKeychain {
 
 impl Drop for ScratchKeychain {
     fn drop(&mut self) {
-        assert_eq!(
-            unsafe { SecKeychainDelete(self.keychain.as_concrete_TypeRef()) },
-            0
-        );
+        keychain_fixture::delete(&self.keychain);
     }
 }
 
@@ -57,10 +56,7 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
     let directory = tempfile::tempdir().unwrap();
     let keychain_path = directory.path().join("signing.keychain");
     let fixture = ScratchKeychain {
-        keychain: CreateOptions::new()
-            .password("disposable-test-only")
-            .create(&keychain_path)
-            .unwrap(),
+        keychain: keychain_fixture::create(&keychain_path, "disposable-test-only"),
         _directory: directory,
     };
     let state = fixture._directory.path().join("state");
@@ -81,31 +77,7 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
 
     let first = fixture._directory.path().join("first");
     fs::copy("/usr/bin/true", &first).unwrap();
-    if let Err(error) = identity.sign(&first, IDENTIFIER) {
-        eprintln!(
-            "Initial signing failure: {error}; created Keychain: {}",
-            keychain_path.display()
-        );
-        for selector in [
-            identity.certificate_sha1().to_owned(),
-            identity.certificate_sha1().to_uppercase(),
-            LABEL.to_owned(),
-        ] {
-            let result = Command::new("/usr/bin/codesign")
-                .arg("--keychain")
-                .arg(&keychain_path)
-                .args(["--force", "--sign", &selector, "--timestamp=none"])
-                .arg(&first)
-                .output()
-                .unwrap();
-            eprintln!(
-                "Explicit Keychain selector {selector}: {}\n{}",
-                result.status,
-                String::from_utf8_lossy(&result.stderr)
-            );
-        }
-        panic!("{error}");
-    }
+    identity.sign(&first, IDENTIFIER).unwrap();
     identity.verify(&first, IDENTIFIER).unwrap();
     assert!(identity.verify(&first, "another.identifier").is_err());
     assert!(identity
@@ -201,10 +173,10 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
 
     let foreign_directory = tempfile::tempdir().unwrap();
     let foreign = ScratchKeychain {
-        keychain: CreateOptions::new()
-            .password("disposable-foreign-test-only")
-            .create(foreign_directory.path().join("foreign.keychain"))
-            .unwrap(),
+        keychain: keychain_fixture::create(
+            &foreign_directory.path().join("foreign.keychain"),
+            "disposable-foreign-test-only",
+        ),
         _directory: foreign_directory,
     };
     let foreign_identity =
