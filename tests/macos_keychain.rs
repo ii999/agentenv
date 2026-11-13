@@ -37,7 +37,11 @@ impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let keychain_path = directory.path().join("native-helper.keychain");
-        let keychain = keychain_fixture::create(&keychain_path, "agentenv-native-fixture");
+        let keychain = keychain_fixture::create(
+            &keychain_path,
+            "agentenv-native-fixture",
+            Some(directory.path()),
+        );
         let config = directory.path().join("config.toml");
         fs::write(
             &config,
@@ -149,7 +153,9 @@ fn digest(path: &Path) -> Vec<u8> {
 
 #[test]
 fn native_helper_preserves_values_and_setup_and_classifies_lock_and_store_failures() {
-    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
+    let _interaction = KEYCHAIN_INTERACTION
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let _no_ui = SecKeychain::disable_user_interaction().unwrap();
     let mut fixture = Fixture::new();
     let before = fixture.run(&["keychain", "status", "--json"]);
@@ -291,7 +297,9 @@ fn helper_refuses_an_invocation_without_a_private_channel() {
 
 #[test]
 fn missing_helper_fails_without_implicit_installation_or_cli_substitution() {
-    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
+    let _interaction = KEYCHAIN_INTERACTION
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let _no_ui = SecKeychain::disable_user_interaction().unwrap();
     let mut fixture = Fixture::new();
     fixture.without_companion();
@@ -353,7 +361,9 @@ fn missing_helper_fails_without_implicit_installation_or_cli_substitution() {
 #[test]
 #[ignore = "opens system unlock windows for a disposable Keychain; requires explicit local UI verification"]
 fn system_unlock_resumes_read_and_cancellation_remains_explicit() {
-    let _interaction = KEYCHAIN_INTERACTION.lock().unwrap();
+    let _interaction = KEYCHAIN_INTERACTION
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let fixture = Fixture::new();
     success(&fixture.setup(false));
     success(&fixture.store("synthetic-unlock-fixture", false));

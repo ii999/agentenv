@@ -56,7 +56,7 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
     let directory = tempfile::tempdir().unwrap();
     let keychain_path = directory.path().join("signing.keychain");
     let fixture = ScratchKeychain {
-        keychain: keychain_fixture::create(&keychain_path, "disposable-test-only"),
+        keychain: keychain_fixture::create(&keychain_path, "disposable-test-only", None),
         _directory: directory,
     };
     let state = fixture._directory.path().join("state");
@@ -176,6 +176,7 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
         keychain: keychain_fixture::create(
             &foreign_directory.path().join("foreign.keychain"),
             "disposable-foreign-test-only",
+            None,
         ),
         _directory: foreign_directory,
     };

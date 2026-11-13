@@ -244,7 +244,8 @@ impl Install {
         #[cfg(target_os = "macos")]
         let keychain_path = dir.path().join("update-signing.keychain");
         #[cfg(target_os = "macos")]
-        let keychain = keychain_fixture::create(&keychain_path, "agentenv-update-fixture");
+        let keychain =
+            keychain_fixture::create(&keychain_path, "agentenv-update-fixture", Some(&home));
         Self {
             _dir: dir,
             binary,

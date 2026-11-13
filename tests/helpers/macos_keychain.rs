@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::process::Command;
 use std::ptr;
 
 use core_foundation::array::{CFArray, CFArrayRef};
@@ -52,8 +53,8 @@ fn set_search_list(keychains: &[SecKeychain]) -> i32 {
     }
 }
 
-pub fn create(path: &Path, password: &str) -> SecKeychain {
-    let _lock = registry_lock();
+pub fn create(path: &Path, password: &str, isolated_home: Option<&Path>) -> SecKeychain {
+    let lock = registry_lock();
     let keychain = CreateOptions::new()
         .password(password)
         .create(path)
@@ -67,6 +68,25 @@ pub fn create(path: &Path, password: &str) -> SecKeychain {
         if status != 0 {
             let cleanup = unsafe { SecKeychainDelete(keychain.as_concrete_TypeRef()) };
             panic!("register the disposable Keychain: OSStatus {status}; cleanup: {cleanup}");
+        }
+    }
+    drop(lock);
+    if let Some(home) = isolated_home {
+        // A CLI's isolated HOME also isolates Security.framework preferences.
+        // This newly created fixture home has no unrelated search-list entries.
+        let registered = std::fs::create_dir_all(home.join("Library/Preferences")).and_then(|()| {
+            Command::new("/usr/bin/security")
+                .env("HOME", home)
+                .args(["list-keychains", "-d", "user", "-s"])
+                .arg(path)
+                .output()
+        });
+        match registered {
+            Ok(output) if output.status.success() => {}
+            other => {
+                delete(&keychain);
+                panic!("register the Keychain in its isolated home: {other:?}");
+            }
         }
     }
     keychain
