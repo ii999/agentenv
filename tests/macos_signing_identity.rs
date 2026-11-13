@@ -81,7 +81,31 @@ fn enroll_reuse_recover_and_reject_identity_loss() {
 
     let first = fixture._directory.path().join("first");
     fs::copy("/usr/bin/true", &first).unwrap();
-    identity.sign(&first, IDENTIFIER).unwrap();
+    if let Err(error) = identity.sign(&first, IDENTIFIER) {
+        eprintln!(
+            "Initial signing failure: {error}; created Keychain: {}",
+            keychain_path.display()
+        );
+        for selector in [
+            identity.certificate_sha1().to_owned(),
+            identity.certificate_sha1().to_uppercase(),
+            LABEL.to_owned(),
+        ] {
+            let result = Command::new("/usr/bin/codesign")
+                .arg("--keychain")
+                .arg(&keychain_path)
+                .args(["--force", "--sign", &selector, "--timestamp=none"])
+                .arg(&first)
+                .output()
+                .unwrap();
+            eprintln!(
+                "Explicit Keychain selector {selector}: {}\n{}",
+                result.status,
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        panic!("{error}");
+    }
     identity.verify(&first, IDENTIFIER).unwrap();
     assert!(identity.verify(&first, "another.identifier").is_err());
     assert!(identity

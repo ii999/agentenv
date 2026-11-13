@@ -180,7 +180,8 @@ impl LocalIdentity {
             .map_err(|error| SigningError::context("Could not launch macOS codesign", error))?;
         if !result.status.success() {
             return Err(SigningError(format!(
-                "macOS could not sign the staged executable ({}): {}. Unlock the selected Keychain and allow codesign to use the agentenv signing key if macOS asks",
+                "macOS could not sign the staged executable using Keychain {} ({}): {}. Unlock the selected Keychain and allow codesign to use the agentenv signing key if macOS asks",
+                self.keychain_path.display(),
                 result.status,
                 String::from_utf8_lossy(&result.stderr).trim()
             )));
