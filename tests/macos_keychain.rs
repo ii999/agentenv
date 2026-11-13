@@ -95,7 +95,28 @@ credential = "credential://fixture"
         if replace {
             command.arg("--replace-helper");
         }
-        command.output().unwrap()
+        let output = command.output().unwrap();
+        if !output.status.success() {
+            // Identity listings contain public certificate metadata only.
+            // Compare the subprocess home with the native login environment.
+            for fixture_home in [true, false] {
+                let mut inspect = Command::new("/usr/bin/security");
+                inspect
+                    .args(["find-identity", "-p", "codesigning"])
+                    .arg(&self.keychain_path);
+                if fixture_home {
+                    inspect.env("HOME", self.directory.path());
+                }
+                let result = inspect.output().unwrap();
+                eprintln!(
+                    "Fixture identity lookup (isolated home: {fixture_home}): {}\n{}\n{}",
+                    result.status,
+                    String::from_utf8_lossy(&result.stdout),
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            }
+        }
+        output
     }
 
     fn helper(&self) -> PathBuf {
