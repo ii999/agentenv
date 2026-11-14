@@ -707,7 +707,7 @@ use_agent = false
             // connection failure: no output, no remote command, that status.
             // ssh-exit-install does the same for the install session only,
             // like a connection lost after the upload began.
-            "#!/bin/sh\nfor argument in \"$@\"; do [ \"$argument\" = \"-G\" ] && exec /usr/bin/ssh \"$@\"; done\nd=$(dirname \"$0\")\n[ -f \"$d/../ssh-exit\" ] && exit \"$(cat \"$d/../ssh-exit\")\"\nfor last in \"$@\"; do :; done\ncase \"$last\" in *agentenv-install*) [ -f \"$d/../ssh-exit-install\" ] && exit \"$(cat \"$d/../ssh-exit-install\")\";; esac\nexec /bin/sh -c \"$last\"\n",
+            "#!/bin/sh\nfor argument in \"$@\"; do [ \"$argument\" = \"-G\" ] && exec /usr/bin/ssh \"$@\"; done\nd=$(dirname \"$0\")\n: >\"$d/../remote-stderr\"\n: >\"$d/../remote-status\"\n[ -f \"$d/../ssh-exit\" ] && exit \"$(cat \"$d/../ssh-exit\")\"\nfor last in \"$@\"; do :; done\ncase \"$last\" in *agentenv-install*) [ -f \"$d/../ssh-exit-install\" ] && exit \"$(cat \"$d/../ssh-exit-install\")\";; esac\n/bin/sh -c \"$last\" 2>\"$d/../remote-stderr\"\nresult=$?\nprintf '%s\\n' \"$result\" >\"$d/../remote-status\"\nexit \"$result\"\n",
         )
         .expect("fake ssh written");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("executable");
@@ -748,7 +748,7 @@ use_agent = false
         arguments: &[&str],
     ) -> std::process::Output {
         let mut command = Command::cargo_bin("agentenv").expect("agentenv binary");
-        command
+        let output = command
             .env_clear()
             .env("AGENTENV_FILE", config)
             .env("AGENTENV_NO_PROJECT", "1")
@@ -758,7 +758,16 @@ use_agent = false
             .env("HOME", config.parent().unwrap())
             .args(arguments)
             .output()
-            .expect("run agentenv")
+            .expect("run agentenv");
+        if !output.status.success() {
+            if let Ok(status) = fs::read_to_string(config.parent().unwrap().join("remote-status")) {
+                eprintln!("Synthetic SSH command status: {status}");
+            }
+            if let Ok(stderr) = fs::read_to_string(config.parent().unwrap().join("remote-stderr")) {
+                eprintln!("Synthetic SSH command stderr: {stderr}");
+            }
+        }
+        output
     }
 
     #[test]
