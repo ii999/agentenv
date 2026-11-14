@@ -48,13 +48,6 @@ jobs:
       - name: Run tests
         id: native_tests
         run: cargo test --features test-support --no-fail-fast
-      - name: Diagnose concurrent sudo fixture startup
-        if: matrix.os == 'ubuntu-latest' && !cancelled()
-        run: |
-          for attempt in {1..10}; do
-            echo "Concurrent sudo fixture iteration $attempt"
-            cargo test --features test-support --locked --test sudo_local -- --nocapture
-          done
       - name: Native macOS login-Keychain update continuity
         if: runner.os == 'macOS'
         run: >-
