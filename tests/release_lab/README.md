@@ -13,8 +13,8 @@ GitHub Actions runner and restore it before deleting the fixture.
 
 ```bash
 python tests/release_lab/verify.py \
-  --archive artifacts/agentenv-v0.4.2-aarch64-apple-darwin.tar.gz \
-  --tag v0.4.2 --target aarch64-apple-darwin
+  --archive artifacts/agentenv-v0.5.0-aarch64-apple-darwin.tar.gz \
+  --tag v0.5.0 --target aarch64-apple-darwin
 ```
 
 The archive name, tag, and target identify the artifact under test. A separate
