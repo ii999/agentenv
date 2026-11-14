@@ -121,7 +121,10 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<crate::credential::Secret, AppError>>,
 {
-    let secret = resolve().await.map_err(|_| credential_failure())?;
+    let secret = resolve().await.map_err(|error| match error {
+        AppError::Keychain(_) => error,
+        _ => credential_failure(),
+    })?;
     secret
         .validate_authentication(super::SUDO_PASSWORD_LIMIT)
         .map_err(|_| credential_failure())?;
@@ -364,4 +367,37 @@ pub fn helper_main() -> i32 {
     return if unix::reply(first).is_ok() { 0 } else { 1 };
     #[cfg(windows)]
     return if windows::reply(first).is_ok() { 0 } else { 1 };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::credential::{KeychainFailure, KeychainOperation, KeychainReason};
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn login_failure_preserves_safe_diagnostics_and_delivers_no_bytes() {
+        let expected = KeychainFailure::new(KeychainReason::Cancelled, KeychainOperation::Unlock);
+        let (mut writer, mut reader) = tokio::io::duplex(128);
+        let error = deliver(&mut writer, || async { Err(AppError::Keychain(expected)) })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AppError::Keychain(actual) if actual == expected));
+        drop(writer);
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received).await.unwrap();
+        assert!(received.is_empty());
+
+        let mut sink = tokio::io::sink();
+        let error = deliver(&mut sink, || async {
+            Err(AppError::Credential(
+                "synthetic-sensitive-provider-detail".into(),
+            ))
+        })
+        .await
+        .unwrap_err();
+        assert!(!error
+            .to_string()
+            .contains("synthetic-sensitive-provider-detail"));
+    }
 }

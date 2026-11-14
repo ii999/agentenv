@@ -7,8 +7,8 @@ together with the agentenv agent skill.
 .DESCRIPTION
 Downloads the x86_64 Windows archive for the requested release, verifies its
 SHA-256 checksum, installs the matching executable bundle, and
-installs the agent skill to ~\.agents\skills. Downloads use plain HTTPS
-from GitHub Releases.
+installs the agent skill to ~\.agents\skills. Downloads default to HTTPS
+from GitHub Releases; AGENTENV_RELEASE_BASE_URL selects a compatible mirror.
 
 .PARAMETER Version
 Release tag to install, e.g. v0.4.2. Defaults to AGENTENV_VERSION or the
@@ -38,6 +38,9 @@ $ErrorActionPreference = 'Stop'
 
 $repo = 'ii999/agentenv'
 $target = 'x86_64-pc-windows-msvc'
+$releaseBase = if ($env:AGENTENV_RELEASE_BASE_URL) {
+    $env:AGENTENV_RELEASE_BASE_URL.TrimEnd('/')
+} else { "https://github.com/$repo/releases" }
 
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
     throw "No prebuilt binary for Windows $env:PROCESSOR_ARCHITECTURE; build from source with 'cargo build --release'."
@@ -45,7 +48,19 @@ if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
 
 if (-not $Version) {
     try {
-        $Version = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+        $latestSums = (Invoke-WebRequest "$releaseBase/latest/download/SHA256SUMS").Content
+        if ($latestSums -is [byte[]]) {
+            $latestSums = [System.Text.Encoding]::UTF8.GetString($latestSums)
+        }
+        $versions = @($latestSums -split '\r?\n' | ForEach-Object {
+            if ($_ -match "^[0-9a-fA-F]{64}\s+\*?agentenv-(v\S+)-$([regex]::Escape($target))\.zip$") {
+                $Matches[1]
+            }
+        })
+        if ($versions.Count -ne 1) {
+            throw "The latest checksums do not identify exactly one release for $target."
+        }
+        $Version = $versions[0]
     }
     catch {
         throw 'Cannot determine the latest release; pass -Version <tag>.'
@@ -58,7 +73,7 @@ New-Item -ItemType Directory -Path $workDir | Out-Null
 
 function Get-ReleaseFile([string]$Name) {
     try {
-        Invoke-WebRequest "https://github.com/$($script:repo)/releases/download/$($script:Version)/$Name" `
+        Invoke-WebRequest "$($script:releaseBase)/download/$($script:Version)/$Name" `
             -OutFile (Join-Path $script:workDir $Name)
     }
     catch {

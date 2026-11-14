@@ -19,6 +19,7 @@ pub struct Installation {
     pub binary: PathBuf,
     pub sudo_helper: PathBuf,
     pub ssh_askpass: PathBuf,
+    pub keychain_helper: Option<PathBuf>,
     /// Existing `<root>/agentenv` skill directories, each holding `SKILL.md`.
     pub skills: Vec<PathBuf>,
 }
@@ -61,10 +62,13 @@ impl Installation {
             "agentenv-ssh-askpass{}",
             std::env::consts::EXE_SUFFIX
         ));
+        let keychain_helper =
+            cfg!(target_os = "macos").then(|| directory.join("agentenv-keychain-helper"));
         Ok(Self {
             binary,
             sudo_helper,
             ssh_askpass,
+            keychain_helper,
             skills,
         })
     }
@@ -150,10 +154,16 @@ fn replace_bundle_with(
     replace_main: impl FnOnce() -> Result<(), AppError>,
 ) -> Result<(), AppError> {
     let mut swaps = Vec::new();
-    for (source, destination) in [
+    let mut companions = vec![
         (&extracted.sudo_helper, &installation.sudo_helper),
         (&extracted.ssh_askpass, &installation.ssh_askpass),
-    ] {
+    ];
+    if let (Some(source), Some(destination)) =
+        (&extracted.keychain_helper, &installation.keychain_helper)
+    {
+        companions.push((source, destination));
+    }
+    for (source, destination) in companions {
         match swap_file(source, destination) {
             Ok(swap) => swaps.push(swap),
             Err(error) => {
@@ -407,6 +417,7 @@ mod tests {
             binary: installed.join("agentenv"),
             sudo_helper: installed.join("agentenv-sudo-helper"),
             ssh_askpass: installed.join("agentenv-ssh-askpass"),
+            keychain_helper: None,
             skills: Vec::new(),
         };
         fs::write(&installation.sudo_helper, b"old sudo").expect("old sudo helper");
@@ -415,6 +426,7 @@ mod tests {
             binary: extracted_dir.join("agentenv"),
             sudo_helper: extracted_dir.join("agentenv-sudo-helper"),
             ssh_askpass: extracted_dir.join("agentenv-ssh-askpass"),
+            keychain_helper: None,
             skill: None,
         };
         fs::write(&extracted.sudo_helper, b"new sudo").expect("new sudo helper");

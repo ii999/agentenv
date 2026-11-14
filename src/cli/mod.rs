@@ -8,6 +8,7 @@
 
 mod credential;
 mod fill;
+mod keychain;
 mod project;
 mod signals;
 mod sudo;
@@ -52,6 +53,8 @@ pub enum Command {
     Init,
     /// Install the latest release over this binary and its agent skills.
     Update(update::UpdateArgs),
+    /// Set up macOS credential access, inspect Keychain state, or unlock it.
+    Keychain(keychain::KeychainArgs),
 }
 
 #[derive(Debug, Args)]
@@ -296,6 +299,9 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
     if let Command::Update(args) = invocation.command {
         return update::execute(args, invocation.json, &env);
     }
+    if let Command::Keychain(args) = invocation.command {
+        return keychain::execute(args, invocation.json);
+    }
     if matches!(&invocation.command, Command::Validate) {
         if invocation.json {
             return Err(AppError::Usage(
@@ -529,7 +535,7 @@ pub fn execute(invocation: Invocation) -> Result<Output, AppError> {
         Command::Credential(CredentialArgs {
             command: CredentialCommand::Fill(args),
         }) => fill::execute(&config, args, invocation.json),
-        Command::Project(_) | Command::Update(_) => {
+        Command::Project(_) | Command::Update(_) | Command::Keychain(_) => {
             unreachable!("project and update commands return before loading the configuration")
         }
     }

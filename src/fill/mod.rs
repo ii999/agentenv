@@ -465,6 +465,7 @@ async fn resolve_value(
             "credential '{}' could not be resolved; run 'agentenv credential check {}' to diagnose the provider",
             definition.name, definition.name
         ))),
+        Err(ResolveError::Keychain(error)) => Err(AppError::Keychain(error)),
     }
 }
 

@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Secret, SecretDomainError, FILL_VALUE_LIMIT};
+use super::{KeychainFailure, Secret, SecretDomainError, FILL_VALUE_LIMIT};
 
 #[cfg(windows)]
 mod windows;
@@ -67,22 +67,31 @@ pub enum ResolveError {
     Value,
     /// The deadline expired before a value arrived.
     Timeout,
+    /// The macOS helper reported a classified failure without candidate bytes.
+    Keychain(KeychainFailure),
 }
 
 impl fmt::Display for ResolveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Keychain(error) = self {
+            return error.fmt(formatter);
+        }
         formatter.write_str(match self {
             Self::NotPermitted => "the credential does not permit this use",
             Self::Provider => "the credential provider failed",
             Self::Value => "the credential value is not supported for this use",
             Self::Timeout => "the credential lookup deadline expired",
+            Self::Keychain(_) => unreachable!("Keychain diagnostics are rendered above"),
         })
     }
 }
 
 impl From<ResolveError> for AppError {
-    fn from(_error: ResolveError) -> Self {
-        failure()
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::Keychain(error) => Self::Keychain(error),
+            _ => failure(),
+        }
     }
 }
 
@@ -159,11 +168,13 @@ pub fn internal_entry() -> Option<i32> {
 }
 
 use crate::config::Provider;
-const MAGIC: &[u8; 5] = b"AGER\x02";
+const MAGIC: &[u8; 5] = b"AGER\x03";
 const MAX_REQUEST: usize = 65536;
 const STATUS_OK: u8 = 0;
 const STATUS_PROVIDER: u8 = 1;
 const STATUS_VALUE: u8 = 2;
+const STATUS_KEYCHAIN: u8 = 3;
+const DIAGNOSTIC_LIMIT: usize = 1024;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -241,6 +252,23 @@ async fn exchange<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     {
         STATUS_OK => {}
         STATUS_VALUE => return Err(ResolveError::Value),
+        STATUS_KEYCHAIN => {
+            let length = channel
+                .read_u16()
+                .await
+                .map_err(|_| ResolveError::Provider)? as usize;
+            if length == 0 || length > DIAGNOSTIC_LIMIT {
+                return Err(ResolveError::Provider);
+            }
+            let mut diagnostic = vec![0; length];
+            channel
+                .read_exact(&mut diagnostic)
+                .await
+                .map_err(|_| ResolveError::Provider)?;
+            let failure =
+                serde_json::from_slice(&diagnostic).map_err(|_| ResolveError::Provider)?;
+            return Err(ResolveError::Keychain(failure));
+        }
         _ => return Err(ResolveError::Provider),
     }
     let size = channel
@@ -266,17 +294,41 @@ async fn exchange<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     Ok(secret)
 }
 
-fn resolve_request(metadata: &[u8]) -> Result<Secret, u8> {
+enum ProviderFailure {
+    Provider,
+    Value,
+    Keychain(KeychainFailure),
+}
+
+fn failure_payload(error: &ProviderFailure) -> Result<Vec<u8>, AppError> {
+    match error {
+        ProviderFailure::Provider => Ok(vec![STATUS_PROVIDER]),
+        ProviderFailure::Value => Ok(vec![STATUS_VALUE]),
+        ProviderFailure::Keychain(error) => {
+            let encoded = serde_json::to_vec(error).map_err(|_| failure())?;
+            if encoded.len() > DIAGNOSTIC_LIMIT {
+                return Err(failure());
+            }
+            let mut payload = vec![STATUS_KEYCHAIN];
+            payload.extend_from_slice(&(encoded.len() as u16).to_be_bytes());
+            payload.extend_from_slice(&encoded);
+            Ok(payload)
+        }
+    }
+}
+
+fn resolve_request(metadata: &[u8]) -> Result<Secret, ProviderFailure> {
     use crate::credential::{provider_for, ConfidentialError};
-    let request: Request = serde_json::from_slice(metadata).map_err(|_| STATUS_PROVIDER)?;
+    let request: Request =
+        serde_json::from_slice(metadata).map_err(|_| ProviderFailure::Provider)?;
     let stage = request.stage;
     if !(1..=stage.max_limit()).contains(&request.limit) {
-        return Err(STATUS_PROVIDER);
+        return Err(ProviderFailure::Provider);
     }
     let provider = match request.provider {
         ProviderRequest::Keychain { service, account } => Provider::Keychain { service, account },
         ProviderRequest::Command { argv } if !argv.is_empty() => Provider::Command { argv },
-        _ => return Err(STATUS_PROVIDER),
+        _ => return Err(ProviderFailure::Provider),
     };
     let definition = CredentialDef {
         name: "resolution".to_owned(),
@@ -291,11 +343,12 @@ fn resolve_request(metadata: &[u8]) -> Result<Secret, u8> {
     let line_oriented = stage == ResolutionStage::Fill;
     let secret = match provider_for(&definition).resolve_confidential(line_oriented) {
         Ok(secret) => secret,
-        Err(ConfidentialError::Execution) => return Err(STATUS_PROVIDER),
-        Err(ConfidentialError::Value) => return Err(STATUS_VALUE),
+        Err(ConfidentialError::Execution) => return Err(ProviderFailure::Provider),
+        Err(ConfidentialError::Value) => return Err(ProviderFailure::Value),
+        Err(ConfidentialError::Keychain(error)) => return Err(ProviderFailure::Keychain(error)),
     };
     if stage.validate(&secret, request.limit).is_err() {
-        return Err(STATUS_VALUE);
+        return Err(ProviderFailure::Value);
     }
     Ok(secret)
 }
@@ -303,7 +356,7 @@ fn resolve_request(metadata: &[u8]) -> Result<Secret, u8> {
 #[cfg(unix)]
 mod unix {
     use std::io::{Read, Write};
-    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
@@ -373,54 +426,7 @@ mod unix {
     }
 
     fn private_channel() -> Result<UnixStream, AppError> {
-        let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
-        // Validate the inherited descriptor before taking ownership. Never
-        // accept a regular file, stdout pipe, terminal, or network socket.
-        unsafe {
-            if libc::fstat(3, metadata.as_mut_ptr()) != 0
-                || metadata.assume_init().st_mode & libc::S_IFMT != libc::S_IFSOCK
-            {
-                return Err(failure());
-            }
-        }
-        let channel = unsafe { UnixStream::from_raw_fd(3) };
-        unsafe {
-            let mut address = std::mem::MaybeUninit::<libc::sockaddr_storage>::uninit();
-            let mut length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-            if libc::getpeername(3, address.as_mut_ptr().cast(), &mut length) != 0
-                || address.assume_init().ss_family as i32 != libc::AF_UNIX
-            {
-                return Err(failure());
-            }
-        }
-        #[cfg(target_os = "linux")]
-        unsafe {
-            let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
-            let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-            if libc::getsockopt(
-                3,
-                libc::SOL_SOCKET,
-                libc::SO_PEERCRED,
-                credentials.as_mut_ptr().cast(),
-                &mut len,
-            ) != 0
-                || credentials.assume_init().uid != libc::getuid()
-            {
-                return Err(failure());
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        unsafe {
-            let (mut uid, mut gid) = (0, 0);
-            if libc::getpeereid(3, &mut uid, &mut gid) != 0 || uid != libc::getuid() {
-                return Err(failure());
-            }
-        }
-        // Providers must not inherit the resolver capability.
-        if unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) } == -1 {
-            return Err(failure());
-        }
-        Ok(channel)
+        crate::credential::channel::inherited_socket(3).map_err(|_| failure())
     }
 
     pub(super) fn serve() -> Result<(), AppError> {
@@ -446,7 +452,7 @@ mod unix {
         channel.read_exact(&mut metadata).map_err(|_| failure())?;
         let secret = match resolve_request(&metadata) {
             Ok(secret) => secret,
-            Err(status) => return reply_status(&mut channel, status),
+            Err(error) => return reply_failure(&mut channel, &error),
         };
         channel.write_all(MAGIC).map_err(|_| failure())?;
         channel.write_all(&[STATUS_OK]).map_err(|_| failure())?;
@@ -459,9 +465,11 @@ mod unix {
         Ok(())
     }
 
-    fn reply_status(channel: &mut UnixStream, status: u8) -> Result<(), AppError> {
+    fn reply_failure(channel: &mut UnixStream, error: &ProviderFailure) -> Result<(), AppError> {
         channel.write_all(MAGIC).map_err(|_| failure())?;
-        channel.write_all(&[status]).map_err(|_| failure())?;
+        channel
+            .write_all(&failure_payload(error)?)
+            .map_err(|_| failure())?;
         Err(failure())
     }
 }

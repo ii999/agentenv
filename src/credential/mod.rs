@@ -1,8 +1,11 @@
 //! Credential resolution and storage behind a secret-safe provider seam.
 
+#[cfg(unix)]
+pub(crate) mod channel;
 mod command;
 mod env;
 mod keychain;
+mod keychain_error;
 pub mod resolver;
 mod secret;
 mod shallow;
@@ -12,6 +15,7 @@ mod test_store;
 #[cfg(all(feature = "test-support", not(debug_assertions)))]
 compile_error!("the test-support feature is restricted to debug builds");
 
+pub use keychain_error::{KeychainFailure, KeychainOperation, KeychainReason};
 pub use secret::{CapturedSecret, Secret, SecretDomainError};
 pub use shallow::{shallow_status, Status};
 
@@ -32,6 +36,8 @@ pub enum ConfidentialError {
     /// The provider produced a value larger than the confidential capture
     /// bound for the requested stage.
     Value,
+    /// A native Keychain failure with structured, secret-free diagnostics.
+    Keychain(KeychainFailure),
 }
 
 /// The common interface for a configured credential provider.

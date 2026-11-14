@@ -65,6 +65,9 @@ pub struct Extracted {
     pub binary: PathBuf,
     pub sudo_helper: PathBuf,
     pub ssh_askpass: PathBuf,
+    /// The macOS credential helper candidate. The active helper has a separate
+    /// per-user installation and is preserved across ordinary updates.
+    pub keychain_helper: Option<PathBuf>,
     /// The packaged skill directory, when the release ships one.
     pub skill: Option<PathBuf>,
 }
@@ -377,10 +380,14 @@ pub fn extract(archive: &Path, release: &Release, dir: &Path) -> Result<Extracte
     }
     let skill = root.join("skills").join("agentenv");
     let skill = skill.join("SKILL.md").is_file().then_some(skill);
+    let keychain_helper = cfg!(target_os = "macos")
+        .then(|| root.join("agentenv-keychain-helper"))
+        .filter(|path| path.is_file());
     Ok(Extracted {
         binary,
         sudo_helper,
         ssh_askpass,
+        keychain_helper,
         skill,
     })
 }
@@ -438,7 +445,31 @@ pub fn verify_bundle(extracted: &Extracted, version: &Version) -> Result<(), App
     verify_identity(
         &extracted.ssh_askpass,
         &format!("{}\n", crate::sudo::ssh_askpass::identity_for(version)),
-    )
+    )?;
+    #[cfg(target_os = "macos")]
+    match &extracted.keychain_helper {
+        Some(helper) => {
+            verify_identity(helper, &format!("{}\n", crate::macos::protocol::IDENTITY))?
+        }
+        None => {
+            // Releases predating the Keychain command remain valid explicit
+            // downgrade targets. A new CLI without its helper is incomplete.
+            let supports_keychain = Command::new(&extracted.binary)
+                .args(["keychain", "--help"])
+                .output()
+                .map_err(|error| {
+                    AppError::Update(format!(
+                        "cannot inspect the downloaded Keychain command: {error}"
+                    ))
+                })?
+                .status
+                .success();
+            if supports_keychain {
+                return Err(AppError::Update("the macOS release is missing agentenv-keychain-helper; install a complete release bundle".into()));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn verify_identity(binary: &Path, expected: &str) -> Result<(), AppError> {

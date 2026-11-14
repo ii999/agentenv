@@ -141,8 +141,10 @@ pub(super) fn serve() -> Result<(), AppError> {
                         .map_err(|_| failure())?;
                     Ok(())
                 }
-                Err(status) => {
-                    pipe.write_u8(status).await.map_err(|_| failure())?;
+                Err(error) => {
+                    pipe.write_all(&failure_payload(&error)?)
+                        .await
+                        .map_err(|_| failure())?;
                     Err(failure())
                 }
             };

@@ -72,6 +72,11 @@ flate2 = "1"
 tar = "0.4"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+security-framework = "3.7"
+security-framework-sys = "2.17"
+rcgen = { version = "0.14.10", default-features = false }
+sha1 = "0.10"
 # The credential dialog places a system glass backdrop behind its window. These
 # are the AppKit binding versions eframe already links on macOS.
 objc2 = "0.6.4"
