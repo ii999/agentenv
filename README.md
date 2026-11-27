@@ -650,9 +650,20 @@ User environment information is available through `agentenv`.
 - Run `agentenv show <name> --json` before using an unfamiliar entry.
 - Use `agentenv get <path>` to retrieve ordinary values.
 - Use `agentenv run --with <entry> -- <command>` when credentials are required.
-- Use `agentenv set <path> <value>` to record configuration the user asks you
-  to save; define credentials with `agentenv credential add <name> ...` before
-  referencing them, and never write a secret value into the file.
+- Use `agentenv set <path> <value>` and `agentenv credential add <name> ...`
+  to record configuration or define credentials, and never write a secret value
+  into the file.
+- When a credential (and its entry) is directly required by the task and not
+  yet defined, create the `keychain` credential definition and entry reference
+  directly, tell the user you are opening the credential window, run
+  `agentenv credential set <name> --input dialog --json`, wait for
+  `status: "stored"`, and continue the task instead of skipping the step.
+- When an existing `keychain` credential has no stored value yet, tell the user
+  you are opening the credential window, run
+  `agentenv credential set <name> --input dialog --json`, wait for
+  `status: "stored"`, and continue without stopping first to ask permission.
+- When other required configuration is missing, ask the user for confirmation
+  (and any undetermined values), create it with `agentenv set`, and continue.
 - Never print, log, persist, or summarize resolved credentials.
 - Status `2` also covers project-file validation errors; status `5` reports
   project trust-state failures and status `6` reports unchecked or unsatisfied
@@ -660,7 +671,6 @@ User environment information is available through `agentenv`.
 - Keep non-secret settings in `.env`; for Docker Compose, inject credentials
   with `agentenv run --with llm -- docker compose up`, never an `env_file:`
   containing secrets.
-- Report missing configuration or credentials explicitly.
 ```
 
 Use the commands in this order:
@@ -674,9 +684,17 @@ Use the commands in this order:
 5. When a target needs credentials, use
    `agentenv run --with <entry> -- <command> [args...]`.
 
-If the requested profile, entry, field, or credential is missing, report that
-fact explicitly. Do not guess a field name, silently switch profiles, or
-substitute another credential.
+Do not guess an unrelated field name, silently switch profiles, or substitute
+another credential, and never leave a required step unexecuted only to report
+at the end that a credential or entry was missing. When a credential (and its
+entry) is directly required by the task and not yet defined, create the
+`keychain` credential definition (`agentenv credential add ...`) and entry
+reference (`agentenv set ...`), tell the user you are opening the credential
+window, run `agentenv credential set <name> --input dialog --json`, wait for
+`status: "stored"`, and execute the step. The same dialog flow applies when an
+existing `keychain` credential has no stored value yet. For other missing
+configuration whose values are not already clear from the task, ask the user
+for confirmation and create it before continuing.
 
 ### Finding injection target names
 
@@ -793,8 +811,10 @@ credential definition to the config file — never a value; define the
 credential first, then reference it from entries (`credential://<name>`) and,
 for the keychain provider, store its value with `credential set`.
 
-For Agent-guided entry, run `credential set <name> --input dialog --json`
-without a PTY. This opens a local desktop window and waits until entry finishes.
+For Agent-guided entry, tell the user the credential window is opening and run
+`credential set <name> --input dialog --json` without a PTY instead of stopping
+the task to ask first. This opens a local desktop window and waits until entry
+finishes.
 The window shows the credential name; the definition's description is the
 placeholder text of the empty input field. It supports masked multiline input,
 a show/hide toggle inside the field, editing, paste from the keyboard shortcut
