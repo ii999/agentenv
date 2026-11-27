@@ -2,8 +2,13 @@
 
 Use this reference only for typed `sudo-target` entries. The target binds the
 transport, account, credential references, sudo executable, and SSH trust
-policy. Do not convert an ordinary entry into a target unless the user asks to
-configure privileged execution.
+policy. Do not overwrite an existing non-`sudo-target` entry without asking. If
+privileged execution is directly required by the task and no `sudo-target` or
+authentication credential is defined yet, create the `keychain` authentication
+credential and the target entry (confirming any undetermined SSH host or target
+parameters with the user first), open `agentenv credential set <name> --input dialog --json`
+to store the password, and execute the command rather than leaving the step
+unexecuted.
 
 ## Run, inspect, and check
 
@@ -32,11 +37,18 @@ provides a terminal.
 
 ```text
 agentenv credential add prod_account --description "Production deploy password." --provider keychain --service agentenv.sudo --account prod/deploy --usage sudo --usage ssh-password
-agentenv credential set prod_account
+agentenv credential set prod_account --input dialog --json
 agentenv credential update prod_account --usage sudo --usage ssh-password
 ```
 
-Ask the user to run `credential set` at their terminal for its hidden input.
+When a `keychain` authentication credential has no stored value yet — whether
+you just defined it or `sudo` / `credential check` reported that the keychain
+item is missing — tell the user you are opening the local credential window,
+launch `agentenv credential set <name> --input dialog --json` without a PTY,
+wait for `status: "stored"`, and then continue the task without stopping first
+to ask whether to open the window. On a remote or headless host without a
+graphical session, explain that limitation and ask the user to run
+`agentenv credential set <name> --input terminal` in their own terminal.
 `credential update` changes purpose metadata only; it does not resolve, copy,
 or replace the stored value. Authentication definitions cannot use the env
 provider, `inject_as`, or a reference with `?as=`.

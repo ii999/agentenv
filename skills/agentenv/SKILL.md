@@ -36,9 +36,26 @@ reading the config file directly.
   values; `credential add` writes a definition only; `credential set` is
   the single path that stores a value, and it stores it in the platform
   credential store, not the file.
-- If a profile, entry, field, or credential is missing, report that
-  explicitly. Do not guess a field name, silently switch profiles, or
-  substitute another credential.
+- Do not guess an unrelated field name, silently switch profiles, or
+  substitute another credential when expected configuration is absent, and
+  never leave a required step unexecuted only to report at the end of the task
+  that a credential or entry was missing.
+- When a credential (and its entry reference) is directly required by the
+  current task and not yet defined in the configuration, create the `keychain`
+  credential definition (`agentenv credential add ...`) and entry reference
+  (`agentenv set ...`, initializing the config file with `agentenv init` if
+  needed) right away, tell the user you are opening the credential window, run
+  `agentenv credential set <name> --input dialog --json`, wait for
+  `status: "stored"`, and immediately execute the dependent step.
+- When an existing `keychain` credential has no stored value yet, do not end
+  the turn or ask permission before opening the input window. Tell the user you
+  are opening the credential window, run
+  `agentenv credential set <name> --input dialog --json` right away, wait for
+  its completion, and continue the task once it reports `status: "stored"`.
+- When other required configuration (such as a profile, ordinary entry, or
+  non-secret field whose value is not already determined by the task) is
+  missing, ask the user right away for confirmation and any needed values,
+  create it with `agentenv set` (or `agentenv init`), and continue the task.
 - Read the config through the CLI, not by opening the TOML file, so
   profile selection, credential indirection, and validation apply.
 - After `credential fill` writes a value into a browser field, do not read
@@ -137,7 +154,9 @@ same configuration. Credential resolution is unchanged by `--pure`: a
 
 ## Writing configuration
 
-Use these when the user asks to record configuration:
+Use these when the user asks to record configuration, when creating an entry
+or credential reference directly required by the current task, or after
+confirming missing configuration with the user:
 
 ```bash
 agentenv init                            # create the config file; refuses to overwrite
@@ -175,18 +194,26 @@ agentenv credential add <name> --description "<text>" --provider command \
 agentenv credential set <name> --input dialog --json  # open local entry; wait for its result
 ```
 
-Order for a new credential: `credential add` the definition, then for the
-keychain provider store the value with `credential set`, then reference it
-from an entry field as `credential://<name>`. Env and command credentials
-get their values from their external systems; `credential set` does not
-apply to them.
+Order for a new credential: `credential add` the definition, store the value
+with `credential set` for the `keychain` provider, and reference it from an
+entry field as `credential://<name>` (creating the config file with `init` if
+needed). Env and command credentials get their values from their external
+systems; `credential set` does not apply to them.
 
-For local keychain entry, launch `credential set <name> --input dialog --json`
-without a PTY. Tell the user to enter the value in the local window and save.
-Keep the command running and wait for its completion, including across tool
-session yields; an open window is not a completed save. Never inspect, capture,
-read, or automate the live entry window or clipboard. The user enters and
-checks the value there, and the command returns only completion metadata.
+When a credential is directly required to complete the current task and is not
+yet defined in `agentenv`, create its `keychain` definition and entry reference
+directly, then immediately open the input dialog rather than skipping the work
+and reporting a missing credential at the end. Whenever a `keychain` credential
+needed by the task has no stored value — whether you just created its
+definition or an existing definition failed `credential check`, `run`, `sudo`,
+or `credential fill` because the item is missing from the keychain — open the
+dialog immediately in the same turn without pausing to ask whether to open it.
+Tell the user to enter the value in the local window and save, launch
+`credential set <name> --input dialog --json` without a PTY, and keep the
+command running until it completes, including across tool session yields; an
+open window is not a completed save. Never inspect, capture, read, or automate
+the live entry window or clipboard. The user enters and checks the value there,
+and the command returns only completion metadata.
 
 Continue the dependent task only after exit 0 and JSON `status: "stored"`.
 `status: "cancelled"` means entry ended without a confirmed save; report it
@@ -328,8 +355,8 @@ authentication credential.
 | 0 | Success | — |
 | 1 | Usage or argument error | Fix the invocation |
 | 2 | Config-file error, including project-file validation, corrupt trust state, or Unix permission bits not ⊆ 0600 | Run `agentenv validate`; report the diagnostic |
-| 3 | Unknown profile, entry, field path, or credential | Re-check with `list`/`find`; report what is missing |
-| 4 | Credential resolution failure or injection conflict | `credential check <name>`; report, do not substitute |
+| 3 | Unknown profile, entry, field path, or credential definition | Re-check with `list`/`find`; if it is a credential (and entry) directly required by the task, create it with `credential add` / `set` and open `credential set <name> --input dialog --json`, otherwise ask the user for confirmation and create the missing configuration before continuing |
+| 4 | Credential resolution failure or injection conflict | If a `keychain` credential has no stored value, tell the user you are opening the credential window, run `credential set <name> --input dialog --json`, and continue once stored; otherwise run `credential check <name>` and report without substituting |
 | 5 | Project trust-state failure | Run `agentenv project status`; use `allow` or `revoke` as indicated |
 | 6 | Project requirements unsatisfied or uncheckable (`project status` only) | Read the status report and repair the reported requirement or profile selection |
 | 7 | `update` failed, or replaced the binary but left an agent skill unrefreshed | Relay the diagnostic; rerun `agentenv update --force` once the cause is fixed |
